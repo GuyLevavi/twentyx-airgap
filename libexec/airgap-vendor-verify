@@ -22,6 +22,14 @@ set -euo pipefail
 DIR="${1:?usage: airgap-vendor-verify <dir> [checksums-file]}"
 SUMS="${2:-$DIR/CHECKSUMS.sha256}"
 
+# Absolute BEFORE the `cd` below, or a relative path breaks the moment we are
+# invoked from anywhere other than the parent of <dir>.
+DIR="$(cd "$DIR" 2>/dev/null && pwd)" || { echo "no such dir: $1" >&2; exit 1; }
+case "$SUMS" in
+    /*) ;;
+    *)  SUMS="$(cd "$(dirname "$SUMS")" 2>/dev/null && pwd)/$(basename "$SUMS")" || true ;;
+esac
+
 [ -d "$DIR" ] || { echo "no such dir: $DIR" >&2; exit 1; }
 
 if [ ! -f "$SUMS" ]; then
@@ -31,7 +39,8 @@ if [ ! -f "$SUMS" ]; then
 fi
 
 echo "==> verifying $(grep -c . "$SUMS") artifact(s) against $(basename "$SUMS")"
-if ( cd "$DIR" && sha256sum -c --quiet "$(realpath --relative-to="$DIR" "$SUMS" 2>/dev/null || echo "$SUMS")" ); then
+# Paths inside CHECKSUMS.sha256 are relative to the vendor dir, so verify there.
+if ( cd "$DIR" && sha256sum -c --quiet "$SUMS" ); then
     echo "vendor verification passed"
 else
     cat >&2 <<'EOF'

@@ -31,17 +31,22 @@ mkdir -p "$WORK" "$OUT" vendor/bin vendor/lsp
 VERSION="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$MANIFEST" | head -1)"
 
 # --- parse [[artifact]] blocks ---------------------------------------------
-# Emits TSV: name url sha256 dest extract
+# Emits TSV: name url sha256 dest extract tier
+# `--tier N` fetches tiers 1..N, so `--tier 1` is the small first transfer.
 parse() {
-    awk '
-        /^\[\[artifact\]\]/ { if (name) print name"\t"url"\t"sha"\t"dest"\t"ext
-                              name=url=sha=dest=ext=""; next }
+    awk -v maxtier="${TIER:-99}" '
+        function flush() {
+            if (name != "" && tier+0 <= maxtier+0)
+                print name"\t"url"\t"sha"\t"dest"\t"ext"\t"tier
+        }
+        /^\[\[artifact\]\]/ { flush(); name=url=sha=dest=ext=""; tier=99; next }
         /^[[:space:]]*name[[:space:]]*=/    { match($0,/"[^"]*"/);    name=substr($0,RSTART+1,RLENGTH-2) }
         /^[[:space:]]*url[[:space:]]*=/     { match($0,/"[^"]*"/);    url =substr($0,RSTART+1,RLENGTH-2) }
         /^[[:space:]]*sha256[[:space:]]*=/  { match($0,/"[^"]*"/);    sha =substr($0,RSTART+1,RLENGTH-2) }
         /^[[:space:]]*dest[[:space:]]*=/    { match($0,/"[^"]*"/);    dest=substr($0,RSTART+1,RLENGTH-2) }
         /^[[:space:]]*extract[[:space:]]*=/ { match($0,/"[^"]*"/);    ext =substr($0,RSTART+1,RLENGTH-2) }
-        END { if (name) print name"\t"url"\t"sha"\t"dest"\t"ext }
+        /^[[:space:]]*tier[[:space:]]*=/    { match($0,/[0-9]+/);     tier=substr($0,RSTART,RLENGTH) }
+        END { flush() }
     ' "$MANIFEST"
 }
 
@@ -53,7 +58,7 @@ fetch_one() {
 
     if [ ! -f "$cache" ]; then
         echo "  fetch  $name"
-        curl -fSL --retry 3 --connect-timeout 20 -o "$cache.part" "$url"
+        curl -fsSL --retry 3 --connect-timeout 20 -o "$cache.part" "$url"
         mv "$cache.part" "$cache"
     else
         echo "  cached $name"
@@ -92,13 +97,14 @@ fetch_one() {
     case "$dest" in bin/*) chmod +x "$target" ;; esac
 }
 
-echo "==> vendoring (manifest version $VERSION)"
+echo "==> vendoring (manifest version $VERSION${TIER:+, tiers 1-$TIER})"
 n=0
-while IFS=$'\t' read -r name url sha dest ext; do
+while IFS=$'\t' read -r name url sha dest ext tier; do
     [ -n "$name" ] || continue
     fetch_one "$name" "$url" "$sha" "$dest" "$ext" || exit 1
     n=$((n+1))
 done < <(parse)
+[ "$n" -gt 0 ] || { echo "no artifacts matched" >&2; exit 1; }
 
 [ "$UPDATE_HASHES" = 1 ] && { echo "==> manifest hashes updated; re-run without --update-hashes"; exit 0; }
 
@@ -117,7 +123,9 @@ echo "==> packing $n artifacts"
 tar -czf "$TARBALL" vendor/manifest.toml vendor/CHECKSUMS.sha256 vendor/bin vendor/lsp \
     $(ls vendor/*.tar.xz 2>/dev/null || true) \
     $(ls -d vendor/nvim-pack vendor/vsix 2>/dev/null || true)
-sha256sum "$TARBALL" > "$TARBALL.sha256"
+# Bare filename, not "dist/...": the sidecar travels WITH the tarball and must
+# verify from whatever directory it lands in on the other side.
+( cd "$OUT" && sha256sum "$(basename "$TARBALL")" > "$(basename "$TARBALL").sha256" )
 
 cat <<EOF
 
