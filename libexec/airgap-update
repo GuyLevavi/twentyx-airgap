@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Summary: pull config/script changes from internal GitLab, no image rebuild
+#
+# Two update paths, deliberately separated:
+#
+#   text   (configs, dispatcher, pi package)  -> this command, seconds, no rebuild
+#   blobs  (binaries, node, nvim pack, vsix)  -> new image via CI + physical transfer
+#
+# 90% of iteration is text, so 90% of iteration never touches Docker.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+STATE="$(airgap_state)"
+
+REPO="${AIRGAP_REPO_URL:-}"
+CHECKOUT="$STATE/src"
+
+[ -n "$REPO" ] || die "set AIRGAP_REPO_URL to the internal GitLab repo"
+
+if [ -d "$CHECKOUT/.git" ]; then
+    say "updating $CHECKOUT"
+    git -C "$CHECKOUT" fetch --quiet origin
+    git -C "$CHECKOUT" reset --hard --quiet "origin/${AIRGAP_REPO_REF:-main}"
+else
+    say "cloning $REPO"
+    git clone --quiet --depth 1 --branch "${AIRGAP_REPO_REF:-main}" "$REPO" "$CHECKOUT"
+fi
+
+say "now at $(git -C "$CHECKOUT" rev-parse --short HEAD)"
+
+# The image's /opt/airgap is read-only at runtime, so a text update works by
+# pointing AIRGAP_ROOT at the checkout instead of mutating the image.
+cat > "$STATE/config/bashrc.d/00-airgap-src.sh" <<EOF
+# Written by airgap-update: prefer the git checkout over the baked-in copy.
+export AIRGAP_ROOT="$CHECKOUT"
+EOF
+
+say "re-running bootstrap against the checkout"
+AIRGAP_ROOT="$CHECKOUT" "$CHECKOUT/libexec/airgap-bootstrap"
+
+cat <<EOF
+
+  Updated. Open a new shell, or:  export AIRGAP_ROOT=$CHECKOUT
+
+  To go back to the image's copy:  rm $STATE/config/bashrc.d/00-airgap-src.sh
+EOF

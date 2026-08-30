@@ -1,0 +1,18 @@
+# Git holds TEXT ONLY. Blobs live in Artifactory generic-local.
+# See docker/README.md and scripts/push-artifactory.sh.
+
+vendor/bin/
+vendor/lsp/
+vendor/vsix/
+vendor/nvim-pack/
+vendor/*.tar.gz
+vendor/*.tar.xz
+vendor/.work/
+dist/
+
+# ...but the manifest IS the closure and must be tracked.
+!vendor/manifest.toml
+
+node_modules/
+*.log
+.DS_Store

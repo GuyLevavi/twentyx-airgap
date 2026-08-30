@@ -1,0 +1,180 @@
+# The closure.
+#
+# Every binary artifact that must cross the airgap is listed here with a sha256.
+# One file fetched outside (scripts/fetch-vendor.sh), verified inside
+# (libexec/airgap-vendor-verify) at build time.
+#
+# Rules:
+#   - No build step may download anything not listed here.
+#   - `sha256 = "SKIP"` disables verification for one entry. Use during
+#     bring-up only; a SKIP that survives to main is a hole in the closure.
+#   - Fill checksums with: scripts/fetch-vendor.sh --update-hashes
+#
+# `dest` is relative to the vendor dir. Anything in `bin/` is installed to
+# /usr/local/bin by Containerfile.toolchain.
+
+version = "0.1.0"
+
+# --- tier 1: first transfer -------------------------------------------------
+# Deliberately small. Proves manifest -> transfer -> verify -> append end to end
+# before committing to a 2GB round trip.
+
+[[artifact]]
+name    = "crane"
+version = "0.20.2"
+url     = "https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/crane"
+extract = "crane"
+notes   = "Registry-side layer append. Without this the pytorch image build cannot run."
+
+[[artifact]]
+name    = "ripgrep"
+version = "14.1.1"
+url     = "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/rg"
+extract = "*/rg"
+
+[[artifact]]
+name    = "fd"
+version = "10.2.0"
+url     = "https://github.com/sharkdp/fd/releases/download/v10.2.0/fd-v10.2.0-x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/fd"
+extract = "*/fd"
+
+[[artifact]]
+name    = "bat"
+version = "0.24.0"
+url     = "https://github.com/sharkdp/bat/releases/download/v0.24.0/bat-v0.24.0-x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/bat"
+extract = "*/bat"
+
+[[artifact]]
+name    = "fzf"
+version = "0.56.3"
+url     = "https://github.com/junegunn/fzf/releases/download/v0.56.3/fzf-0.56.3-linux_amd64.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/fzf"
+extract = "fzf"
+
+[[artifact]]
+name    = "starship"
+version = "1.21.1"
+url     = "https://github.com/starship/starship/releases/download/v1.21.1/starship-x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/starship"
+extract = "starship"
+
+# --- tier 2: full toolbelt --------------------------------------------------
+
+[[artifact]]
+name    = "eza"
+version = "0.20.13"
+url     = "https://github.com/eza-community/eza/releases/download/v0.20.13/eza_x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/eza"
+extract = "*/eza"
+
+[[artifact]]
+name    = "zoxide"
+version = "0.9.6"
+url     = "https://github.com/ajeetdsouza/zoxide/releases/download/v0.9.6/zoxide-0.9.6-x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/zoxide"
+extract = "zoxide"
+
+[[artifact]]
+name    = "delta"
+version = "0.18.2"
+url     = "https://github.com/dandavison/delta/releases/download/0.18.2/delta-0.18.2-x86_64-unknown-linux-musl.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/delta"
+extract = "*/delta"
+
+[[artifact]]
+name    = "jq"
+version = "1.7.1"
+url     = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+sha256  = "SKIP"
+dest    = "bin/jq"
+
+[[artifact]]
+name    = "lazygit"
+version = "0.44.1"
+url     = "https://github.com/jesseduffield/lazygit/releases/download/v0.44.1/lazygit_0.44.1_Linux_x86_64.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/lazygit"
+extract = "lazygit"
+
+[[artifact]]
+name    = "ttyd"
+version = "1.7.7"
+url     = "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64"
+sha256  = "SKIP"
+dest    = "bin/ttyd"
+notes   = "Browser terminal, ~5MB. Lean alternative to vscode-server for the slim variants."
+
+[[artifact]]
+name    = "micro"
+version = "2.0.14"
+url     = "https://github.com/zyedidia/micro/releases/download/v2.0.14/micro-2.0.14-linux64-static.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/micro"
+extract = "*/micro"
+notes   = "Mouse-driven, nano-like editor for non-vim users. No plugin fetching."
+
+[[artifact]]
+name    = "nvim"
+version = "0.10.2"
+url     = "https://github.com/neovim/neovim/releases/download/v0.10.2/nvim-linux64.tar.gz"
+sha256  = "SKIP"
+dest    = "bin/nvim"
+extract = "*/bin/nvim"
+
+# --- tier 3: runtimes and large packs ---------------------------------------
+
+[[artifact]]
+name    = "node"
+version = "22.11.0"
+url     = "https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz"
+sha256  = "SKIP"
+dest    = "node-v22.11.0-linux-x64.tar.xz"
+notes   = """
+Official Node builds target a baseline x86-64 and are safe on older cluster
+CPUs. This matters: the compiled OpenCode binary segfaulted because it targeted
+a newer microarchitecture. pi runs as plain JS on top of this, so it is immune
+to that entire class of failure.
+"""
+
+[[artifact]]
+name    = "code-server"
+version = "4.96.4"
+url     = "https://github.com/coder/code-server/releases/download/v4.96.4/code-server-4.96.4-linux-amd64.tar.gz"
+sha256  = "SKIP"
+dest    = "code-server"
+notes   = """
+Shadows the older code-server in the internal base image. Installed to
+/opt/airgap/code-server and put ahead of /usr/bin on PATH, so the base image is
+never modified and reverting is just a PATH change.
+
+CAUTION: the standalone tarball bundles its own Node at lib/node, and that
+bundled build may target a newer x86-64 microarchitecture than some cluster
+CPUs -- the exact failure that segfaulted OpenCode. If `code-server --version`
+segfaults, swap the bundle for our vendored baseline-safe Node:
+
+    mv  /opt/airgap/code-server/lib/node /opt/airgap/code-server/lib/node.orig
+    ln -s /usr/local/bin/node /opt/airgap/code-server/lib/node
+
+Verify this at build time, not in a pod: `airgap doctor` checks it.
+"""
+
+[[artifact]]
+name    = "lua-language-server"
+version = "3.13.5"
+url     = "https://github.com/LuaLS/lua-language-server/releases/download/3.13.5/lua-language-server-3.13.5-linux-x64.tar.gz"
+sha256  = "SKIP"
+dest    = "lsp/lua-language-server"
+notes   = "The only LSP not available via npm/pip; the rest ride Artifactory."

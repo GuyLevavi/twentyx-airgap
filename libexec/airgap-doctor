@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Summary: diagnose the environment -- layers, tools, preloaders, model endpoint
+#
+# Run this first when something is wrong, and paste its output into a bug report.
+# Everything is read-only and non-interactive; it never prompts and never sudos.
+set -uo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+fails=0
+check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fails=$((fails+1)); fi; }
+
+say "layers"
+printf '  %-14s %s\n' "AIRGAP_ROOT"  "$AIRGAP_ROOT"
+printf '  %-14s %s\n' "AIRGAP_STATE" "$(airgap_state)"
+printf '  %-14s %s\n' "HOME"         "$HOME"
+# No subshell, so the provenance variables survive.
+airgap_user >/dev/null
+printf '  %-14s %s\n' "user"         "$AIRGAP_USER_RESOLVED (uid $(id -u), gid $(id -g))"
+printf '  %-14s %s\n' "identity via" "$AIRGAP_USER_SOURCE"
+case "$AIRGAP_USER_SOURCE" in
+    hostname*) warn "state dir follows the workspace name, which changes between sessions."
+               warn "pin it: export AIRGAP_USER=<you>  (or set git user.email)" ;;
+esac
+printf '  %-14s %s\n' "version"      "$(cat "$AIRGAP_ROOT/VERSION" 2>/dev/null || echo dev)"
+
+say "persistence"
+check "AIRGAP_STATE is writable"      "[ -w '$(airgap_state)' ]"
+check "\$HOME is writable"            "[ -w '$HOME' ]"
+check "bootstrap has run (~/.bashrc)" "[ -f '$HOME/.bashrc' ]"
+check "passwd entry for uid $(id -u)" "getent passwd $(id -u)"
+# Unnamed supplementary groups are what produce
+# `groups: cannot find name for group id ...` at every shell start.
+for g in $(id -G 2>/dev/null); do
+    getent group "$g" >/dev/null 2>&1 || warn "group $g has no name (cosmetic; see NOTES.md item 6)"
+done
+# Cosmetic, not fatal: without this we cannot register the UID, but the env
+# vars set in 10-path.sh cover the cases that actually matter. See NOTES.md #6.
+if [ -w /etc/passwd ]; then ok "/etc/passwd writable (can self-register)"
+else warn "/etc/passwd not writable -- ask base-image owners for 'chmod g+w /etc/passwd /etc/group'"; fi
+
+say "tools"
+for t in rg fd bat fzf zoxide starship tmux nvim git jq node npm pi crane; do
+    if command -v "$t" >/dev/null 2>&1; then
+        ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
+    else
+        bad "$(printf '%-9s missing' "$t")"; fails=$((fails+1))
+    fi
+done
+
+say "gpu / preloaders"
+printf '  %-22s [%s]\n' "LD_PRELOAD"            "${LD_PRELOAD:-}"
+printf '  %-22s [%s]\n' "AIRGAP_ORIG_LD_PRELOAD" "${AIRGAP_ORIG_LD_PRELOAD:-}"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    ok "nvidia-smi: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+else
+    warn "nvidia-smi not present (fine on a slim/CPU workspace)"
+fi
+# The interesting failure: CUDA works in the shell but not under the agent.
+if command -v python >/dev/null 2>&1; then
+    printf '  %-22s %s\n' "torch.cuda (shell)" \
+        "$(python -c 'import torch;print(torch.cuda.is_available())' 2>/dev/null || echo 'n/a')"
+    printf '  %-22s %s\n' "torch.cuda (agent)" \
+        "$(LD_PRELOAD="${AIRGAP_ORIG_LD_PRELOAD:-${LD_PRELOAD:-}}" \
+           python -c 'import torch;print(torch.cuda.is_available())' 2>/dev/null || echo 'n/a')"
+fi
+
+say "code-server"
+if [ -x "$AIRGAP_ROOT/code-server/bin/code-server" ]; then
+    ok "vendored $("$AIRGAP_ROOT/code-server/bin/code-server" --version 2>/dev/null | head -1)"
+    # The bundled Node is the microarchitecture risk that segfaulted OpenCode.
+    if "$AIRGAP_ROOT/code-server/lib/node" --version >/dev/null 2>&1; then
+        ok "bundled node runs: $("$AIRGAP_ROOT/code-server/lib/node" --version 2>/dev/null)"
+    else
+        bad "bundled node will not run on this CPU -- see manifest.toml notes"
+        fails=$((fails+1))
+    fi
+else
+    warn "no vendored code-server; using the base image's"
+fi
+command -v code-server >/dev/null 2>&1 && \
+    printf '  %-22s %s\n' "active" "$(command -v code-server)"
+
+say "model endpoint"
+BASE="${AIRGAP_LLM_BASE_URL:-}"
+if [ -z "$BASE" ]; then
+    warn "AIRGAP_LLM_BASE_URL unset -- pi will not find the vLLM endpoint"
+    fails=$((fails+1))
+else
+    printf '  %-22s %s\n' "base url" "$BASE"
+    printf '  %-22s %s\n' "token"    "$([ -n "${AIRGAP_LLM_API_KEY:-}" ] && echo set || echo MISSING)"
+    if curl -sf --max-time 5 "$BASE/models" >/dev/null 2>&1; then
+        ok "reachable: $(curl -sf --max-time 5 "$BASE/models" | jq -r '.data[].id' 2>/dev/null | paste -sd, -)"
+    else
+        bad "cannot reach $BASE/models"; fails=$((fails+1))
+    fi
+fi
+
+say "network posture (airgapped: these SHOULD fail)"
+for h in registry.npmjs.org github.com pypi.org; do
+    if curl -sf --max-time 3 "https://$h" >/dev/null 2>&1; then
+        warn "$h is REACHABLE -- not as airgapped as assumed"
+    else
+        ok "$h unreachable (expected)"
+    fi
+done
+
+echo
+[ "$fails" -eq 0 ] && say "all checks passed" || say "$fails check(s) failed"
+exit 0

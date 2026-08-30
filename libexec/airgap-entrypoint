@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Summary: container entrypoint -- materialize $HOME, then exec the payload
+#
+# $HOME does not persist across pod restarts, but /code and /data do. Every
+# start rebuilds $HOME from two durable layers:
+#
+#   $AIRGAP_ROOT   packaged defaults (immutable, baked into the image)
+#   $AIRGAP_STATE  user overrides    (on the PVC, survives restarts)
+#
+# Same three-layer model Omarchy uses for /usr/share -> ~/.config, which is why
+# `airgap refresh` can restore a default without losing your customizations.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+"$AIRGAP_ROOT/libexec/airgap-bootstrap" || warn "bootstrap incomplete, continuing"
+
+# OpenShift runs us under an arbitrary UID (observed: uid 10001, gid 0, plus a
+# nameless supplementary group such as 1001650000) with no /etc/passwd or
+# /etc/group entry. Symptoms: `groups: cannot find name for group id 1001650000`
+# on every shell start, and git/ssh/starship failing to resolve the user.
+#
+# The image must therefore make /etc/passwd and /etc/group group-writable at
+# build time (gid 0 is the only group guaranteed at runtime); see
+# Containerfile.toolchain. If it did not, we degrade quietly rather than fail.
+UID_NOW="$(id -u)"
+if ! getent passwd "$UID_NOW" >/dev/null 2>&1 && [ -w /etc/passwd ]; then
+    printf '%s:x:%s:0:workspace user:%s:/bin/bash\n' \
+        "${USERNAME:-jensen}" "$UID_NOW" "$HOME" >> /etc/passwd
+fi
+
+# Name every supplementary group we hold, which is what silences
+# `groups: cannot find name for group id ...` at shell start.
+if [ -w /etc/group ]; then
+    for g in $(id -G 2>/dev/null); do
+        getent group "$g" >/dev/null 2>&1 && continue
+        printf 'workspace-%s:x:%s:\n' "$g" "$g" >> /etc/group
+    done
+fi
+
+if [ "$#" -eq 0 ]; then
+    exec /bin/bash -l
+fi
+exec "$@"

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Summary: restore a config to its packaged default (backs up your override)
+#
+#   airgap refresh              list what is overridden
+#   airgap refresh starship     drop the override, fall back to the default
+#   airgap refresh all          drop every override
+#
+# Mirrors `omarchy refresh`: back up first, then let the default win again.
+# Because $HOME is rebuilt from the layers on every start, "restoring a default"
+# just means deleting your override and re-running bootstrap.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+STATE="$(airgap_state)"
+
+targets() {
+    printf 'starship\tstarship.toml\n'
+    printf 'tmux\ttmux.conf\n'
+    printf 'nvim\tnvim\n'
+    printf 'git\tgit/config\n'
+    printf 'bash\tbashrc.d\n'
+    printf 'pi\t../pi/settings.json\n'
+}
+
+do_refresh() {
+    local name="$1" rel="$2" path="$STATE/config/$rel"
+    if [ ! -e "$path" ]; then ok "$name already default"; return; fi
+    local bak="$path.bak.$(date +%Y%m%d-%H%M%S)"
+    mv "$path" "$bak"
+    say "$name -> default (override backed up to $bak)"
+}
+
+case "${1:-list}" in
+    list)
+        say "overrides in $STATE/config"
+        while IFS=$'\t' read -r name rel; do
+            if [ -e "$STATE/config/$rel" ]; then printf '  %-10s overridden\n' "$name"
+            else                                 printf '  %-10s default\n'    "$name"; fi
+        done < <(targets)
+        echo; echo "  airgap refresh <name>   to restore a default"
+        ;;
+    all)
+        while IFS=$'\t' read -r name rel; do do_refresh "$name" "$rel"; done < <(targets)
+        "$AIRGAP_ROOT/libexec/airgap-bootstrap"
+        ;;
+    *)
+        found=0
+        while IFS=$'\t' read -r name rel; do
+            [ "$name" = "$1" ] && { do_refresh "$name" "$rel"; found=1; }
+        done < <(targets)
+        [ "$found" = 1 ] || die "unknown target: $1 (try: airgap refresh list)"
+        "$AIRGAP_ROOT/libexec/airgap-bootstrap"
+        ;;
+esac

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Summary: launch pi with the RunAI preloaders neutralized for node only
+#
+# RunAI injects GPU-fractioning interceptors through LD_PRELOAD:
+#
+#   /runai/shared/pid/preloader.so
+#   /runai/shared/memory/loader.so
+#
+# These segfaulted OpenCode. The known-good antidote does NOT unset LD_PRELOAD
+# -- it *replaces* it with libc.so.6, which is already loaded in every process
+# and is therefore a no-op. That is deliberately better than unsetting: some
+# launchers and CUDA shims branch on whether LD_PRELOAD is set at all, so
+# keeping it populated with something harmless changes strictly less.
+#
+# The second half of the problem: with the preloaders gone, CUDA broke in
+# everything the agent ran. torch.cuda.is_available() went False under the
+# agent while working fine in a terminal.
+#
+# Both halves are true at once, so split process from children:
+#
+#   here                        neutralize LD_PRELOAD, stash the original
+#   pi/extensions/preload.ts    spawnHook restores the stash for every bash call
+#
+# Node runs clean. Children run exactly as an interactive shell does.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+# Byte-for-byte. The extension must reproduce this exactly, never approximate it.
+export AIRGAP_ORIG_LD_PRELOAD="${LD_PRELOAD:-}"
+
+if [ "${AIRGAP_PRELOAD_STRIP:-1}" = "1" ] && [ -n "${LD_PRELOAD:-}" ]; then
+    # Only intervene if a RunAI preloader is actually present. On a workstation
+    # or a non-fractioned pod there is nothing to neutralize.
+    if printf '%s' "$LD_PRELOAD" | grep -Eq "${AIRGAP_PRELOAD_PATTERN:-/runai/shared/}"; then
+        LIBC="${AIRGAP_LIBC:-}"
+        if [ -z "$LIBC" ]; then
+            # `|| true` is load-bearing: awk's early `exit` closes the pipe,
+            # ldconfig dies of SIGPIPE, and under `set -o pipefail` the whole
+            # pipeline returns 141, which `set -e` turns into a silent launcher
+            # failure. Worth checking the original antidote script for this.
+            LIBC="$(ldconfig -p 2>/dev/null | awk '/libc\.so\.6/ {print $NF; exit}' || true)"
+        fi
+        [ -n "$LIBC" ] && [ -e "$LIBC" ] || LIBC="/lib/x86_64-linux-gnu/libc.so.6"
+
+        if [ -e "$LIBC" ]; then
+            export LD_PRELOAD="$LIBC"
+        else
+            # Never leave the RunAI interceptors in place for node just because
+            # libc could not be located; unset is the lesser evil.
+            warn "libc not found; unsetting LD_PRELOAD instead of replacing it"
+            unset LD_PRELOAD
+        fi
+    fi
+fi
+
+# Resolve pi without recursing through this wrapper (it may shadow pi on PATH).
+PI_BIN=""
+for c in "${AIRGAP_PI_BIN:-}" /usr/local/bin/pi "$HOME/.local/bin/pi"; do
+    [ -n "$c" ] && [ -x "$c" ] && { PI_BIN="$c"; break; }
+done
+if [ -z "$PI_BIN" ]; then
+    PI_BIN="$(PATH="${PATH//$AIRGAP_ROOT\/bin:/}" command -v pi || true)"
+fi
+[ -n "$PI_BIN" ] || die "pi not found (set AIRGAP_PI_BIN)"
+
+exec "$PI_BIN" "$@"

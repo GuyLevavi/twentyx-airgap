@@ -1,0 +1,64 @@
+# Build the toolchain layer once, append it onto every base variant.
+#
+# The pytorch bases are never pulled, so this pipeline runs in a small pod and
+# does not hit the ephemeral-storage limit that kills `FROM base-pytorch`.
+
+stages: [lint, build, assemble]
+
+variables:
+  AIRGAP_REGISTRY: "$CI_REGISTRY_IMAGE"
+  AIRGAP_BASE_REGISTRY: "quay.internal/ai"      # TODO: real path, see NOTES.md
+  AIRGAP_BASE_TAG: "latest"
+  AIRGAP_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
+  VENDOR_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0/airgap-vendor-0.1.0.tar.gz"
+
+# ---------------------------------------------------------------------------
+lint:
+  stage: lint
+  image: koalaman/shellcheck-alpine:stable
+  script:
+    - shellcheck -S warning bin/airgap libexec/airgap-* scripts/*.sh docker/*.sh wsl/*.sh
+  rules:
+    - changes: [bin/**/*, libexec/**/*, scripts/**/*, docker/**/*, wsl/**/*]
+
+# ---------------------------------------------------------------------------
+# Stage 1: build the ~300MB tree on the SLIM base. Registry cache is mandatory:
+# CI runners start with a cold local cache, so without --cache-from every
+# pipeline rebuilds every layer regardless of ordering.
+toolchain:
+  stage: build
+  image: gcr.io/kaniko-project/executor:debug   # or buildah/docker, per platform
+  script:
+    - |
+      # Blobs come from Artifactory, never from git (vendor/ is gitignored).
+      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+        -o vendor.tar.gz "$VENDOR_URL"
+      sha256sum vendor.tar.gz
+      tar -xzf vendor.tar.gz
+      ./libexec/airgap-vendor-verify vendor
+    - |
+      docker buildx build \
+        -f docker/Containerfile.toolchain \
+        --build-arg BASE_IMAGE="$AIRGAP_BASE_REGISTRY/vscode-slim:$AIRGAP_BASE_TAG" \
+        --build-arg NPM_REGISTRY="$ARTIFACTORY_URL/api/npm/npm-local/" \
+        --cache-from type=registry,ref=$AIRGAP_REGISTRY:buildcache \
+        --cache-to   type=registry,ref=$AIRGAP_REGISTRY:buildcache,mode=max \
+        --target export -o type=tar,dest=toolchain.tar .
+    - ls -lh toolchain.tar
+  artifacts:
+    paths: [toolchain.tar]
+    expire_in: 1 day
+
+# ---------------------------------------------------------------------------
+# Stage 2: registry-side append. Seconds per variant; the blob is uploaded once
+# and cross-mounted for the rest.
+assemble:
+  stage: assemble
+  needs: [toolchain]
+  # Only needs crane + the artifact; the slim base is plenty.
+  image: "$AIRGAP_BASE_REGISTRY/base-slim:$AIRGAP_BASE_TAG"
+  script:
+    - crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
+    - ./docker/assemble.sh toolchain.tar "$CI_COMMIT_SHORT_SHA"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

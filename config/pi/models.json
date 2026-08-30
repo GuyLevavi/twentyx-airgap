@@ -1,0 +1,40 @@
+{
+  "providers": {
+    "inhouse": {
+      "baseUrl": "$AIRGAP_LLM_BASE_URL",
+      "api": "openai-completions",
+      "apiKey": "$AIRGAP_LLM_API_KEY",
+
+      "_comment_compat": [
+        "vLLM does not implement the `developer` role that pi uses for",
+        "reasoning-capable models, and rejects `reasoning_effort` unless the",
+        "served model was configured with a reasoning parser. Both off by",
+        "default -- flip them on only after confirming with the serving team."
+      ],
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+
+      "models": [
+        {
+          "id": "$AIRGAP_LLM_MODEL_ID",
+          "name": "Qwen3 Coder (in-house, FP8)",
+          "reasoning": false,
+          "input": ["text"],
+
+          "_comment_window": [
+            "MUST match vLLM's --max-model-len minus a safety margin. If this",
+            "is larger than the server's real limit, pi will not compact in",
+            "time and vLLM returns a 400 mid-turn instead. Confirm with:",
+            "  curl $AIRGAP_LLM_BASE_URL/models | jq '.data[].max_model_len'"
+          ],
+          "contextWindow": 65536,
+          "maxTokens": 8192,
+
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}
