@@ -124,8 +124,12 @@ in
       #
       # python310 is gone from nixpkgs (past EOL, removed upstream); 3.11 and
       # 3.12 are what remain of what you asked for.
-      python311
+      # Two interpreters cannot both own `python3` and `lib/libpython3.so` in
+      # one profile, so the older one is lowPrio: buildEnv then resolves every
+      # conflicting file in favour of 3.12, while `python3.11` stays on PATH
+      # under its versioned name for `uv venv --python 3.11`.
       python312
+      (lib.lowPrio python311)
       uv
       ruff
     ];

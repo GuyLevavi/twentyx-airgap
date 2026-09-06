@@ -22,10 +22,9 @@
     # module, connecting VS Code (Windows) to NixOS-WSL hangs forever on
     # "Setting up VS Code Server" — the exact thing that works today only
     # because Fedora is FHS.
-    vscode-server = {
-      url = "github:nix-community/nixos-vscode-server";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # No `follows`: this flake declares no nixpkgs input, and overriding a
+    # non-existent one is a warning on every single evaluation.
+    vscode-server.url = "github:nix-community/nixos-vscode-server";
 
     lazyvim = {
       url = "github:pfassina/lazyvim-nix/v16.0.0";
