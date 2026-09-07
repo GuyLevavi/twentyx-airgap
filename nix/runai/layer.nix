@@ -26,6 +26,13 @@ let
   files = hm.config.home-files;
 
   closure = closureInfo { rootPaths = [ profile files ]; };
+
+  # home-manager bakes absolute paths built from home.homeDirectory into some
+  # generated values (STARSHIP_CONFIG is one today). In a pod $HOME is
+  # relocated onto the PVC, so those paths point at a directory that does not
+  # exist. Recording the eval-time home lets airgap-bootstrap rewrite them
+  # generically, instead of us maintaining a list of which vars are affected.
+  evalHome = hm.config.home.homeDirectory;
 in
 runCommand "runai-layer.tar.gz"
   {
@@ -44,6 +51,7 @@ runCommand "runai-layer.tar.gz"
     # Record the closure inside the image so `airgap doctor` can verify the
     # layer arrived intact without needing Nix to ask.
     cp ${closure}/store-paths root/opt/airgap/store-paths
+    printf '%s' "${evalHome}" > root/opt/airgap/eval-home
 
     # Everything is group-0 and group-readable: OpenShift assigns an arbitrary
     # UID at runtime and only GID 0 is guaranteed. Store paths are already
