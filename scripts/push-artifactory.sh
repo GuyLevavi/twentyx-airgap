@@ -1,54 +1,66 @@
 #!/usr/bin/env bash
 # Run INSIDE the airgap, after the physical transfer.
 #
-#   ./scripts/push-artifactory.sh dist/airgap-vendor-0.1.0.tar.gz
+#   ./scripts/push-artifactory.sh dist/nix-layer.tar.gz [more files...]
 #
-# Uploads the transferred blobs to internal Artifactory so CI fetches from there
-# instead of from git. Git stays text-only; vendor/ is gitignored.
+# Uploads the layer tarballs so internal CI fetches them from Artifactory
+# instead of from git. Git stays text-only, which is now literally true: the
+# only binary artifacts left are Nix build outputs, and those are computed, not
+# committed.
+#
+# Not to be confused with scripts/nix-import.sh, which loads the *WSL* transfer
+# into a local Nix store. This one feeds the *image* pipeline, which has no Nix.
 #
 # Uses the `jf` CLI when present, curl otherwise -- on the very first transfer
-# `jf` itself may be inside the tarball you are trying to upload.
+# `jf` itself may not be installed yet.
 set -euo pipefail
 
-TARBALL="${1:?usage: push-artifactory.sh <tarball>}"
-[ -f "$TARBALL" ] || { echo "no such file: $TARBALL" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "usage: push-artifactory.sh <file> [file...]" >&2; exit 1; }
 
 ART_URL="${ARTIFACTORY_URL:?set ARTIFACTORY_URL, e.g. https://artifactory.internal/artifactory}"
 GENERIC_REPO="${ARTIFACTORY_GENERIC_REPO:-generic-local}"
 NPM_REPO="${ARTIFACTORY_NPM_REPO:-npm-local}"
-
-VERSION="$(basename "$TARBALL" .tar.gz | sed 's/^airgap-vendor-//')"
+VERSION="${AIRGAP_VERSION:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../VERSION" 2>/dev/null || echo dev)}"
 DEST_PATH="$GENERIC_REPO/airgap/$VERSION/"
 
-# Verify before trusting a blob that crossed a physical boundary.
-if [ -f "$TARBALL.sha256" ]; then
-    echo "==> verifying transfer"
-    sha256sum -c "$TARBALL.sha256" || { echo "CHECKSUM FAILED -- retransfer" >&2; exit 1; }
-else
-    echo "warn: no $TARBALL.sha256 alongside; cannot verify the transfer" >&2
-fi
+upload() {
+    local f="$1" name; name="$(basename "$f")"
+    [ -f "$f" ] || { echo "no such file: $f" >&2; return 1; }
 
-echo "==> uploading to $ART_URL/$DEST_PATH"
-if command -v jf >/dev/null 2>&1; then
-    jf rt upload --flat=true "$TARBALL"          "$DEST_PATH"
-    jf rt upload --flat=true "$TARBALL.sha256"   "$DEST_PATH" 2>/dev/null || true
-else
-    echo "    (jf not found, using curl)"
-    : "${ARTIFACTORY_TOKEN:?set ARTIFACTORY_TOKEN for the curl path}"
-    curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-        -T "$TARBALL" "$ART_URL/$DEST_PATH$(basename "$TARBALL")"
-fi
+    # Verify before trusting a blob that crossed a physical boundary. The
+    # sidecar is expected next to the file, because it travels WITH it.
+    if [ -f "$f.sha256" ]; then
+        echo "  verifying $name"
+        ( cd "$(dirname "$f")" && sha256sum -c "$name.sha256" >/dev/null ) \
+            || { echo "  CHECKSUM FAILED for $name -- retransfer" >&2; return 1; }
+    else
+        echo "  warn: no $name.sha256 alongside; cannot verify the transfer" >&2
+    fi
+
+    echo "  uploading $name ($(du -h "$f" | cut -f1))"
+    if command -v jf >/dev/null 2>&1; then
+        jf rt upload --flat=true "$f" "$DEST_PATH"
+        [ -f "$f.sha256" ] && jf rt upload --flat=true "$f.sha256" "$DEST_PATH"
+    else
+        : "${ARTIFACTORY_TOKEN:?set ARTIFACTORY_TOKEN for the curl path}"
+        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+            -T "$f" "$ART_URL/$DEST_PATH$name"
+    fi
+}
+
+echo "==> $ART_URL/$DEST_PATH"
+for f in "$@"; do upload "$f"; done
 
 cat <<EOF
 
-  Uploaded: $ART_URL/$DEST_PATH$(basename "$TARBALL")
+  Uploaded to $ART_URL/$DEST_PATH
 
-  CI now fetches blobs from Artifactory, not from git:
+  CI fetches layers from there; see .gitlab-ci.yml:
 
-    AIRGAP_VENDOR_URL=$ART_URL/$DEST_PATH$(basename "$TARBALL")
+    AIRGAP_LAYER_URL=$ART_URL/$DEST_PATH
 
-  To also publish the pi package to $NPM_REPO (so pods can
-  \`pi install npm:@corp/airgap-pi\` without a rebuild):
+  To also publish the pi package to $NPM_REPO (so pods can install it
+  without an image rebuild):
 
     npm publish --registry $ART_URL/api/npm/$NPM_REPO/ ./pi
 EOF

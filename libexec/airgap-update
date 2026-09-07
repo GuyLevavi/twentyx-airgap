@@ -3,18 +3,21 @@
 #
 # Two update paths, deliberately separated:
 #
-#   text   (configs, dispatcher, pi package)  -> this command, seconds, no rebuild
-#   blobs  (binaries, node, nvim pack, vsix)  -> new image via CI + physical transfer
+#   text   (dispatcher, libexec, pi package)  -> this command, seconds
+#   closure (any Nix package)                 -> new image via CI + transfer
 #
-# 90% of iteration is text, so 90% of iteration never touches Docker.
+# 90% of iteration is text, so 90% of iteration never touches an image. Note
+# what moved: the shell, prompt, tmux and nvim configs are Nix-generated now,
+# so editing THEM is a closure change on the WSL side and an image change for
+# the pod. What stays text here is this repo's own scripts and the pi package.
 set -euo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
-STATE="$(airgap_state)"
+HOME_DIR="$(airgap_home)"
 
 REPO="${AIRGAP_REPO_URL:-}"
-CHECKOUT="$STATE/src"
+CHECKOUT="$HOME_DIR/.airgap-src"
 
 [ -n "$REPO" ] || die "set AIRGAP_REPO_URL to the internal GitLab repo"
 
@@ -31,17 +34,36 @@ say "now at $(git -C "$CHECKOUT" rev-parse --short HEAD)"
 
 # The image's /opt/airgap is read-only at runtime, so a text update works by
 # pointing AIRGAP_ROOT at the checkout instead of mutating the image.
-cat > "$STATE/config/bashrc.d/00-airgap-src.sh" <<EOF
+#
+# Both shells, because fish is what you type in and bash is what scripts and
+# code-server terminals get. 10- sorts after bootstrap's 00-airgap.fish, which
+# is what makes this win.
+mkdir -p "$HOME_DIR/.config/fish/conf.d" "$HOME_DIR/.config/bashrc.d"
+cat > "$HOME_DIR/.config/fish/conf.d/10-airgap-src.fish" <<EOF
+# Written by airgap-update: prefer the git checkout over the baked-in copy.
+set -gx AIRGAP_ROOT "$CHECKOUT"
+fish_add_path --global --prepend "$CHECKOUT/bin"
+EOF
+cat > "$HOME_DIR/.config/bashrc.d/10-airgap-src.sh" <<EOF
 # Written by airgap-update: prefer the git checkout over the baked-in copy.
 export AIRGAP_ROOT="$CHECKOUT"
+export PATH="$CHECKOUT/bin:\$PATH"
 EOF
+
+# The Nix layer stays where it is: the checkout has no /nix/store in it, and
+# the profile and defaults are addressed by absolute path from the image.
+for l in profile home-defaults store-paths eval-home; do
+    [ -e "$CHECKOUT/$l" ] || ln -sfn "$AIRGAP_ROOT/$l" "$CHECKOUT/$l" 2>/dev/null || true
+done
 
 say "re-running bootstrap against the checkout"
 AIRGAP_ROOT="$CHECKOUT" "$CHECKOUT/libexec/airgap-bootstrap"
 
 cat <<EOF
 
-  Updated. Open a new shell, or:  export AIRGAP_ROOT=$CHECKOUT
+  Updated. Open a new shell, or:  set -gx AIRGAP_ROOT $CHECKOUT
 
-  To go back to the image's copy:  rm $STATE/config/bashrc.d/00-airgap-src.sh
+  To go back to the image's copy:
+    rm $HOME_DIR/.config/fish/conf.d/10-airgap-src.fish
+    rm $HOME_DIR/.config/bashrc.d/10-airgap-src.sh
 EOF

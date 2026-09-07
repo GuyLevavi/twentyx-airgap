@@ -2,54 +2,111 @@
 # Summary: restore a config to its packaged default (backs up your override)
 #
 #   airgap refresh              list what is overridden
-#   airgap refresh starship     drop the override, fall back to the default
+#   airgap refresh starship     drop that override, fall back to the default
 #   airgap refresh all          drop every override
 #
-# Mirrors `omarchy refresh`: back up first, then let the default win again.
-# Because $HOME is rebuilt from the layers on every start, "restoring a default"
-# just means deleting your override and re-running bootstrap.
+# Now that Nix computes the defaults there are two layers, not three, and the
+# distinction is visible in the filesystem rather than tracked in a table:
+#
+#   a symlink into /nix/store   the packaged default -- ours
+#   a real file                 your override -- never touched by bootstrap
+#
+# So "restore a default" is exactly: move the real file aside, put the symlink
+# back. Nothing is deleted; the backup keeps its timestamp in the name.
 set -euo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
-STATE="$(airgap_state)"
 
-targets() {
-    printf 'starship\tstarship.toml\n'
-    printf 'tmux\ttmux.conf\n'
-    printf 'nvim\tnvim\n'
-    printf 'git\tgit/config\n'
-    printf 'bash\tbashrc.d\n'
-    printf 'pi\t../pi/settings.json\n'
+# $HOME is only correct once bootstrap's shell drop-in has run. Anything
+# launched outside an interactive login -- `runai exec -- airgap doctor`, a
+# cron, code-server's task runner -- still sees the pod's original /home/jensen
+# and would report on a directory nobody uses. Resolve it the same way
+# bootstrap does, so all three agree by construction.
+HOME="$(airgap_home)"
+export HOME
+
+# Resolved: `find` does not descend into a symlink given as a starting point.
+DEFAULTS="$(readlink -f "$AIRGAP_ROOT/home-defaults" 2>/dev/null || true)"
+[ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ] || die "no packaged defaults at $AIRGAP_ROOT/home-defaults"
+
+# Files bootstrap generates at every pod start. They are real files in $HOME
+# but they are not overrides, and backing one up would strand a copy that the
+# next start overwrites anyway.
+is_generated() {
+    case "$1" in
+        .bashrc|.bash_profile|.bashrc.hm) return 0 ;;
+        .config/fish/conf.d/00-airgap.fish|.config/fish/conf.d/99-airgap-rehome.fish) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Emits: <state>\t<relative path>
+scan() {
+    local src rel dst
+    while IFS= read -r src; do
+        rel="${src#"$DEFAULTS"/}"
+        [ "$rel" = "$src" ] && continue
+        case "$rel" in .cache/*) continue ;; esac
+        is_generated "$rel" && continue
+        dst="$HOME/$rel"
+        if [ -L "$dst" ]; then
+            if [ -e "$dst" ]; then printf 'default\t%s\n' "$rel"
+            else                   printf 'stale\t%s\n'   "$rel"; fi
+        elif [ -e "$dst" ]; then   printf 'override\t%s\n' "$rel"
+        else                       printf 'missing\t%s\n'  "$rel"; fi
+    done < <(find "$DEFAULTS" \( -type f -o -type l \) | sort)
 }
 
 do_refresh() {
-    local name="$1" rel="$2" path="$STATE/config/$rel"
-    if [ ! -e "$path" ]; then ok "$name already default"; return; fi
-    local bak="$path.bak.$(date +%Y%m%d-%H%M%S)"
-    mv "$path" "$bak"
-    say "$name -> default (override backed up to $bak)"
+    local rel="$1" dst="$HOME/$1" bak
+    if [ ! -e "$dst" ] || [ -L "$dst" ]; then
+        ok "$rel already default"
+        return
+    fi
+    bak="$dst.bak.$(date +%Y%m%d-%H%M%S)"
+    mv "$dst" "$bak"
+    say "$rel -> default (override backed up to $bak)"
 }
 
 case "${1:-list}" in
     list)
-        say "overrides in $STATE/config"
-        while IFS=$'\t' read -r name rel; do
-            if [ -e "$STATE/config/$rel" ]; then printf '  %-10s overridden\n' "$name"
-            else                                 printf '  %-10s default\n'    "$name"; fi
-        done < <(targets)
-        echo; echo "  airgap refresh <name>   to restore a default"
+        n_over=0; n_stale=0; n_def=0
+        while IFS=$'\t' read -r state rel; do
+            case "$state" in
+                override) printf '  \033[33moverride\033[0m  %s\n' "$rel"; n_over=$((n_over+1)) ;;
+                stale)    printf '  \033[31mstale\033[0m     %s (dangling link; run: airgap bootstrap)\n' "$rel"
+                          n_stale=$((n_stale+1)) ;;
+                missing)  printf '  \033[31mmissing\033[0m   %s (run: airgap bootstrap)\n' "$rel" ;;
+                default)  n_def=$((n_def+1)) ;;
+            esac
+        done < <(scan)
+        say "$n_def default, $n_over overridden, $n_stale stale"
+        [ "$n_over" -gt 0 ] && echo "  airgap refresh <name>   to restore a default"
+        exit 0
         ;;
     all)
-        while IFS=$'\t' read -r name rel; do do_refresh "$name" "$rel"; done < <(targets)
-        "$AIRGAP_ROOT/libexec/airgap-bootstrap"
+        while IFS=$'\t' read -r state rel; do
+            [ "$state" = "override" ] && do_refresh "$rel"
+        done < <(scan)
         ;;
     *)
-        found=0
-        while IFS=$'\t' read -r name rel; do
-            [ "$name" = "$1" ] && { do_refresh "$name" "$rel"; found=1; }
-        done < <(targets)
-        [ "$found" = 1 ] || die "unknown target: $1 (try: airgap refresh list)"
-        "$AIRGAP_ROOT/libexec/airgap-bootstrap"
+        # Substring match, so `airgap refresh starship` finds
+        # .config/starship.toml without you having to type the path.
+        mapfile -t hits < <(scan | awk -F'\t' -v q="$1" '$1=="override" && index($2,q){print $2}')
+        case "${#hits[@]}" in
+            0) # Distinguish "no such config" from "that one is already default".
+               if scan | awk -F'\t' -v q="$1" 'index($2,q){found=1} END{exit !found}'; then
+                   ok "nothing overridden matching '$1'"; exit 0
+               fi
+               die "no config matching '$1' (try: airgap refresh list)" ;;
+            1) do_refresh "${hits[0]}" ;;
+            *) say "'$1' matches several; name one:"
+               printf '  %s\n' "${hits[@]}"
+               exit 1 ;;
+        esac
         ;;
 esac
+
+# Re-link whatever we just uncovered.
+"$AIRGAP_ROOT/libexec/airgap-bootstrap"

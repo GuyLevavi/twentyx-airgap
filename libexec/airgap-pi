@@ -57,7 +57,10 @@ fi
 
 # Resolve pi without recursing through this wrapper (it may shadow pi on PATH).
 PI_BIN=""
-for c in "${AIRGAP_PI_BIN:-}" /usr/local/bin/pi "$HOME/.local/bin/pi"; do
+for c in "${AIRGAP_PI_BIN:-}" \
+         "$AIRGAP_ROOT/node-globals/bin/pi" \
+         /usr/local/bin/pi \
+         "$HOME/.local/bin/pi"; do
     [ -n "$c" ] && [ -x "$c" ] && { PI_BIN="$c"; break; }
 done
 if [ -z "$PI_BIN" ]; then

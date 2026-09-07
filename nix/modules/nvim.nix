@@ -38,7 +38,7 @@ in
         statix
         basedpyright
         ruff
-        taplo # you have a manifest.toml and no TOML LSP
+        taplo # pyproject.toml, and anything else TOML you touch
         lua-language-server
         bash-language-server
         yaml-language-server

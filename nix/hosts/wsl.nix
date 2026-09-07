@@ -12,6 +12,16 @@
   username,
   ...
 }:
+let
+  # Written by scripts/nix-export.sh when it signs a transfer, and gitignored
+  # because it is per-machine. Deriving both settings from one file's existence
+  # means neither path needs an edit: sign and the key is trusted, do not sign
+  # and signature checking is off. A hardcoded placeholder key would instead be
+  # an invalid base64 string that fails at activation time, days later, on the
+  # machine least able to debug it.
+  pubkeyFile = ../../cache-pubkey;
+  havePubkey = builtins.pathExists pubkeyFile;
+in
 {
   wsl = {
     enable = true;
@@ -37,12 +47,14 @@
       "flakes"
     ];
     substituters = lib.mkForce [ "file:///var/cache/nix-transfer" ];
-    trusted-public-keys = lib.mkForce [
-      # Replace with the output of `nix key generate-public` on the connected
-      # machine. Signing is free and makes the transfer tamper-evident — the
-      # property vendor/CHECKSUMS.sha256 used to provide.
-      "airgap-transfer:PLACEHOLDER_REPLACE_ME="
-    ];
+    trusted-public-keys = lib.mkForce (
+      lib.optional havePubkey (lib.removeSuffix "\n" (builtins.readFile pubkeyFile))
+    );
+    # Signing is free and makes the transfer tamper-evident — the property
+    # vendor/CHECKSUMS.sha256 used to provide, except that Nix verifies it per
+    # store path rather than per tarball. Without a key there is nothing to
+    # verify against, and demanding signatures would simply refuse the import.
+    require-sigs = havePubkey;
     # Fail immediately instead of hanging on a substituter that cannot resolve.
     connect-timeout = 5;
     trusted-users = [ username ];

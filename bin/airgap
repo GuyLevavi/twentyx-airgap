@@ -22,7 +22,7 @@ list_commands() {
         [ -f "$f" ] && [ -x "$f" ] || continue
         name="${f##*/airgap-}"
         # Skip sourced helpers (*.sh) and internal-only entry points.
-        case "$name" in *.sh|entrypoint|vendor-verify) continue ;; esac
+        case "$name" in *.sh|entrypoint) continue ;; esac
         printf '  %-18s %s\n' "${name//-/ }" "$(summary_of "$f")"
     done
 }
@@ -35,9 +35,11 @@ usage() {
   help               this message
 
 Layers (read `airgap doctor` to see them resolved):
-  $AIRGAP_ROOT       packaged defaults, never edit at runtime
-  $AIRGAP_STATE      persistent overrides on the PVC
-  $HOME              ephemeral, rebuilt from the two above on every start
+  $AIRGAP_ROOT       packaged defaults from the Nix closure, read-only
+  $HOME              relocated onto the PVC, durable, yours
+
+Inside $HOME a symlink into /nix/store is a packaged default; a real file is
+your override and is never touched. `airgap refresh` swaps one for the other.
 EOF
 }
 

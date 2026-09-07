@@ -93,7 +93,17 @@ in
       userEmail = lib.mkOption {
         type = lib.types.str;
         default = "guylevavi@gmail.com";
-        description = "TODO: set the work address for the airgapped targets.";
+        description = ''
+          Load-bearing beyond git: airgap_user() takes the local part of this
+          address as the identity, and that identity names the per-user
+          directory on the shared PVC. It sits above the hostname rule in the
+          chain precisely because it is stable across sessions, so setting it
+          to the work address is what stops a renamed workspace from stranding
+          a session's history in a new directory.
+
+          `airgap doctor` prints which rule fired, so a wrong value here is
+          visible rather than silent.
+        '';
       };
     };
   };

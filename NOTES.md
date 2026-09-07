@@ -34,41 +34,56 @@ the same latent bug** -- it only shows up when the shell has `pipefail` set.
 Still worth confirming in-pod: whether pi/node is affected by the preloaders at all. If not, set
 `AIRGAP_PRELOAD_STRIP=0` and nothing else changes.
 
-## 2. Identity on the shared /code PVC  [awaiting probe output]
+## 2. Identity on the shared PVC  [RESOLVED -- implemented]
 
-All runtime users are `jensen`; each works in a subdirectory of `/code`. Workspace name is not
-stable. Run this in a pod and paste back `/tmp/airgap-probe.txt`:
+Probe output confirmed: every runtime user is `jensen`, uid 10001, gid 0, and the hostname is
+`<workspace-name>-<n>-<n>` where workspace names follow a `<username>-<whatever>` convention.
+The OS knows nothing about who you are; the hostname is the only platform-provided signal, and it
+is not stable across sessions.
 
-```bash
-{ env|grep -iE 'runai|workload|job|project|user|owner|namespace|pod|team'|sort; echo "--hostname"; hostname; id; echo "--ns"; cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null; echo "--podinfo"; cat /etc/podinfo/* 2>/dev/null; echo "--preload"; echo "[$LD_PRELOAD]"; ls -l /runai/shared/*/*.so 2>/dev/null; echo "--code"; ls -ld /code/*/ 2>/dev/null|head; } 2>&1 | tee /tmp/airgap-probe.txt
-```
-
-Resolution chain (first hit wins), pending that output:
+Resolution chain in `airgap_user()`, first hit wins:
 
 1. `$AIRGAP_USER` (explicit override)
-2. a stable RunAI env var, if one exists
-3. local part of `git config user.email`
-4. `$USERNAME`
-5. first path component under `/code` owned by the caller
+2. local part of `git config user.email` -- set declaratively via `airgap.git.userEmail`
+3. hostname, stripped of the `-<n>-<n>` suffix, leading component
+4. `$USERNAME` / `$USER`
 
-Used only to pick `/code/<user>/.airgap` for persistent state. A wrong guess is cosmetic, not
-destructive.
+Rule 3 is **wrong for any username containing a dash**. That is exactly why it sits below the git
+identity rather than above it, and why `airgap doctor` prints which rule fired -- a surprising
+answer should be visible, not silently misfile a session's history in a new directory.
 
-## 3. Artifactory + transfer flow  [SETTLED]
+It picks `/data/<user>` (falling back to `/code/<user>`) as the relocated `$HOME`. A wrong guess
+is cosmetic, never destructive.
 
-Fully airgapped. Build-time network reaches **internal Artifactory only**; pip resolves there,
-vsix come from files or the internal shop.
+## 3. Artifactory + transfer flow  [SETTLED -- reshaped by Nix]
 
-    outside -> fetch-vendor.sh -> vendor tarball -> physical transfer
-            -> push-artifactory.sh (jf rt upload) -> generic-local/airgap/<ver>/
-            -> CI fetches from Artifactory (never from git)
+Fully airgapped. Build-time network reaches **internal Artifactory only**; pip resolves there.
 
-- Git repo holds **text only**: dispatcher, configs, pi package, manifests, CI. `vendor/` is
-  gitignored.
-- `scripts/push-artifactory.sh` uses the `jf` CLI, with a `curl` fallback for when `jf` is not
-  yet on the box (chicken-and-egg on first transfer).
-- npm-local: pi + our pi package, so `pi install npm:@corp/airgap-pi` works in-cluster.
-- generic-local: static binaries, node tarball, nvim pack, crane.
+Two independent flows, which used to be one:
+
+    WSL      outside -> nix-export.sh -> signed binary cache, sharded
+                     -> physical transfer
+                     -> nix-import.sh -> /var/cache/nix-transfer -> nixos-rebuild
+
+    IMAGES   outside -> build-layers.sh -> nix-layer{,-nvim}.tar.gz
+                     -> physical transfer
+                     -> push-artifactory.sh -> generic-local/airgap/<ver>/
+                     -> CI fetches, builds node-layer, crane appends
+
+- Git holds **text only** -- now literally true. There is no `vendor/` and no blob list: the
+  closure is computed, so the only binary artifacts are Nix build outputs.
+- `push-artifactory.sh` uses the `jf` CLI with a `curl` fallback, for the chicken-and-egg where
+  `jf` itself is not yet on the box.
+- npm-local: pi, so `pi install npm:@corp/airgap-pi` works in-cluster.
+- generic-local: the layer tarballs.
+
+**What replaced the two-checksum scheme.** `manifest.toml` hashed upstream archives (*did I
+download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
+transfer corrupt anything?*). Nix covers both, better: the flake lock pins inputs by hash, and the
+binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
+the path it damaged, not on "the transfer". Signing (item: `cache-pubkey`) makes it tamper-evident
+as well as corruption-evident. The layer tarballs keep a plain `.sha256` sidecar, because CI
+fetches them over HTTP and has no Nix to ask.
 
 ## 4. Base images  [editor resolved; names for you to fill in]
 
@@ -77,13 +92,8 @@ with registries and CA certs, so Stage 1 builds on an internal slim base, not a 
 
 Editor is **code-server** (Coder). Consequences, already implemented:
 
-- vsix are installed with `code-server --install-extension --extensions-dir`, not unzipped by
-  hand, so the layout and metadata are what code-server expects.
-- Stage 1 should therefore build on **`vscode-slim`** (it has the code-server binary) rather than
-  `base-slim`. Set `BASE_IMAGE` accordingly in `.gitlab-ci.yml`.
-- `airgap-bootstrap` seeds the baked extensions to `$AIRGAP_STATE/share/code-server/extensions`
-  once, then leaves them alone -- code-server needs that dir writable, and this way extensions
-  you install by hand survive restarts.
+With code-server deferred (item 7), the build stage no longer needs `vscode-slim` -- it only runs
+`npm install`, so `base-slim` is the cheaper `BASE_IMAGE` in `.gitlab-ci.yml`.
 
 Fill in yourself: registry hostname, repo paths, tag convention
 (`AIRGAP_BASE_REGISTRY` / `AIRGAP_BASE_TAG` in `.gitlab-ci.yml`).
@@ -101,8 +111,8 @@ discarded, and shipping our own `/etc/passwd` would clobber whatever the pytorch
 
 Mitigated instead:
 
-- `config/bashrc.d/10-path.sh` sets `USER`, `LOGNAME`, `HOME`, which most tools consult before
-  attempting a passwd lookup.
+- `airgap-bootstrap` sets `USER`, `LOGNAME` and `HOME` in the generated fish and bash drop-ins,
+  which most tools consult before attempting a passwd lookup.
 - `airgap-entrypoint` registers the UID and names the groups **if** `/etc/passwd` and
   `/etc/group` happen to be writable, and stays quiet if not.
 - `airgap doctor` reports whether self-registration is possible and which groups are unnamed.
@@ -116,25 +126,30 @@ RUN chgrp 0 /etc/passwd /etc/group && chmod g+w /etc/passwd /etc/group
 This is the documented OpenShift pattern for images that must run as an arbitrary UID. Until
 then the warning is noise, not breakage.
 
-## 7. code-server  [implemented]
+## 7. code-server  [DEFERRED -- base image's is good enough for now]
 
-The base image's code-server is slightly old, so a newer one is vendored to
-`/opt/airgap/code-server` and put ahead of `/usr/bin` on `PATH`. The base image is never
-modified; reverting is removing a `PATH` entry.
+The base `vscode-*` images ship code-server, and shadowing it was dropped: it was a tier-3 blob,
+a bundled-Node microarchitecture risk, and a vsix install step, all to fix a version skew nobody
+has hit yet.
 
-vsix are installed with the **new** binary at build time, so extensions resolve against the
-version that will actually run them.
+What was kept from that work, because it costs nothing:
 
-One risk, checked at build time and by `airgap doctor`: the standalone tarball bundles its own
-Node at `lib/node`, which may target a newer x86-64 microarchitecture than some cluster CPUs --
-exactly what segfaulted OpenCode. If it will not run, the build swaps in our vendored
-baseline-safe Node automatically.
+- `assemble.sh` records the base's ENTRYPOINT in `AIRGAP_BASE_ENTRYPOINT` and `airgap-entrypoint`
+  hands over to it. Without that, replacing ENTRYPOINT to run bootstrap would give you a
+  `vscode-*` workspace whose IDE never starts.
+- Session variables are image ENV, so code-server's task runner -- not a login shell -- still gets
+  `TERMINFO_DIRS` and `LOCALE_ARCHIVE`.
 
-Bump the version in `vendor/manifest.toml` to update; it is a tier-3 blob, so it needs a
-transfer, not just an `airgap update`.
+If it comes back, the interesting part is smarter vsix management, not the binary. The bundled
+Node check is worth keeping in whatever does: it is the same failure that segfaulted OpenCode.
 
 ## 5. First transfer should be deliberately small
 
-Dispatcher + configs + pi + `crane` + ~6 static binaries. No nvim pack, no vsix. A few hundred
-MB, proving manifest/verify/entrypoint/append end-to-end. Find checksum and wrapper bugs on a
-cheap round-trip, not a 2GB one.
+Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, 414 MB) and
+skip `-nvim` (634 MB). `assemble.sh` detects the missing nvim tarball and builds one flavor.
+
+That proves transfer -> Artifactory -> node layer -> `crane append` -> pod end to end, including
+the two things that can only fail against real internal bases: `PATH` prepending on a pytorch base
+and ENTRYPOINT hand-over on a `vscode-*` one.
+
+The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- see `wsl/README.md`.

@@ -1,7 +1,16 @@
-# Build the toolchain layer once, append it onto every base variant.
+# Runs INSIDE the airgap. Assembles images without ever pulling a pytorch base.
 #
-# The pytorch bases are never pulled, so this pipeline runs in a small pod and
-# does not hit the ephemeral-storage limit that kills `FROM base-pytorch`.
+# What changed with the move to Nix: this pipeline no longer *builds* the
+# toolchain. The closure is computed and built outside, carried in as two
+# tarballs, and pushed to Artifactory once per transfer. CI's job is to fetch
+# them, build the one layer that genuinely needs a registry (npm), and append.
+#
+#   nix-layer.tar.gz       from the transfer, via Artifactory   monthly
+#   node-layer.tar         built here, needs Artifactory npm    monthly
+#   repo-layer.tar         plain tar of this checkout           every commit
+#
+# The pytorch bases are never pulled, so this runs in a small pod and does not
+# hit the ephemeral-storage limit that kills `FROM base-pytorch`.
 
 stages: [lint, build, assemble]
 
@@ -10,55 +19,68 @@ variables:
   AIRGAP_BASE_REGISTRY: "quay.internal/ai"      # TODO: real path, see NOTES.md
   AIRGAP_BASE_TAG: "latest"
   AIRGAP_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
-  VENDOR_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0/airgap-vendor-0.1.0.tar.gz"
+  # Where push-artifactory.sh put the transferred layers.
+  LAYER_BASE_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0"
 
 # ---------------------------------------------------------------------------
 lint:
   stage: lint
   image: koalaman/shellcheck-alpine:stable
   script:
-    - shellcheck -S warning bin/airgap libexec/airgap-* scripts/*.sh docker/*.sh wsl/*.sh
+    - shellcheck -S warning bin/airgap libexec/airgap-* scripts/*.sh docker/*.sh
   rules:
-    - changes: [bin/**/*, libexec/**/*, scripts/**/*, docker/**/*, wsl/**/*]
+    - changes: [bin/**/*, libexec/**/*, scripts/**/*, docker/**/*]
 
 # ---------------------------------------------------------------------------
-# Stage 1: build the ~300MB tree on the SLIM base. Registry cache is mandatory:
-# CI runners start with a cold local cache, so without --cache-from every
-# pipeline rebuilds every layer regardless of ordering.
-toolchain:
+# The only stage that still needs a container build, and the only one that
+# needs a package registry: pi ships as an npm package.
+#
+# node itself now comes from the Nix layer, so this fetches it too -- and that
+# doubles as a check that the transferred layer is intact before anything is
+# pushed to a registry under a tag people will pull.
+node-layer:
   stage: build
   image: gcr.io/kaniko-project/executor:debug   # or buildah/docker, per platform
   script:
+    - mkdir -p dist
     - |
-      # Blobs come from Artifactory, never from git (vendor/ is gitignored).
       curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-        -o vendor.tar.gz "$VENDOR_URL"
-      sha256sum vendor.tar.gz
-      tar -xzf vendor.tar.gz
-      ./libexec/airgap-vendor-verify vendor
+        -o dist/nix-layer.tar.gz "$LAYER_BASE_URL/nix-layer.tar.gz"
+      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+        -o dist/nix-layer.tar.gz.sha256 "$LAYER_BASE_URL/nix-layer.tar.gz.sha256" || true
+      # A corrupted transfer must fail here, not in a pod three days later.
+      [ -f dist/nix-layer.tar.gz.sha256 ] && ( cd dist && sha256sum -c nix-layer.tar.gz.sha256 )
     - |
       docker buildx build \
-        -f docker/Containerfile.toolchain \
-        --build-arg BASE_IMAGE="$AIRGAP_BASE_REGISTRY/vscode-slim:$AIRGAP_BASE_TAG" \
+        -f docker/Containerfile.node \
+        --build-arg BASE_IMAGE="$AIRGAP_BASE_REGISTRY/base-slim:$AIRGAP_BASE_TAG" \
         --build-arg NPM_REGISTRY="$ARTIFACTORY_URL/api/npm/npm-local/" \
         --cache-from type=registry,ref=$AIRGAP_REGISTRY:buildcache \
         --cache-to   type=registry,ref=$AIRGAP_REGISTRY:buildcache,mode=max \
-        --target export -o type=tar,dest=toolchain.tar .
-    - ls -lh toolchain.tar
+        --target export -o type=tar,dest=dist/node-layer.tar .
+    - ls -lh dist/node-layer.tar
   artifacts:
-    paths: [toolchain.tar]
+    paths: [dist/node-layer.tar]
     expire_in: 1 day
 
 # ---------------------------------------------------------------------------
-# Stage 2: registry-side append. Seconds per variant; the blob is uploaded once
-# and cross-mounted for the rest.
+# Registry-side append. Seconds per variant: each blob is uploaded once and
+# cross-mounted for the rest.
 assemble:
   stage: assemble
-  needs: [toolchain]
-  # Only needs crane + the artifact; the slim base is plenty.
+  needs: [node-layer]
+  # Only needs crane, jq, tar and the artifacts; the slim base is plenty.
   image: "$AIRGAP_BASE_REGISTRY/base-slim:$AIRGAP_BASE_TAG"
   script:
+    - |
+      for f in nix-layer.tar.gz nix-layer-nvim.tar.gz; do
+        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+          -o "dist/$f" "$LAYER_BASE_URL/$f"
+      done
+    # Built here rather than carried: it is 80KB of this very checkout, and
+    # rebuilding it is what makes a config change a one-commit deploy.
+    - ./docker/mklayer.sh dist/repo-layer.tar
     - crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
-    - ./docker/assemble.sh toolchain.tar "$CI_COMMIT_SHORT_SHA"
+    - ./docker/assemble.sh "$CI_COMMIT_SHORT_SHA"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

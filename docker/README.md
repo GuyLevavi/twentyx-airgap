@@ -1,85 +1,92 @@
-# Build strategy: append a layer, don't rebuild an image
+# Build strategy: append layers, don't rebuild an image
 
 ## The problem
 
-The internal `*-pytorch` bases are 15-30GB. An OpenShift BuildConfig that does
+The internal `*-pytorch` bases are 15–30GB. An OpenShift BuildConfig that does
 `FROM base-pytorch` must pull the base, unpack every layer into the build pod's ephemeral
-filesystem, add layers, and push the result. Peak disk is roughly 2-3x the image size, which is
+filesystem, add layers, and push the result. Peak disk is roughly 2–3× the image size, which is
 why the pytorch variants die on ephemeral storage while the slim ones succeed.
 
 Raising the storage quota treats the symptom. The real issue is that we unpack 30GB in order to
-add 300MB.
+add 400MB.
 
 ## The insight
 
-Everything we add on top of the base is **just files**:
+Everything we add on top of the base is **just files** — and since the move to Nix, most of them
+are files somebody else already built:
 
-| Addition | Form |
-|---|---|
-| static binaries (rg, fd, bat, fzf, nvim, ttyd...) | files |
-| npm globals (pi, LSP servers) | files |
-| nvim plugin pack | files |
-| airgap dispatcher + configs | files |
-| vsix extensions | files (they unpack into an extensions dir) |
+| Layer | Contents | Built by | Changes |
+|---|---|---|---|
+| `nix-layer.tar.gz` | the whole toolchain closure, at `/nix/store` | `nix build` **outside** the gap | monthly |
+| `node-layer.tar` | pi and its `node_modules` | `Containerfile.node`, in CI | monthly |
+| `repo-layer.tar` | dispatcher, libexec, pi package | `mklayer.sh`, plain `tar` | every commit |
 
-None of it needs to execute `RUN` *against the pytorch base*. It only needs to execute `RUN`
-somewhere. So we build the tree in a slim container and attach it to the fat bases as a layer.
+Only the middle one needs a container at all, and only because pi ships as an npm package and npm
+needs a registry. The other two are `tar`.
 
 ## The design
 
-    STAGE 1  build the toolchain tree, once, in a SLIM image
-             Containerfile.toolchain  ->  /out  ->  toolchain-<ver>.tar.gz   (~300MB)
-
-    STAGE 2  append that ONE tarball onto each internal base, registry-side
-             assemble.sh  ->  crane append + crane mutate
+    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (414MB)
+                                            nix-layer-nvim.tar.gz  (634MB)
+    TRANSFER  physical, then scripts/push-artifactory.sh
+    INSIDE    .gitlab-ci.yml  ->  node-layer.tar, repo-layer.tar
+              docker/assemble.sh  ->  crane append + crane mutate
 
 `crane append` fetches only the base's **manifest and config**, never its layers. It uploads the
-new layer blob and cross-mounts everything else. The fat base is never pulled, never unpacked,
+new layer blobs and cross-mounts everything else. The fat base is never pulled, never unpacked,
 never re-pushed.
 
-Cost per variant: one manifest GET, one blob PUT (deduplicated after the first variant), one
-manifest PUT. Seconds, and a few hundred MB of disk.
+Cost per variant: one manifest GET, one config GET, three blob PUTs (deduplicated after the first
+variant), one manifest PUT. Seconds, and a few hundred MB of disk.
 
-## Consequences
+## Why the store must land at `/nix`
 
-- The 4-way matrix (`base-slim`, `base-pytorch`, `vscode-slim`, `vscode-pytorch`) costs the same
-  as one build, because all four append the identical blob.
-- The internal team owns the bases. We never rebuild them.
-- A config-only change rebuilds a 300MB tarball, not a 30GB image.
-- The build pod needs no special storage quota, so the pytorch variants stop failing.
+Every Nix-built binary names its ELF interpreter by **absolute store path**. Unpacking the closure
+anywhere but literal `/nix/store` produces several hundred megabytes of binaries that cannot
+`exec` — and the failure is `No such file or directory` on a file that plainly exists, which is a
+genuinely confusing hour. Appending as an image layer puts it at `/` for free.
+
+## What `crane mutate` must NOT do
+
+Two settings look like they can be overwritten and cannot:
+
+- **`PATH`.** The pytorch bases put conda and site-packages directories on it, and torch does not
+  import without them. There is no shell at image-config level to expand `$PATH`, so `assemble.sh`
+  reads the base's own value with `crane config` and *prepends* to it.
+- **`ENTRYPOINT`.** On the `vscode-*` bases it launches code-server. Replacing it is how
+  `airgap-entrypoint` gets to run at all, so the original is recorded in `AIRGAP_BASE_ENTRYPOINT`
+  and handed over to when the container is started with no arguments.
+
+Both were being clobbered before; both are silent failures rather than build errors.
+
+## Session variables are image ENV, not shell config
+
+`layer.nix` writes `/opt/airgap/session-env` and `assemble.sh` turns each line into `--env`.
+A shell rc only reaches processes that source it, which excludes exactly the ones that break most
+confusingly: `runai exec -- cmd`, code-server's task runner, anything the agent spawns. Those need
+`TERMINFO_DIRS` and `LOCALE_ARCHIVE` as much as an interactive shell does.
+
+Values that mention the eval-time home, or that are shell *expressions* rather than literals
+(`TMUX_TMPDIR` is `${XDG_RUNTIME_DIR:-...}`), are filtered out — image ENV does no expansion, and
+tmux handed that literal string would create a directory named `$(id`.
 
 ## Constraint
 
-Stage 2 cannot run commands -- it only adds files and edits image config
-(`ENV`, `ENTRYPOINT`, `LABEL`) via `crane mutate`. Anything requiring execution must happen in
-Stage 1 or at container startup in `airgap-entrypoint`.
+Stage 2 cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
+`LABEL`) via `crane mutate`. Anything requiring execution must happen in `Containerfile.node` or at
+container startup in `airgap-entrypoint`.
 
-This is a feature: it forces the toolchain to be relocatable and inspectable, which is exactly
-what we need for the WSL target to share the same artifact.
+This is a feature: it forces the toolchain to be relocatable and inspectable, which is exactly what
+lets the WSL target share the same Nix expressions.
 
-## Tarball layout
+## Two flavors
 
-Paths are relative to `/`, so the tarball mirrors the final filesystem:
-
-    opt/airgap/{bin,libexec,config,pi,nvim-pack}/
-    usr/local/bin/{rg,fd,bat,...}
-    usr/local/lib/node_modules/...
-
-All content is mode `g=u` and group `0`, because OpenShift assigns an arbitrary UID at runtime
-and only the GID-0 bit is guaranteed.
+`nvim` roughly adds 220MB, and not every workspace wants an editor in it. Every variant is built
+twice, `-nvim` suffixed, from the same node and repo blobs. If `nix-layer-nvim.tar.gz` is absent,
+`assemble.sh` builds the plain flavor only and says so.
 
 ## Fallback if crane is unavailable
 
-In rough order of preference: `regctl image mod`, `oras`, or a buildah build with its storage
-dir on a mounted PVC instead of ephemeral disk. All are strictly worse -- prefer getting the
-`crane` binary through the transfer, it is a single ~40MB static Go binary with no dependencies.
-
-## Layer ordering inside Stage 1
-
-Still matters, but only for the 300MB build. Order by ascending frequency of change:
-
-    apt/system -> node -> npm globals -> vsix -> nvim pack -> vendored binaries -> configs
-
-With registry-backed cache (`--cache-to type=registry,mode=max`), a config-only edit rebuilds
-just the final layer. Ephemeral CI runners have a cold local cache, so registry cache import is
-mandatory, not an optimization.
+In rough order of preference: `regctl image mod`, `oras`, or a buildah build with its storage dir
+on a mounted PVC instead of ephemeral disk. All are strictly worse. `crane` now comes from nixpkgs
+(`nix shell .#`), so it rides in on the same transfer as everything else.

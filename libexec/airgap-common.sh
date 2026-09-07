@@ -23,13 +23,14 @@ bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 # Sets AIRGAP_USER_RESOLVED and AIRGAP_USER_SOURCE as a side effect, so callers
 # that want the provenance can invoke it WITHOUT a subshell:
 #     airgap_user >/dev/null; echo "$AIRGAP_USER_RESOLVED via $AIRGAP_USER_SOURCE"
+# shellcheck disable=SC2034  # AIRGAP_USER_SOURCE is read by callers, not here
 airgap_user() {
     local u
     if [ -n "${AIRGAP_USER:-}" ]; then
         AIRGAP_USER_SOURCE="AIRGAP_USER"; AIRGAP_USER_RESOLVED="$AIRGAP_USER"
         printf '%s' "$AIRGAP_USER"; return
     fi
-    # Stable across sessions and machines; set it once in $AIRGAP_STATE.
+    # Stable across sessions and machines; set it once in Nix (airgap.git).
     u="$(git config --get user.email 2>/dev/null || true)"
     if [ -n "$u" ]; then
         AIRGAP_USER_SOURCE="git user.email"; AIRGAP_USER_RESOLVED="${u%%@*}"
@@ -53,18 +54,6 @@ airgap_user() {
     AIRGAP_USER_SOURCE="USERNAME/USER fallback"
     AIRGAP_USER_RESOLVED="${USERNAME:-${USER:-unknown}}"
     printf '%s' "$AIRGAP_USER_RESOLVED"
-}
-
-# Persistent state root. $HOME is ephemeral; /code and /data survive.
-airgap_state() {
-    if [ -n "${AIRGAP_STATE:-}" ]; then printf '%s' "$AIRGAP_STATE"; return; fi
-    local base
-    for base in /code /data; do
-        if [ -d "$base" ] && [ -w "$base" ]; then
-            printf '%s/%s/.airgap' "$base" "$(airgap_user)"; return
-        fi
-    done
-    printf '%s/.airgap' "$HOME"   # WSL / local fallback
 }
 
 # Link $2 -> $1 idempotently, backing up anything real that is in the way.

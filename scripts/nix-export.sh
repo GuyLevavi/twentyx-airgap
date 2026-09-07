@@ -59,9 +59,18 @@ KEY="${AIRGAP_SIGN_KEY:-$HOME/.config/airgap/cache-priv.key}"
 SIGN=()
 if [ -f "$KEY" ]; then
     SIGN=(--secret-key "$KEY")
+    # nix/hosts/wsl.nix keys BOTH trusted-public-keys and require-sigs off this
+    # file's existence, so writing it here is what arms verification on the far
+    # side. It is gitignored: it is per-machine, and it must travel with the
+    # transfer rather than with the repo.
+    nix key convert-secret-to-public < "$KEY" > cache-pubkey
+    echo "  signing with $KEY; public key -> cache-pubkey (transfer it too)"
 else
-    echo "  note: no signing key at $KEY -- the far side must set require-sigs = false." >&2
+    echo "  note: no signing key at $KEY -- the far side falls back to require-sigs = false." >&2
     echo "  generate one with: nix key generate-secret --key-name airgap-transfer > $KEY" >&2
+    # Stale key from a previous signed export would make the far side demand
+    # signatures that this unsigned transfer does not carry.
+    rm -f cache-pubkey
 fi
 
 # shellcheck disable=SC2086
@@ -99,7 +108,12 @@ fi
     echo "toplevel=${TOPLEVEL:-}"
     echo "stdenv=${STDENV:-}"
     echo "generated=$(date -u +%FT%TZ)"
+    echo "signed=$([ -f cache-pubkey ] && echo yes || echo no)"
 } > "$OUT/TRANSFER"
+
+# Travels with the chunks, not with the repo: without it the far side cannot
+# verify a signed transfer, and nix-import.sh will say so rather than guess.
+[ -f cache-pubkey ] && cp cache-pubkey "$OUT/cache-pubkey"
 
 say "done"
 ls -lh "$OUT"/*.tar.gz | awk '{printf "  %s  %s\n", $5, $9}'

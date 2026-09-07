@@ -39,7 +39,6 @@
       home-manager,
       nixos-wsl,
       vscode-server,
-      lazyvim,
       ...
     }@inputs:
     let
@@ -117,6 +116,19 @@
           hm = self.homeConfigurations.runai-nvim;
         };
         default = self.packages.${system}.runai-layer;
+
+        # ── the very first transfer ────────────────────────────────────────
+        # Chicken and egg: nix-import.sh needs a NixOS-WSL machine, and there
+        # is not one yet. This builds the rootfs tarball that `wsl --import`
+        # takes, so the airgapped laptop can be created from a Windows shell
+        # with no Nix anywhere on it.
+        #
+        #   nix build .#wsl-tarball
+        #   sudo ./result/bin/nixos-wsl-tarball-builder     # -> nixos.wsl
+        #
+        # It runs as root because it assembles a filesystem image; it does not
+        # touch the running system.
+        wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
       };
 
       devShells.${system}.default = pkgs.mkShell {

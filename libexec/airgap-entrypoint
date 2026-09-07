@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Summary: container entrypoint -- materialize $HOME, then exec the payload
 #
-# $HOME does not persist across pod restarts, but /code and /data do. Every
-# start rebuilds $HOME from two durable layers:
+# $HOME is relocated onto the PVC by airgap-bootstrap, so what survives a
+# restart is everything rather than a hand-maintained list. Two layers:
 #
-#   $AIRGAP_ROOT   packaged defaults (immutable, baked into the image)
-#   $AIRGAP_STATE  user overrides    (on the PVC, survives restarts)
+#   $AIRGAP_ROOT/home-defaults   packaged defaults, symlinks into /nix/store
+#   $HOME (on the PVC)           real files, which are user overrides
 #
-# Same three-layer model Omarchy uses for /usr/share -> ~/.config, which is why
-# `airgap refresh` can restore a default without losing your customizations.
+# That is what makes `airgap refresh` a well-defined operation: a symlink is
+# ours, a real file is yours, and refreshing swaps one back for the other.
 set -euo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
@@ -39,7 +39,22 @@ if [ -w /etc/group ]; then
     done
 fi
 
-if [ "$#" -eq 0 ]; then
-    exec /bin/bash -l
+# Hand over. With arguments (`runai exec ... -- cmd`) we run them; without,
+# we defer to whatever the BASE image was going to run.
+#
+# That fallback is why assemble.sh records AIRGAP_BASE_ENTRYPOINT: replacing
+# ENTRYPOINT is how this script gets to run at all, but on the vscode-* bases
+# the thing it replaced was the code-server launcher. Discarding it would give
+# you a workspace whose IDE never starts.
+if [ "$#" -ne 0 ]; then
+    exec "$@"
 fi
-exec "$@"
+
+if [ -n "${AIRGAP_BASE_ENTRYPOINT:-}" ]; then
+    # Deliberately word-split: the value is a command line captured from the
+    # image config, not a filename.
+    # shellcheck disable=SC2086
+    exec ${AIRGAP_BASE_ENTRYPOINT}
+fi
+
+exec /bin/bash -l

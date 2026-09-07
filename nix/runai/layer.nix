@@ -11,6 +11,7 @@
   lib,
   runCommand,
   closureInfo,
+  writeText,
   gnutar,
   gzip,
   hm,
@@ -25,7 +26,12 @@ let
   # while text iteration in a pod stays a file edit, not a rebuild.
   files = hm.config.home-files;
 
-  closure = closureInfo { rootPaths = [ profile files ]; };
+  closure = closureInfo {
+    rootPaths = [
+      profile
+      files
+    ];
+  };
 
   # home-manager bakes absolute paths built from home.homeDirectory into some
   # generated values (STARSHIP_CONFIG is one today). In a pod $HOME is
@@ -33,6 +39,38 @@ let
   # exist. Recording the eval-time home lets airgap-bootstrap rewrite them
   # generically, instead of us maintaining a list of which vars are affected.
   evalHome = hm.config.home.homeDirectory;
+
+  # The session variables, as image ENV rather than shell config.
+  #
+  # A shell rc only reaches processes that source it, which leaves out exactly
+  # the ones that break most confusingly: `runai exec -- cmd`, code-server's
+  # task runner, anything spawned by the agent. Those need TERMINFO_DIRS and
+  # LOCALE_ARCHIVE just as much as an interactive fish does -- without them a
+  # subprocess gets a dumb terminal and mangles every multibyte glyph.
+  #
+  # Values mentioning the eval-time home are excluded: $HOME is relocated at
+  # pod start, so those are wrong here and are fixed per-shell instead (see
+  # nix/modules/shell.nix).
+  sessionEnv = writeText "airgap-session-env" (
+    lib.concatMapStrings (l: l + "\n") (
+      lib.mapAttrsToList (k: v: "${k}=${toString v}") (
+        lib.filterAttrs (
+          _: v:
+          let
+            str = toString v;
+          in
+          # Wrong here: $HOME is relocated at pod start, so these are fixed
+          # per-shell instead (see nix/modules/shell.nix).
+          !(lib.hasInfix evalHome str)
+          # home-manager allows a session variable to be a shell EXPRESSION --
+          # TMUX_TMPDIR is `''${XDG_RUNTIME_DIR:-"/run/user/$(id -u)"}`. A shell
+          # expands that; image ENV does not, and tmux would be handed the
+          # literal text. Anything needing expansion stays shell-only.
+          && !(lib.hasInfix "$" str)
+        ) hm.config.home.sessionVariables
+      )
+    )
+  );
 in
 runCommand "runai-layer.tar.gz"
   {
@@ -52,6 +90,9 @@ runCommand "runai-layer.tar.gz"
     # layer arrived intact without needing Nix to ask.
     cp ${closure}/store-paths root/opt/airgap/store-paths
     printf '%s' "${evalHome}" > root/opt/airgap/eval-home
+
+    # Consumed by docker/assemble.sh, one KEY=VALUE per line.
+    cp ${sessionEnv} root/opt/airgap/session-env
 
     # Everything is group-0 and group-readable: OpenShift assigns an arbitrary
     # UID at runtime and only GID 0 is guaranteed. Store paths are already

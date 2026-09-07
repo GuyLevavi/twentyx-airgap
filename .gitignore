@@ -1,18 +1,13 @@
-# Git holds TEXT ONLY. Blobs live in Artifactory generic-local.
-# See docker/README.md and scripts/push-artifactory.sh.
-
-vendor/bin/
-vendor/lsp/
-vendor/vsix/
-vendor/nvim-pack/
-vendor/*.tar.gz
-vendor/*.tar.xz
-vendor/.work/
+# Git holds TEXT ONLY. Everything binary is computed by Nix, not committed:
+# the closure IS the manifest, so there is no blob list to keep in sync.
 dist/
-
-# ...but the manifest IS the closure and must be tracked.
-!vendor/manifest.toml
-
+result
+result-*
 node_modules/
 *.log
 .DS_Store
+
+# Written by scripts/nix-export.sh when it signs a transfer. Tracked
+# deliberately? No: it is per-machine. nix/hosts/wsl.nix picks it up if present
+# and falls back to require-sigs = false when it is absent.
+cache-pubkey
