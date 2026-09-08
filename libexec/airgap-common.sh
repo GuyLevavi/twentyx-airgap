@@ -30,8 +30,16 @@ airgap_user() {
         AIRGAP_USER_SOURCE="AIRGAP_USER"; AIRGAP_USER_RESOLVED="$AIRGAP_USER"
         printf '%s' "$AIRGAP_USER"; return
     fi
-    # Stable across sessions and machines; set it once in Nix (airgap.git).
-    u="$(git config --get user.email 2>/dev/null || true)"
+    # --global is load-bearing, not decoration. A plain `git config --get`
+    # honours a per-REPOSITORY user.email, so the resolved identity -- and
+    # therefore $HOME -- would depend on which directory you happened to run
+    # from. Working in a repo with its own user.email would silently relocate
+    # your state to a different PVC directory, which is precisely the failure
+    # this chain exists to avoid.
+    #
+    # home-manager writes ~/.config/git/config, which git treats as global, so
+    # this reads exactly the value Nix set.
+    u="$(git config --global --get user.email 2>/dev/null || true)"
     if [ -n "$u" ]; then
         AIRGAP_USER_SOURCE="git user.email"; AIRGAP_USER_RESOLVED="${u%%@*}"
         printf '%s' "${u%%@*}"; return
