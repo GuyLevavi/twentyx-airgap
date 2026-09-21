@@ -1,5 +1,0 @@
-# `repeated_keys` fires on our deliberate style: each `programs.<x>` block sits
-# next to the comment explaining why it is configured that way. Merging them
-# into one `programs = { ... }` would separate every rationale from its setting,
-# which is the opposite of what this repo optimises for.
-disabled = ["repeated_keys"]
