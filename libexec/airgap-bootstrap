@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Summary: relocate $HOME onto the PVC and materialize it from the Nix layer
+# Relocate $HOME onto the PVC and materialize it from the Nix layer.
 #
-# Idempotent. Safe to run repeatedly: at pod start, after `airgap update`, or
-# by hand.
+# Idempotent. Safe to run repeatedly: at pod start, or by hand.
 #
 # The pod's real $HOME (/home/jensen) is wiped on every restart. The previous
 # design symlinked selected pieces onto the PVC, which only ever rescued the
@@ -15,22 +14,22 @@
 #   $HOME                        durable, on the PVC; a real file here is a
 #                                user override and is never touched
 #
-# That is what makes `airgap refresh` meaningful: a default is a symlink into
-# the store, an override is a real file, and refreshing is backing the real
-# file up and restoring the symlink.
+# That is what makes restoring a default meaningful: a default is a symlink
+# into the store, an override is a real file. Back the real file up, put the
+# symlink back.
 set -euo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 
-# Resolved, not used as-is: both are symlinks into the store, and `find` does
-# not descend into a symlink given as its starting point -- it matches only the
-# link itself, so the path-strip below silently no-ops and every default gets
-# linked to a garbage path built from the store path.
+# Resolved, not used as-is: the profile is a symlink into the store, and
+# `find` does not descend into a symlink given as its starting point -- it
+# matches only the link itself, so the path-strip below silently no-ops and
+# every default gets linked to a garbage path built from the store path.
+# home-defaults is a real directory (of per-file symlinks, so the repo layer
+# can override individual defaults); readlink -f passes it through unchanged.
 DEFAULTS="$(readlink -f "$AIRGAP_ROOT/home-defaults" 2>/dev/null || echo "$AIRGAP_ROOT/home-defaults")"
 PROFILE="$AIRGAP_ROOT/profile"
-# pi is an npm global, so it lives outside the Nix profile in its own layer.
-NODE_GLOBALS="$AIRGAP_ROOT/node-globals"
 
 USER_R="$(airgap_user)"
 DHOME="$(airgap_home)"
@@ -43,7 +42,7 @@ if airgap_home_is_durable; then
     chmod g+rwxs "$DHOME" 2>/dev/null || true
 else
     warn "no writable /data or /code -- this session is EPHEMERAL."
-    warn "shell history, agent sessions and nvim state will die with the pod."
+    warn "shell history, agent sessions and editor state will die with the pod."
 fi
 
 export HOME="$DHOME"
@@ -68,17 +67,22 @@ if [ -d "$DEFAULTS" ]; then
         # .cache is deliberately ephemeral (see above); do not seed it onto
         # the PVC just because home-manager keeps a .keep file there.
         case "$rel" in .cache/*) continue ;; esac
+        # Resolve the entry's final target: a packaged default is a symlink
+        # into the store, a repo-layer override is a real file in the image.
+        # Linking $HOME at the resolved target keeps doctor's store-path
+        # checks meaningful either way.
+        tgt="$(readlink -f "$src")"
         dst="$HOME/$rel"
         # home-manager generates .bashrc, but our env must be exported before
         # it runs (it execs fish). Park it and let the stub below source it.
         [ "$rel" = ".bashrc" ] && dst="$HOME/.bashrc.hm"
         mkdir -p "$(dirname "$dst")"
         if [ -L "$dst" ]; then
-            [ "$(readlink "$dst")" = "$src" ] || { rm -f "$dst"; ln -s "$src" "$dst"; }
+            [ "$(readlink "$dst")" = "$tgt" ] || { rm -f "$dst"; ln -s "$tgt" "$dst"; }
         elif [ -e "$dst" ]; then
             :   # a real file: a user override. Never clobber it.
         else
-            ln -s "$src" "$dst"
+            ln -s "$tgt" "$dst"
         fi
     done < <(find "$DEFAULTS" -type f -o -type l)
 else
@@ -100,12 +104,20 @@ set -gx XDG_DATA_HOME "$DHOME/.local/share"
 set -gx XDG_STATE_HOME "$DHOME/.local/state"
 set -gx XDG_CACHE_HOME "$CACHE"
 set -gx PIP_CACHE_DIR "$CACHE/pip"
-set -gx NPM_CONFIG_CACHE "$CACHE/npm"
 # Model weights are enormous and must never land on ephemeral disk.
 set -gx TORCH_HOME "$DHOME/.local/share/torch"
 set -gx HF_HOME "$DHOME/.local/share/huggingface"
+# Rootless-capable containers without touching /etc. vfs works everywhere a
+# pod does (no mount(2) needed); switch to overlay when the pod is privileged.
+mkdir -p "$CACHE/containers"
+cat > "$CACHE/containers/storage.conf" <<OC
+[storage]
+driver = "vfs"
+runroot = "$CACHE/containers/runroot"
+graphroot = "$CACHE/containers/graph"
+OC
+set -gx CONTAINERS_STORAGE_CONF "$CACHE/containers/storage.conf"
 fish_add_path --global --prepend "$PROFILE/bin"
-test -d "$NODE_GLOBALS/bin"; and fish_add_path --global --prepend "$NODE_GLOBALS/bin"
 EOF
 
 # home-manager bakes its eval-time home into some generated values. The rewrite
@@ -128,7 +140,9 @@ export XDG_STATE_HOME="$DHOME/.local/state"
 export XDG_CACHE_HOME="$CACHE"
 export TORCH_HOME="$DHOME/.local/share/torch"
 export HF_HOME="$DHOME/.local/share/huggingface"
-for d in "$PROFILE/bin" "$NODE_GLOBALS/bin"; do
+# Containers without touching /etc: vfs works everywhere a pod does.
+export CONTAINERS_STORAGE_CONF="$CACHE/containers/storage.conf"
+for d in "$PROFILE/bin"; do
     [ -d "\$d" ] || continue
     case ":\$PATH:" in *":\$d:"*) ;; *) PATH="\$d:\$PATH" ;; esac
 done
@@ -146,18 +160,29 @@ EOF
 grep -qs bashrc "$HOME/.bash_profile" 2>/dev/null || \
     echo '[ -r ~/.bashrc ] && . ~/.bashrc' > "$HOME/.bash_profile"
 
-# ── agent state on the PVC ────────────────────────────────────────────────
-mkdir -p "$HOME/.pi/agent"/{sessions,agents,extensions}
-for r in agents prompts skills; do
-    [ -d "$AIRGAP_ROOT/pi/$r" ] || continue
-    mkdir -p "$HOME/.pi/agent/$r"
-    for f in "$AIRGAP_ROOT/pi/$r"/*; do
-        [ -e "$f" ] && link_into "$f" "$HOME/.pi/agent/$r/$(basename "$f")"
-    done
-done
-for c in settings.json models.json; do
-    [ -f "$HOME/.pi/agent/$c" ] || \
-        cp "$AIRGAP_ROOT/config/pi/$c" "$HOME/.pi/agent/$c" 2>/dev/null || true
-done
+# ── environment-provided assets (see airgap_injection_exports) ────────────
+# Appended here, after both drop-ins exist: the fish block above is written
+# with `cat >` and would truncate anything appended earlier. The launcher
+# exports the same set for the agent's process tree.
+if INJ="$(airgap_injection_exports)"; then
+    ca=""
+    while IFS=$'\t' read -r k v; do
+        printf 'set -gx %s "%s"\n' "$k" "$v" >> "$HOME/.config/fish/conf.d/00-airgap.fish"
+        printf 'export %s="%s"\n' "$k" "$v" >> "$HOME/.bashrc"
+        [ "$k" = "SSL_CERT_FILE" ] && ca="$v"
+    done <<EOF
+$INJ
+EOF
+    # Best-effort: teach the base's system openssl the internal CA too, for
+    # tools that do not consult these env vars. Needs root; quiet if sudo or
+    # a Debian-style update-ca-certificates is unavailable.
+    if [ -f "$ca" ] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo mkdir -p /usr/local/share/ca-certificates 2>/dev/null || true
+        sudo cp "$ca" /usr/local/share/ca-certificates/airgap-env.crt 2>/dev/null || true
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            sudo update-ca-certificates >/dev/null 2>&1 || true
+        fi
+    fi
+fi
 
 exit 0

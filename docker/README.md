@@ -12,31 +12,31 @@ add 400MB.
 
 ## The insight
 
-Everything we add on top of the base is **just files** — and since the move to Nix, most of them
-are files somebody else already built:
+Everything we add on top of the base is **just files** — and since the move to Nix, all of it
+is files somebody else already built:
 
 | Layer | Contents | Built by | Changes |
 |---|---|---|---|
 | `nix-layer.tar.gz` | the whole toolchain closure, at `/nix/store` | `nix build` **outside** the gap | monthly |
-| `node-layer.tar` | pi and its `node_modules` | `Containerfile.node`, in CI | monthly |
-| `repo-layer.tar` | dispatcher, libexec, pi package | `mklayer.sh`, plain `tar` | every commit |
+| `repo-layer.tar` | libexec runtime, agent helpers, sudoers | `mklayer.sh`, plain `tar` | every commit |
 
-Only the middle one needs a container at all, and only because pi ships as an npm package and npm
-needs a registry. The other two are `tar`.
+No container is needed anywhere in this pipeline. opencode comes from the Nix
+closure, so nothing needs npm against a registry — the old node layer is gone,
+and with it the only CI stage that needed Artifactory.
 
 ## The design
 
     OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (414MB)
                                             nix-layer-nvim.tar.gz  (634MB)
     TRANSFER  physical, then scripts/push-artifactory.sh
-    INSIDE    .gitlab-ci.yml  ->  node-layer.tar, repo-layer.tar
+    INSIDE    .gitlab-ci.yml  ->  repo-layer.tar (tar of the checkout)
               docker/assemble.sh  ->  crane append + crane mutate
 
 `crane append` fetches only the base's **manifest and config**, never its layers. It uploads the
 new layer blobs and cross-mounts everything else. The fat base is never pulled, never unpacked,
 never re-pushed.
 
-Cost per variant: one manifest GET, one config GET, three blob PUTs (deduplicated after the first
+Cost per variant: one manifest GET, one config GET, two blob PUTs (deduplicated after the first
 variant), one manifest PUT. Seconds, and a few hundred MB of disk.
 
 ## Why the store must land at `/nix`
@@ -73,8 +73,9 @@ tmux handed that literal string would create a directory named `$(id`.
 ## Constraint
 
 Stage 2 cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
-`LABEL`) via `crane mutate`. Anything requiring execution must happen in `Containerfile.node` or at
-container startup in `airgap-entrypoint`.
+`LABEL`) via `crane mutate`. Anything requiring execution must happen at container startup in
+`airgap-entrypoint` (or, for the sudo setuid bit, in `mklayer.sh` — Nix strips setuid from build
+outputs, so the repo layer sets it on the copy it re-tars).
 
 This is a feature: it forces the toolchain to be relocatable and inspectable, which is exactly what
 lets the WSL target share the same Nix expressions.

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Summary: diagnose the environment -- layers, closure, terminal, endpoint
+# Diagnose the environment -- layers, closure, terminal, endpoint, sudo, podman.
 #
 # Run this first when something is wrong, and paste its output into a bug
 # report. Everything is read-only and non-interactive; it never prompts, never
-# sudos, and never touches the network except to probe the model endpoint.
+# sudos anything real, and never touches the network except to probe the model
+# endpoint.
 set -uo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 
 # $HOME is only correct once bootstrap's shell drop-in has run. Anything
-# launched outside an interactive login -- `runai exec -- airgap doctor`, a
+# launched outside an interactive login -- `runai exec -- airgap-doctor`, a
 # cron, code-server's task runner -- still sees the pod's original /home/jensen
 # and would report on a directory nobody uses. Resolve it the same way
 # bootstrap does, so all three agree by construction.
@@ -90,11 +91,10 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     kv "packaged" "$want"
     kv "linked into \$HOME" "$have"
     if [ "$want" -gt 0 ] && [ "$have" -eq 0 ]; then
-        bad "nothing was linked -- run: airgap bootstrap"
+        bad "nothing was linked -- run: $AIRGAP_ROOT/libexec/airgap-bootstrap"
         fails=$((fails+1))
     elif [ "$have" -lt "$((want / 2))" ]; then
-        warn "fewer links than defaults; some may be overridden by real files (expected) --"
-        warn "check with: airgap refresh list"
+        warn "fewer links than defaults; some may be overridden by real files (expected)"
     else
         ok "defaults are linked"
     fi
@@ -106,7 +106,7 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     if [ "$stale" -gt 0 ]; then
         bad "$stale dangling link(s) into /nix/store -- stale from a previous image"
         find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | head -3 | sed 's/^/       /'
-        bad "fix with: airgap bootstrap"
+        bad "fix with: $AIRGAP_ROOT/libexec/airgap-bootstrap"
         fails=$((fails+1))
     else
         ok "no stale links from a previous image"
@@ -140,7 +140,7 @@ fi
 
 # ── tools ─────────────────────────────────────────────────────────────────
 say "tools"
-for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq node; do
+for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq opencode; do
     if command -v "$t" >/dev/null 2>&1; then
         ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
     else
@@ -148,10 +148,38 @@ for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq node; d
     fi
 done
 # Optional by flavor: absence is a fact, not a failure.
-for t in nvim pi nvtop; do
+for t in nvim nvtop herdr; do
     if command -v "$t" >/dev/null 2>&1; then ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
     else warn "$t not in this image flavor"; fi
 done
+
+# ── sudo / podman ─────────────────────────────────────────────────────────
+say "sudo / podman"
+if command -v sudo >/dev/null 2>&1; then
+    # NOPASSWD for gid 0 comes from the repo layer's /etc/sudoers. A failure
+    # here usually means a stale or missing sudoers file, or no-new-privileges
+    # blocking the setuid bit.
+    if sudo -n true >/dev/null 2>&1; then
+        ok "sudo: passwordless for gid 0"
+    else
+        bad "sudo present but not usable without a password (sudoers missing?)"
+        fails=$((fails+1))
+    fi
+else
+    bad "sudo missing -- podman and anything needing root will not work"
+    fails=$((fails+1))
+fi
+if command -v podman >/dev/null 2>&1; then
+    kv "storage conf" "${CONTAINERS_STORAGE_CONF:-default}"
+    if podman info >/dev/null 2>&1; then
+        ok "podman: storage initialized"
+    else
+        bad "podman info failed -- check the storage driver (vfs works everywhere)"
+        fails=$((fails+1))
+    fi
+else
+    warn "podman not present (fine on a slim/CPU workspace without it)"
+fi
 
 # ── terminal ──────────────────────────────────────────────────────────────
 # The difference between a working headless nvim and a monochrome one that
@@ -186,6 +214,35 @@ else
     warn "not inside tmux; a dropped exec session will kill your work"
 fi
 
+# ── environment-provided assets ───────────────────────────────────────────
+say "env injection"
+if INJ="$(airgap_injection_exports)"; then
+    dir="$(printf '%s\n' "$INJ" | awk -F'\t' '$1=="AIRGAP_ENV_DIR" {print $2}')"
+    kv "source" "$dir"
+    printf '%s\n' "$INJ" | awk -F'\t' '$1 != "AIRGAP_ENV_DIR" {printf "  %-20s -> %s\n", $1, $2}'
+    # A CA bundle that is wired but unreadable is worse than absent: TLS fails
+    # with a confusing message instead of a clear one.
+    ca="$(printf '%s\n' "$INJ" | awk -F'\t' '$1=="SSL_CERT_FILE" {print $2}')"
+    if [ -n "$ca" ]; then
+        if [ -r "$ca" ]; then
+            ok "ca-bundle readable"
+        else
+            bad "ca-bundle not readable by this uid -- check the mount"
+            fails=$((fails+1))
+        fi
+    fi
+else
+    warn "no /opt/airgap-env or /data/.airgap-env -- internal CA and pip.conf are NOT injected"
+    warn "mount a ConfigMap at /opt/airgap-env, or put the files on the shared PVC"
+fi
+# RunAI's port-exposure proxy expects nginx; slim-based images carry it in the
+# closure so it is present regardless of base.
+if command -v nginx >/dev/null 2>&1; then
+    ok "$(printf '%-9s %s' nginx "$(command -v nginx)")"
+else
+    warn "nginx not present (fine unless this workspace exposes ports through it)"
+fi
+
 # ── gpu / preloaders ──────────────────────────────────────────────────────
 say "gpu / preloaders"
 kv "LD_PRELOAD"             "${LD_PRELOAD:-}"
@@ -208,7 +265,7 @@ fi
 say "model endpoint"
 BASE="${AIRGAP_LLM_BASE_URL:-}"
 if [ -z "$BASE" ]; then
-    warn "AIRGAP_LLM_BASE_URL unset -- pi will not find the vLLM endpoint"
+    warn "AIRGAP_LLM_BASE_URL unset -- opencode will not find the vLLM endpoint"
     fails=$((fails+1))
 else
     kv "base url" "$BASE"

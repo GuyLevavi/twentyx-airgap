@@ -11,11 +11,13 @@ The interceptors:
 
 The working antidote does **not** unset `LD_PRELOAD`; it *replaces* it with libc:
 
-    LD_PRELOAD="${LIBC:-/lib/x86_64-linux-gnu/libc.so.6}"   # LIBC via ldconfig + awk
+    LD_PRELOAD="${LIBC:-/lib/x86_64-linux-gnu/libc.so.6}"   # LIBC via ldd + awk
 
-That is better than unsetting, and `libexec/airgap-pi` now matches it exactly: libc is already
-loaded in every process, so preloading it is a no-op, while `LD_PRELOAD` stays populated for
-anything that branches on whether it is set.
+That is better than unsetting, and `libexec/airgap-opencode` now matches it exactly -- with one
+refinement the pi-era version got wrong: **the libc must come from the same glibc as the binary
+being preloaded**. opencode is Nix-built (glibc 2.4x); preloading the base image's *system* libc
+into it is a `GLIBC_PRIVATE` symbol-lookup error, not a no-op. The launcher resolves the libc with
+`ldd $(command -v opencode)`, which is correct for both Nix-built and system-built targets.
 
 Implemented and tested across four cases:
 
@@ -31,8 +33,10 @@ Implemented and tested across four cases:
 the launcher and pi never starts. Fixed with `|| true`. **Check the original antidote script for
 the same latent bug** -- it only shows up when the shell has `pipefail` set.
 
-Still worth confirming in-pod: whether pi/node is affected by the preloaders at all. If not, set
-`AIRGAP_PRELOAD_STRIP=0` and nothing else changes.
+Still worth confirming in-pod: nothing beyond the TUI is affected once the split is in place --
+the TUI gets the matching-libc no-op preload, and every bash child gets the original back via
+`agent/plugins/airgap-preload.ts` (opencode `shell.env` hook) plus `agent/restore-preload.sh`
+(`BASH_ENV`). Set `AIRGAP_PRELOAD_RESTORE=0` to disable the restore half.
 
 ## 2. Identity on the shared PVC  [RESOLVED -- implemented]
 
@@ -68,14 +72,12 @@ Two independent flows, which used to be one:
     IMAGES   outside -> build-layers.sh -> nix-layer{,-nvim}.tar.gz
                      -> physical transfer
                      -> push-artifactory.sh -> generic-local/airgap/<ver>/
-                     -> CI fetches, builds node-layer, crane appends
+                     -> CI fetches, tars repo-layer, crane appends
 
 - Git holds **text only** -- now literally true. There is no `vendor/` and no blob list: the
   closure is computed, so the only binary artifacts are Nix build outputs.
-- `push-artifactory.sh` uses the `jf` CLI with a `curl` fallback, for the chicken-and-egg where
-  `jf` itself is not yet on the box.
-- npm-local: pi, so `pi install npm:@corp/airgap-pi` works in-cluster.
-- generic-local: the layer tarballs.
+- generic-local: the layer tarballs. There is no node layer and no npm anywhere in the pipeline:
+  opencode is built from source by nixpkgs and rides in the closure.
 
 **What replaced the two-checksum scheme.** `manifest.toml` hashed upstream archives (*did I
 download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
@@ -92,8 +94,8 @@ with registries and CA certs, so Stage 1 builds on an internal slim base, not a 
 
 Editor is **code-server** (Coder). Consequences, already implemented:
 
-With code-server deferred (item 7), the build stage no longer needs `vscode-slim` -- it only runs
-`npm install`, so `base-slim` is the cheaper `BASE_IMAGE` in `.gitlab-ci.yml`.
+The old Stage 1 / node-layer build pod is gone entirely -- there is no container
+build left, only `tar` + `crane`. CI's assemble stage still runs on `base-slim`.
 
 Fill in yourself: registry hostname, repo paths, tag convention
 (`AIRGAP_BASE_REGISTRY` / `AIRGAP_BASE_TAG` in `.gitlab-ci.yml`).
@@ -148,8 +150,116 @@ Node check is worth keeping in whatever does: it is the same failure that segfau
 Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, 414 MB) and
 skip `-nvim` (634 MB). `assemble.sh` detects the missing nvim tarball and builds one flavor.
 
-That proves transfer -> Artifactory -> node layer -> `crane append` -> pod end to end, including
-the two things that can only fail against real internal bases: `PATH` prepending on a pytorch base
-and ENTRYPOINT hand-over on a `vscode-*` one.
+That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things
+that can only fail against real internal bases: `PATH` prepending on a pytorch base and
+ENTRYPOINT hand-over on a `vscode-*` one.
 
 The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- see `wsl/README.md`.
+
+## 8. How this is tested without the gap  [test suite: tests/]
+
+The whole image path is exercised by `tests/test-container.sh` -- assemble
+against a mock base (ubuntu:24.04 in a local registry), then run the image
+under the problematic pod shape and assert the behaviors that each broke once:
+
+- **The pod UID is emulated for real**: `podman run --user 10001:0` -- an
+  arbitrary UID with no passwd entry, gid 0. This is what caught the runtime
+  setting `HOME=/` (no passwd entry -> the runtime guesses), which is why the
+  entrypoint and launcher re-resolve via `airgap_home()`.
+- **The preloader crash is reproduced** with `tests/hostile-preloader.c`, a
+  synthetic .so that aborts only the agent binary -- the same shape as the
+  real fractioning libs (opencode dies, system binaries are fine). Asserted:
+  bare opencode dies, `airgap-opencode` survives, children get the original
+  preload back via `BASH_ENV`.
+- Also asserted: closure integrity after `crane append`, defaults seeding
+  (opencode plugin, Zed settings), the env-injection contract, sudoers +
+  setuid sudo, nginx presence, repo-layer determinism.
+
+Two artifacts of the harness, not the image: the sudo PAM error under rootless
+podman is a userns artifact (setuid-root maps to the host user, which cannot
+read /etc/shadow; in a real pod setuid-root is real root), and the repro exits
+139 or 134 depending on the agent binary's own signal handlers. **Unverified
+in the gap: whether RunAI sets `no-new-privileges`**, which would block the
+setuid bit entirely -- `airgap-doctor`'s sudo line answers it on a real pod.
+
+GPU: `tests/test-gpu-cuda.sh` verifies passthrough + `torch.cuda` on a host
+with the nvidia CDI setup (one-time, root). What no local test can claim:
+CUDA under the REAL fractioning preloaders (they are proprietary) -- only a
+fractioned pod answers that. The preload split itself is fully covered.
+
+Rootful `sudo podman` in a pod may still lack `CAP_SYS_ADMIN` for overlay
+mounts; the prewritten `storage.conf` defaults to `vfs`, which needs no
+mounts. Rootless podman (no sudo) needs unprivileged userns + subuids, which
+OpenShift usually denies -- hence the sudo path.
+
+Also in the closure: `herdr` 0.9.0, `zed-editor`, `openssh`, `nginx`, and
+`sst-dev.opencode` 0.0.13 (the official VS Code extension, seeded for
+code-server and shipped as a raw `.vsix` for the Windows side, which has no
+marketplace in the gap).
+
+## 9. Local store repair on the connected machine  [one-time, needs sudo]
+
+`nix build .#runai-layer` on the connected NixOS machine fails with
+`store path '/nix/store/sbl1wlvqkr05i4jysvygdpsq7rshznwd-source.drv' does not
+exist` (input of `yodl-4.05.00.drv`, via zsh <- direnv). The DB row exists but
+the file was lost. A throwaway chroot store builds the same eval fine, so the
+pinned snapshot is healthy -- this is purely local damage. Fix:
+
+    sudo cp /tmp/store/nix/store/sbl1wlvqkr05i4jysvygdpsq7rshznwd-source.drv /nix/store/
+
+(exact bytes re-materialized during the verification run; any chroot-store copy
+of the same drv works), or `sudo nix-store --verify --check-contents --repair`
+for the blunt instrument.
+
+## 10. The role of Nix: where configs belong  [design note, 2026-09 refactor]
+
+Premise: configs change often and must push cheap; the toolchain closure
+changes rarely and is expensive to transfer. The consequence, spelled out so
+it is not relitigated:
+
+- **Nix owns binaries and the packaged defaults, not live config.** The
+  frequent config edits happen on the durable PVC (`$HOME`), where a real file
+  shadows the packaged symlink. A config tweak inside the pod has never
+  required a rebuild -- that is the `$HOME` layering rule.
+- **The closure-vs-text split already is the config-layer split.** The repo
+  layer (80KB of git text, re-tarred by CI per commit) is the "frequent, thin
+  layer"; the Nix layer is the rare, fat one. `crane append` + overlayfs
+  semantics do the rest. There is nothing to diff: the layer a change belongs
+  to is visible from the directory it touched.
+- **Fleet-wide default changes no longer need a transfer either.** As of the
+  2026-09 refactor, `home-defaults` is a real directory of per-file symlinks,
+  and overlayfs merges directories across layers -- so the repo layer can
+  override individual defaults per commit. This is the "Nix owns a preset
+  which gets overlaid" shape, with the overlay being ordinary git text.
+- Where the "regctl / nix2container / skopeo mirror" framing misses the mark:
+  we never need to DELETE base files (no whiteouts needed, `crane append`
+  suffices); we do not build images with Nix (append-only against unpulled
+  bases is the whole point); and the closure does not transfer as an OCI
+  bundle at all -- the nix binary cache is content-addressed, order-
+  independent and signature-verified per store path, which an OCI tarball is
+  not.
+- The one real tradeoff left: a NEW packaged default chosen inside the pod
+  must be committed to git to reach other users of the image. That is a
+  feature (defaults are reviewed), not a rebuild.
+
+## 11. Open items from the 2026-09 refactor
+
+- **nginx**: added to the closure so port-exposure does not depend on the
+  base. The exact site config RunAI expects (and whether it wants one at all)
+  is unpinned -- when known, it belongs in the env-injection mount, not in
+  the closure.
+- **Zed remote development**: the client downloads a version-matched
+  `zed-remote-server` into `~/.local/share/zed/remote_server/` on first
+  connect -- an airgap hang. nixpkgs' `zed-editor` does not package the
+  remote-server binary separately, so pre-seeding means copying the matching
+  client version's binary there (same shape as the vscode-server dance). The
+  `opencode acp` integration needs none of this: it runs locally. The
+  `sshd -i` bridge (`libexec/airgap-sshd-inetd` + `scripts/ssh-bridge.sh`)
+  is implemented but only exercised against a real `runai exec` -- the
+  privsep-user and passwd self-registration inside the pod are best-effort
+  until then.
+- **runai CLI on WSL**: the bridge needs it (`uv tool install runai` inside
+  the gap); it is not in the closure because it is a client, not a pod tool.
+- **shell.env hook**: verified against the shipped opencode version's
+  documented behavior; upstream has a TODO about honoring `shell.env` in the
+  v2 bash tool -- the `BASH_ENV` path is the belt to that suspenders.

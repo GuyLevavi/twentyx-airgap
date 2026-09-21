@@ -17,7 +17,8 @@ actually references, and nothing else.
 | Nix at runtime | yes — rebuilds offline | **no** — never runs in a pod |
 | How it arrives | binary cache, `scripts/nix-import.sh` | `crane append`, `docker/assemble.sh` |
 | Python | Nix (3.11 + 3.12, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
-| Cluster tools | kubectl, k9s, stern, helm, crane | none — a pod cannot reach the API server |
+| Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
+| Agent | opencode + herdr | opencode (via `airgap-opencode`) + herdr |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
 tells you what that costs before you carry it anywhere.
@@ -29,8 +30,7 @@ tells you what that costs before you carry it anywhere.
 | WSL bootstrap, one file | **948 MB** (4.3 GiB system + flake inputs, xz) |
 | `nix-layer.tar.gz` | 414 MB |
 | `nix-layer-nvim.tar.gz` | 634 MB |
-| `node-layer.tar` | ~40 MB |
-| `repo-layer.tar` | 80 KB |
+| `repo-layer.tar` | ~80 KB |
 
 The whole airgapped NixOS-WSL fits in a single transfer under a 2.5GB per-file
 cap. `nix-export.sh` shards anyway if it ever stops fitting; reassembly is
@@ -48,26 +48,58 @@ enumerate, and there is always another tool writing a dotfile nobody listed.
 | Yours | `$HOME` on `/data/<user>` | durable, never clobbered |
 
 Inside `$HOME` the distinction is visible in the filesystem: **a symlink into the
-store is ours, a real file is yours.** That is what makes `airgap refresh` a
-well-defined operation rather than a table someone has to maintain.
+store is ours, a real file is yours.** Bootstrap never touches a real file, so
+overriding a packaged default is just: edit it. Back up the real file and the
+next start re-links the default.
 
 `XDG_CACHE_HOME` is deliberately *not* durable — the PVC is network-backed, and
 nvim, the LSPs and pip on a network filesystem are painfully slow. A cache is
 reconstructible by definition.
 
 ```
-airgap doctor          layers, closure integrity, terminal, endpoint
-airgap refresh list    what is overridden
-airgap update          pull script changes from GitLab (no image rebuild)
-airgap pi              launch pi with LD_PRELOAD handled
+airgap-doctor        layers, closure, terminal, sudo, podman, env, endpoint
+airgap-opencode      launch opencode with the RunAI preload handled
+sudo <cmd>           the runtime user (gid 0) has passwordless root
+podman ...           rootful via sudo; storage.conf prewritten (vfs)
 ```
+
+## Environment-provided assets
+
+Some things must not be baked into the image because they differ per cluster
+and rotate: the internal CA bundle, pip.conf, RunAI's nginx site config. The
+contract, in preference order:
+
+1. **`/opt/airgap-env`** — a ConfigMap/Secret volume, mounted via RunAI
+   pod-template customization. Platform-idiomatic: updates without an image
+   rebuild or a PVC write.
+2. **`/data/.airgap-env`** — a directory on the shared PVC, for when mounting
+   is not available. One copy per cluster.
+
+Known file names are wired into the environment wherever it can be reached
+(shell drop-ins, the pod entrypoint, the opencode launcher — everything except
+CRI exec, which only sees image ENV): `pip.conf` → `PIP_CONFIG_FILE`,
+`ca-bundle.crt` → `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`,
+`GIT_SSL_CAINFO`, `NIX_SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`. Unknown file
+names are simply present at their path — that is the extension point for the
+next "thing that needs to be there". `airgap-doctor` reports what was found.
+The system trust store is also updated best-effort via sudo (Debian bases).
+
+## Default overrides without a transfer
+
+Packaged defaults live in `$AIRGAP_ROOT/home-defaults` as a directory of
+per-file symlinks into the store — and overlayfs **merges directories across
+layers**. So the repo layer, which CI re-tars per commit, can override any
+individual packaged default by shipping a real file at the same path
+(`opt/airgap/home-defaults/.config/starship.toml`, say): seconds, no closure
+rebuild, no physical transfer. A user's real file in `$HOME` still wins over
+both — that precedence is enforced by bootstrap, not by the filesystem.
 
 ## Two update paths
 
 | Change | Path | Cost |
 |---|---|---|
-| dispatcher, libexec, pi package | `airgap update` → `git pull` | seconds |
 | anything in the closure | rebuild → transfer → CI | a physical transfer |
+| libexec / agent text | push → CI re-tars `repo-layer.tar` per commit | one commit, no transfer |
 
 Note what moved: the shell, prompt, tmux and nvim configs are Nix-generated now,
 so editing *them* is a closure change. On the WSL side that is still cheap —
@@ -80,20 +112,24 @@ The closure enforces the rule that discipline used to.
 
 The internal `*-pytorch` bases are 15–30GB, and `FROM base-pytorch` exhausts the
 build pod's ephemeral storage unpacking them. Everything we add is files, so
-three tarballs are appended registry-side with `crane append`, which fetches only
+two tarballs are appended registry-side with `crane append`, which fetches only
 each base's manifest and config. See [`docker/README.md`](docker/README.md).
 
 ## The LD_PRELOAD / CUDA split
 
-RunAI injects GPU-fractioning `.so` files via `LD_PRELOAD`. Clearing them fixes
-the agent but breaks CUDA in everything the agent runs. Both are true at once, so
-treat the process and its children separately:
+RunAI injects GPU-fractioning `.so` files via `LD_PRELOAD`. They crash opencode,
+but stripping them everywhere breaks CUDA in everything the agent runs. Both are
+true at once, so treat the process and its children separately:
 
-- `libexec/airgap-pi` replaces `LD_PRELOAD` with libc (a no-op preload, better
-  than unsetting), stashing the original in `AIRGAP_ORIG_LD_PRELOAD`
-- `pi/extensions/preload.ts` restores it via `spawnHook` for every bash call
+- `libexec/airgap-opencode` replaces `LD_PRELOAD` with the libc **matching the
+  binary's own glibc** (resolved with `ldd` — a system libc preloaded into a
+  Nix-built binary is a `GLIBC_PRIVATE` error, not a no-op), stashing the
+  original in `AIRGAP_ORIG_LD_PRELOAD`
+- `agent/plugins/airgap-preload.ts` restores the stash via opencode's
+  `shell.env` hook; `agent/restore-preload.sh` does the same via `BASH_ENV` for
+  any non-interactive bash the hook does not cover
 
-`airgap doctor` prints `torch.cuda.is_available()` under both.
+`airgap-doctor` prints `torch.cuda.is_available()` under both.
 
 ## Headless nvim over RunAI
 
@@ -110,35 +146,42 @@ The `-nvim` flavor is usable from a Windows terminal emulator through
 Use **WezTerm** (Ghostty has no Windows build). It announces `TERM=wezterm`,
 whose terminfo ships in the closure for exactly this reason.
 
-## Token budget
-
-The in-house Qwen3 FP8 has a ~70k hard limit and degrades past ~50k. pi's
-defaults assume 200k, so they are retuned in `config/pi/settings.json`
-(compaction fires at ~48.5k, not ~184k). The real savings are structural:
-
-| Mechanism | Effect |
-|---|---|
-| `scout` subagent | reads/greps in a **child** context, returns ~500 tokens |
-| `/plan` → `plan.md` → `/execute` | planning context never enters the build session |
-| per-agent `tools:` whitelist | strips unused tool schemas from the child |
-
 ## Layout
 
 ```
 flake.nix                     both targets, pinned inputs
 nix/modules/                  the shared config: home, shell, tools, nvim
-nix/hosts/wsl.nix             NixOS-WSL: offline substituters, nix-ld, vscode-server
+nix/hosts/wsl.nix             NixOS-WSL: offline substituters, nix-ld, sshd, podman
 nix/runai/layer.nix           the closure -> an OCI layer tarball
-bin/airgap                    dispatcher
-libexec/airgap-*              bootstrap, doctor, refresh, update, pi, entrypoint
-config/pi/, pi/               pi settings, preload extension, agents, prompts
+libexec/airgap-*              bootstrap, doctor, entrypoint, opencode, sshd-inetd
+agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
 scripts/nix-export.sh         run OUTSIDE -> a sharded, signed binary cache
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
 scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory, for CI
-docker/                       node layer + registry-side assemble
-NOTES.md                      open items to fill in from work
+scripts/ssh-bridge.sh         run on WSL  -> socat bridge: Zed/SSH into a pod
+tests/                        container integration tests (podman, no cluster)
+docker/                       registry-side assemble (no npm, no node layer)
+NOTES.md                      open items + design notes
 ```
+
+## Testing without the gap
+
+`tests/test-container.sh` assembles the image against a mock base in a local
+registry and runs it under the problematic pod shape — arbitrary UID 10001
+with no passwd entry, tmpfs PVC, a hostile preloader on `LD_PRELOAD`, an
+env-injection mount — asserting HOME relocation, closure integrity, the
+preload split, defaults seeding, sudoers and layer determinism. First run
+builds a throwaway Nix store (~10 min); reruns are fast. `nix develop` has
+everything, or the script pulls what it needs:
+
+```bash
+nix develop -c ./tests/test-container.sh
+```
+
+`tests/test-gpu-cuda.sh` is opt-in for GPU hosts (needs the nvidia CDI setup
+described in its header); what it cannot verify locally — CUDA under the real
+fractioning preloaders — only a fractioned pod can (see NOTES.md).
 
 ## Before the first transfer
 
@@ -158,8 +201,10 @@ Two values only you can supply:
 ## Status
 
 The Nix side is built and tested; the layers below were produced and unpacked,
-`airgap bootstrap`/`doctor`/`refresh` were run against the real tree, and the
+`airgap-bootstrap`/`airgap-doctor` were run against the real tree, and the
 chunked transfer was verified by reassembling in reverse order and diffing.
+The opencode/LD_PRELOAD split and the sudoers+setuid root path were exercised
+end-to-end against a mock base in a local registry (see NOTES.md §8).
 
 Not yet exercised **in the gap**: `assemble.sh` against real internal bases, and
 the `wsl --import` of `nix build .#wsl-tarball`. See [`NOTES.md`](NOTES.md) — the

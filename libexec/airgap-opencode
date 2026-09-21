@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Launch opencode with the RunAI preloaders neutralized for the TUI only.
+#
+# RunAI injects GPU-fractioning interceptors through LD_PRELOAD:
+#
+#   /runai/shared/pid/preloader.so
+#   /runai/shared/memory/loader.so
+#
+# These crash opencode. The known-good antidote does NOT unset LD_PRELOAD --
+# it *replaces* it with libc.so.6, which is already loaded in every process
+# and is therefore a no-op. That is deliberately better than unsetting: some
+# launchers and CUDA shims branch on whether LD_PRELOAD is set at all.
+#
+# The second half of the problem: with the preloaders gone, CUDA broke in
+# everything opencode ran. Both halves are true at once, so split process from
+# children:
+#
+#   here                       neutralize LD_PRELOAD, stash the original
+#   agent/plugins/airgap-*.ts  shell.env hook restores it for shell execution
+#   agent/restore-preload.sh   BASH_ENV restores it for non-interactive bash
+#
+# opencode runs clean. Children run exactly as an interactive shell does.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+# HOME is only correct once a login shell has sourced the drop-ins. A payload
+# reached via `runai exec -- airgap-opencode` or a code-server task starts with
+# whatever the runtime set -- for an arbitrary UID that is HOME=/ -- and
+# opencode would then scatter its state into / instead of the PVC. Same
+# resolution as airgap-doctor; the two must agree by construction.
+RESOLVED_HOME="$(airgap_home)"
+if [ "$HOME" != "$RESOLVED_HOME" ]; then
+    mkdir -p "$RESOLVED_HOME" 2>/dev/null || true
+    export HOME="$RESOLVED_HOME"
+fi
+
+# Environment-provided assets (internal CA, pip.conf) -- same set bootstrap
+# writes into the shell drop-ins, so the agent's process tree trusts what an
+# interactive shell trusts.
+if INJ="$(airgap_injection_exports)"; then
+    while IFS=$'\t' read -r k v; do
+        export "$k=$v"
+    done <<EOF
+$INJ
+EOF
+fi
+
+# Byte-for-byte. The plugin and BASH_ENV script must reproduce this exactly,
+# never approximate it.
+export AIRGAP_ORIG_LD_PRELOAD="${LD_PRELOAD:-}"
+
+if [ "${AIRGAP_PRELOAD_STRIP:-1}" = "1" ] && [ -n "${LD_PRELOAD:-}" ]; then
+    # Only intervene if a RunAI preloader is actually present. On a workstation
+    # or a non-fractioned pod there is nothing to neutralize.
+    if printf '%s' "$LD_PRELOAD" | grep -Eq "${AIRGAP_PRELOAD_PATTERN:-/runai/shared/}"; then
+        OC_BIN="$(PATH="${PATH//$AIRGAP_ROOT\/libexec:/}" command -v opencode 2>/dev/null || true)"
+        # The replacement libc must come from the SAME glibc as the binary it
+        # is preloaded into. opencode is Nix-built (glibc 2.4x); preloading the
+        # base image's system libc into it is a GLIBC_PRIVATE symbol-lookup
+        # error, not a no-op. ldd resolves the libc of the binary itself, which
+        # is correct for both Nix-built and system-built targets.
+        LIBC=""
+        if [ -n "$OC_BIN" ]; then
+            # `|| true` is load-bearing: awk's early `exit` closes the pipe,
+            # ldd dies of SIGPIPE, and under `set -o pipefail` the whole
+            # pipeline returns 141, which `set -e` turns into a silent
+            # launcher failure. -u: the probe must not itself load the RunAI
+            # interceptors we are about to neutralize.
+            LIBC="$(env -u LD_PRELOAD ldd "$OC_BIN" 2>/dev/null | awk '/libc\.so\.6/ {print $3; exit}' || true)"
+        fi
+        if [ -z "$LIBC" ] || [ ! -e "$LIBC" ]; then
+            # Fallbacks: explicit override, then ldconfig (system libc), then
+            # the standard Debian path.
+            LIBC="${AIRGAP_LIBC:-}"
+            if [ -z "$LIBC" ]; then
+                LIBC="$(ldconfig -p 2>/dev/null | awk '/libc\.so\.6/ {print $NF; exit}' || true)"
+            fi
+            [ -n "$LIBC" ] && [ -e "$LIBC" ] || LIBC="/lib/x86_64-linux-gnu/libc.so.6"
+        fi
+
+        if [ -e "$LIBC" ]; then
+            export LD_PRELOAD="$LIBC"
+        else
+            # Never leave the RunAI interceptors in place just because libc
+            # could not be located; unset is the lesser evil.
+            warn "libc not found; unsetting LD_PRELOAD instead of replacing it"
+            unset LD_PRELOAD
+        fi
+    fi
+fi
+
+# Tool shells are spawned non-interactively via $SHELL; fish ignores BASH_ENV,
+# which is half of the child-restore path. Pin bash unless told otherwise.
+export SHELL="${AIRGAP_OC_SHELL:-/bin/bash}"
+
+if [ -n "${AIRGAP_ORIG_LD_PRELOAD:-}" ]; then
+    export BASH_ENV="$AIRGAP_ROOT/agent/restore-preload.sh"
+fi
+
+command -v opencode >/dev/null 2>&1 || die "opencode not found on PATH"
+exec opencode "$@"

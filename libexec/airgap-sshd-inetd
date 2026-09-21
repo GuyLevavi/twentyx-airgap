@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# sshd in inetd mode: speak the SSH protocol on stdin/stdout.
+#
+# Zed's remote development (and any SSH client) can then attach to a RunAI
+# workload that has no exposed SSH TCP port: the entire SSH session rides
+# inside `runai exec`'s stdio pipe, which itself reaches the pod over the
+# RunAI/K8s control plane (HTTPS). The client side is scripts/ssh-bridge.sh
+# plus a normal ssh Host entry.
+#
+# Run as ROOT -- passwordless sudo comes from the repo layer, so the client
+# invokes it as:
+#
+#   runai exec -i <workload> -- sudo /opt/airgap/libexec/airgap-sshd-inetd
+#
+# No -t/-pty anywhere: sshd -i needs raw stdio, a pty would corrupt the
+# binary protocol with echo/CRLF translation.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+[ "$(id -u)" -eq 0 ] || die "must run as root -- the client runs: runai exec -i <workload> -- sudo $0"
+
+# Who is connecting? sudo's SUDO_UID is the runtime user the pod was started
+# with; the SSH login name must match it because we may have to register the
+# passwd entry ourselves.
+RUN_UID="${SUDO_UID:-10001}"
+RUN_USER="${AIRGAP_SSH_USER:-jensen}"
+DHOME="$(airgap_home)"
+
+# sshd cannot resolve the login user without a passwd entry, and OpenShift's
+# arbitrary UID usually arrives without one. Best effort: on a read-only /etc
+# this fails here and authentication fails loudly at connect time instead.
+if ! getent passwd "$RUN_USER" >/dev/null 2>&1; then
+    printf '%s:x:%s:0:runai ssh user:%s:/bin/bash\n' \
+        "$RUN_USER" "$RUN_UID" "$DHOME" >> /etc/passwd 2>/dev/null ||
+        warn "cannot write /etc/passwd -- pubkey auth will fail for $RUN_USER"
+fi
+# Privilege-separation user and directory: both required even in inetd mode.
+if ! getent passwd sshd >/dev/null 2>&1; then
+    printf 'sshd:x:74:74:sshd privsep:/run/sshd:/sbin/nologin\n' >> /etc/passwd 2>/dev/null ||
+        warn "no sshd privsep user -- sshd may refuse to start"
+fi
+mkdir -p /run/sshd && chmod 0755 /run/sshd 2>/dev/null || true
+
+# Host keys are ephemeral, one pair per pod, regenerated when absent. Clients
+# use StrictHostKeyChecking=accept-new; identity is pubkey-based anyway.
+KEYDIR="${AIRGAP_SSH_KEYDIR:-/tmp/airgap-ssh-keys}"
+umask 077
+mkdir -p "$KEYDIR"
+KEY="$KEYDIR/ssh_host_ed25519_key"
+[ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -f "$KEY"
+
+# Pubkey auth against the user's durable $HOME on the PVC. UsePAM=no: a
+# foreign container has no PAM stack worth trusting, and sshd -i has no tty
+# for it anyway.
+exec sshd -i \
+    -h "$KEY" \
+    -o PasswordAuthentication=no \
+    -o KbdInteractiveAuthentication=no \
+    -o PubkeyAuthentication=yes \
+    -o AuthorizedKeysFile=".ssh/authorized_keys" \
+    -o StrictModes=no \
+    -o UsePAM=no \
+    -o PidFile=/dev/null \
+    -o LogLevel=ERROR

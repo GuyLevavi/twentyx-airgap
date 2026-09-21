@@ -7,12 +7,11 @@
 # the base layers. The 30GB pytorch bases therefore cost the same as the slim
 # ones, which is what keeps the build pod inside its ephemeral storage budget.
 #
-# Three layers, appended in ascending order of how often they change, so a
-# config edit re-uploads 72KB and cross-mounts the rest:
+# Two layers, appended in ascending order of how often they change, so a
+# config edit re-uploads ~80KB and cross-mounts the rest:
 #
-#   1. nix-layer      the whole toolchain closure     monthly    ~365MB / ~609MB
-#   2. node-layer     pi and its node_modules         monthly    ~40MB
-#   3. repo-layer     dispatcher, libexec, configs    hourly     ~72KB
+#   1. nix-layer      the whole toolchain closure     monthly    ~414MB / ~634MB
+#   2. repo-layer     libexec, agent helpers, sudoers hourly     ~80KB
 #
 # Two flavors per variant: the nvim layer is ~250MB larger, and not every
 # workspace wants an editor in it.
@@ -28,13 +27,12 @@ BASE_TAG="${AIRGAP_BASE_TAG:-latest}"
 
 LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer.tar.gz}"
 LAYER_NIX_NVIM="${AIRGAP_LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
-LAYER_NODE="${AIRGAP_LAYER_NODE:-dist/node-layer.tar}"
 LAYER_REPO="${AIRGAP_LAYER_REPO:-dist/repo-layer.tar}"
 
 command -v crane >/dev/null || { echo "crane not found (nix shell .# gives you one)" >&2; exit 1; }
 command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
 
-for f in "$LAYER_NIX" "$LAYER_NODE" "$LAYER_REPO"; do
+for f in "$LAYER_NIX" "$LAYER_REPO"; do
     [ -f "$f" ] || { echo "missing layer: $f" >&2; exit 1; }
 done
 
@@ -77,7 +75,7 @@ session_env_args() {
 }
 
 echo "layers:"
-for f in "$LAYER_NIX" "$LAYER_NIX_NVIM" "$LAYER_NODE" "$LAYER_REPO"; do
+for f in "$LAYER_NIX" "$LAYER_NIX_NVIM" "$LAYER_REPO"; do
     [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
 done
 
@@ -92,7 +90,7 @@ for variant in $VARIANTS; do
         echo "  warn: $base declares no PATH; using a conservative default" >&2
         BASEPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     fi
-    NEWPATH="/opt/airgap/bin:/opt/airgap/node-globals/bin:/opt/airgap/profile/bin:${BASEPATH}"
+    NEWPATH="/opt/airgap/libexec:/opt/airgap/bin:/opt/airgap/profile/bin:${BASEPATH}"
 
     # Same reasoning for the entrypoint: the vscode-* bases launch code-server
     # from theirs. airgap-entrypoint bootstraps and then hands over, so record
@@ -111,7 +109,7 @@ for variant in $VARIANTS; do
         echo "    base ${base}"
 
         crane append -b "$base" -t "$dest" \
-            -f "$nixlayer" -f "$LAYER_NODE" -f "$LAYER_REPO" >/dev/null
+            -f "$nixlayer" -f "$LAYER_REPO" >/dev/null
 
         # Read per flavor: the nvim layer resolves to different store paths.
         mapfile -t ENVARGS < <(session_env_args "$nixlayer")

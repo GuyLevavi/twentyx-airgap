@@ -16,8 +16,11 @@ let
   # everything else. This is the shape the old manifest.toml was reaching for,
   # except Nix pins the hash and puts it in the closure automatically.
   tldrPages = pkgs.fetchzip {
+    # Hash re-pinned 2026-09: the v2.3 release asset was re-uploaded upstream,
+    # so the old pin no longer matches what GitHub serves. Content is still
+    # the tldr pages; the closure pins whatever this hash describes.
     url = "https://github.com/tldr-pages/tldr/releases/download/v2.3/tldr-pages.en.zip";
-    hash = "sha256-v71Vc/Lv7zBhncoLqQOFYdcnthCmuKpE90qMKBkUlRc=";
+    hash = "sha256-EKNWCMVrbWTIdrXLnzDuqbyLawp/0uNKggiyeG2GZSA=";
     stripRoot = false;
   };
 
@@ -95,14 +98,21 @@ in
       socat
       xh # poking the vLLM endpoint without writing a curl incantation
 
-      # ── node ───────────────────────────────────────────────────────────
-      # pi ships as JS via npm, so node is a hard runtime dependency in the
-      # pod. It used to be a vendored tarball chosen for a conservative x86-64
-      # baseline, because the compiled OpenCode binary segfaulted on older
-      # cluster CPUs. nixpkgs builds for the same baseline, so that risk is
-      # unchanged -- and it is now one line instead of a manifest entry, a
-      # checksum, and an extract rule.
-      nodejs_22
+      # ── agent ──────────────────────────────────────────────────────────
+      # opencode from nixpkgs is built from source (bun --compile): autoupdate
+      # is disabled by the wrapper and the models.dev catalog is baked in at
+      # build time, so it runs fully offline. One caveat that cannot be seen
+      # from here: the compiled binary targets x86-64-v3 (AVX2) and will SIGILL
+      # on pre-Haswell cluster nodes -- if a node ever dies this way, the fix
+      # is a local overlay building the --baseline variant, not a downgrade.
+      opencode
+      # Terminal multiplexer for agent sessions; sessions outlive their SSH
+      # exec, state per pane.
+      herdr
+      # GUI editor (WSLg); its headless value is the agent integration via
+      # `opencode acp` (packaged settings default) and, over the sshd -i
+      # bridge, remote sessions into a pod.
+      zed-editor
 
       # ── data ───────────────────────────────────────────────────────────
       sqlite # atuin's own store, plus general use
@@ -124,6 +134,28 @@ in
       git-lfs
       glab # you are on GitLab and had vendored gh
       moreutils # sponge, ts
+    ]
+    ++ lib.optionals (!wsl) [
+      # ── RunAI pod only ─────────────────────────────────────────────────
+      # WSL gets these from the system (NixOS), a pod has to carry them.
+      #
+      # podman works both sides of the gap: on WSL via virtualisation.podman,
+      # in a pod via the storage.conf that airgap-bootstrap writes into the
+      # ephemeral cache (vfs driver -- no mount(2), no CAP_SYS_ADMIN needed).
+      podman
+      # RunAI's port-exposure machinery expects an nginx in the workspace; the
+      # pytorch bases ship one, slim-based assemblies get it from here so
+      # presence does not depend on the base. Its site config, when the exact
+      # RunAI contract is pinned down, belongs in the env-injection mount (see
+      # airgap_injection_exports in libexec/airgap-common.sh).
+      nginx
+      # sshd for the sshd -i bridge (libexec/airgap-sshd-inetd): Zed/SSH into
+      # a pod with no exposed SSH port. On WSL this comes from the system.
+      openssh
+      # The runtime user (uid 10001, gid 0) elevates through the sudoers file
+      # shipped in the repo layer; docker/mklayer.sh adds the setuid copy.
+      # On NixOS sudo is a system setuid wrapper, so this is pod-only.
+      sudo
     ]
     ++ lib.optionals cfg.tools.cluster.enable [
       # ── OpenShift / RunAI ──────────────────────────────────────────────

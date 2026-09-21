@@ -110,10 +110,21 @@ in
     ];
   };
 
+  # ── SSH, both directions ────────────────────────────────────────────────
+  # Inbound: Zed/VS Code from Windows connect over plain SSH to this machine
+  # (WSL2 forwards localhost, so Windows clients just use localhost).
+  # Outbound: the runai CLI (uv tool install runai) drives `runai exec`, which
+  # is what scripts/ssh-bridge.sh tunnels sshd -i through.
+  services.openssh = {
+    enable = true;
+    settings.PasswordAuthentication = false;
+  };
   environment.systemPackages = with pkgs; [
     gitMinimal
     wget
     curl
+    openssh
+    socat # client side of the sshd -i bridge into RunAI pods
   ];
 
   system.stateVersion = "25.05";

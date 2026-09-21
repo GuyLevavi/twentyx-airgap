@@ -84,9 +84,35 @@ runCommand "runai-layer.tar.gz"
   ''
     mkdir -p root/opt/airgap
     ln -s ${profile} root/opt/airgap/profile
-    ln -s ${files}   root/opt/airgap/home-defaults
 
-    # Record the closure inside the image so `airgap doctor` can verify the
+    # home-defaults is a REAL DIRECTORY of per-file symlinks into the store,
+    # not a symlink to the files tree. That distinction is load-bearing:
+    # overlayfs MERGES directories across layers, so the repo layer (appended
+    # after this one) can override any single packaged default by shipping a
+    # real file at the same path -- per commit, no closure rebuild, no
+    # transfer. With a symlinked root, one repo-layer file would shadow the
+    # whole tree instead.
+    mkdir -p root/opt/airgap/home-defaults
+    find "${files}" -mindepth 1 \( -type f -o -type l \) -print0 |
+    while IFS= read -r -d "" f; do
+        rel="''${f#"${files}"/}"
+        d="root/opt/airgap/home-defaults/$(dirname "$rel")"
+        mkdir -p "$d"
+        # ''${...} is a BASH expansion: a single $ here would be read as Nix
+        # interpolation inside this indented string.
+        ln -s "$f" "root/opt/airgap/home-defaults/$rel"
+    done
+
+    # sudo lands here as a plain copy (Nix strips setuid bits from outputs,
+    # so the bit cannot be set in this derivation). docker/mklayer.sh extracts
+    # this file from the layer and sets the bit on the repo-layer copy, which
+    # is appended after this one and therefore wins.
+    if [ -e "${profile}/bin/sudo" ]; then
+        mkdir -p root/opt/airgap/bin
+        cp "${profile}/bin/sudo" root/opt/airgap/bin/sudo
+    fi
+
+    # Record the closure inside the image so airgap-doctor can verify the
     # layer arrived intact without needing Nix to ask.
     cp ${closure}/store-paths root/opt/airgap/store-paths
     printf '%s' "${evalHome}" > root/opt/airgap/eval-home

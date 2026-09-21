@@ -64,18 +64,39 @@ airgap_user() {
     printf '%s' "$AIRGAP_USER_RESOLVED"
 }
 
-# Link $2 -> $1 idempotently, backing up anything real that is in the way.
-link_into() {
-    local src="$1" dst="$2"
-    [ -e "$src" ] || return 0
-    mkdir -p "$(dirname "$dst")"
-    if [ -L "$dst" ]; then
-        [ "$(readlink "$dst")" = "$src" ] && return 0
-        rm -f "$dst"
-    elif [ -e "$dst" ]; then
-        mv "$dst" "$dst.bak.$(date +%s)"
-    fi
-    ln -s "$src" "$dst"
+# ── environment-provided assets ───────────────────────────────────────────
+# Things the environment must inject (internal CA bundle, pip.conf, ...) are
+# not baked into the image: they differ per cluster and rotate. The contract:
+#
+#   /opt/airgap-env      ConfigMap/Secret volume, via RunAI pod-template
+#                        customization -- platform-idiomatic, updates without
+#                        an image or PVC change, wins when both exist
+#   /data/.airgap-env    a directory on the shared PVC -- fallback when
+#                        mounting is not available, one copy per cluster
+#
+# Known file names are wired into env vars (below); unknown files are simply
+# reachable at their path, which is the extension point for the "stuff nobody
+# remembered to enumerate".
+# Emit TAB-separated KEY VALUE pairs for every known file that exists.
+airgap_injection_exports() {
+    local d v
+    for d in /opt/airgap-env /data/.airgap-env; do
+        [ -d "$d" ] || continue
+        printf 'AIRGAP_ENV_DIR\t%s\n' "$d"
+        if [ -f "$d/pip.conf" ]; then
+            printf 'PIP_CONFIG_FILE\t%s\n' "$d/pip.conf"
+        fi
+        if [ -f "$d/ca-bundle.crt" ]; then
+            # One file, many readers: python ssl, requests, curl, git, the
+            # Nix binaries themselves, node.
+            for v in SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE \
+                     GIT_SSL_CAINFO NIX_SSL_CERT_FILE NODE_EXTRA_CA_CERTS; do
+                printf '%s\t%s\n' "$v" "$d/ca-bundle.crt"
+            done
+        fi
+        return 0
+    done
+    return 1
 }
 
 # Durable $HOME. The pod's real $HOME (/home/jensen) is wiped on every restart,

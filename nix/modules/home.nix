@@ -24,6 +24,26 @@ let
       "C.UTF-8/UTF-8"
     ];
   };
+
+  # The official opencode extension for VS Code / code-server. The pod's
+  # code-server gets it seeded as a packaged default; on WSL the same vsix is
+  # there for sideloading onto the Windows side, which has no marketplace in
+  # the airgap. Version and hash are pinned deliberately: a moving ref would
+  # break offline rebuilds.
+  opencodeVscode = pkgs.vscode-utils.buildVscodeMarketplaceExtension {
+    mktplcRef = {
+      publisher = "sst-dev";
+      name = "opencode";
+      version = "0.0.13";
+      hash = "sha256-6adXUaoh/OP5yYItH3GAQ7GpupfmTGaxkKP6hYUMYNQ=";
+    };
+  };
+
+  # The raw .vsix, for `code --install-extension` on the Windows side.
+  opencodeVsix = pkgs.fetchurl {
+    url = "https://sst-dev.gallery.vsassets.io/_apis/public/gallery/publisher/sst-dev/extension/opencode/0.0.13/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage";
+    hash = "sha256-6adXUaoh/OP5yYItH3GAQ7GpupfmTGaxkKP6hYUMYNQ=";
+  };
 in
 {
   imports = [
@@ -141,6 +161,10 @@ in
       UV_PYTHON_DOWNLOADS = "never";
       PIP_DEFAULT_TIMEOUT = "10";
       GIT_TERMINAL_PROMPT = "0";
+
+      # The models.dev catalog is baked into the binary at build time; fetching
+      # it at runtime is a hang in the airgap, not an error.
+      OPENCODE_DISABLE_MODELS_FETCH = "true";
     }
     // lib.optionalAttrs (cfg.target == "runai") {
       # Nix binaries consult LOCALE_ARCHIVE; a foreign container has none, and
@@ -167,5 +191,38 @@ in
       enableGitIntegration = true;
     };
     programs.lazygit.enable = true;
+
+    # ── opencode ──────────────────────────────────────────────────────────
+    # The preload plugin ships as a packaged default: it is OUR fix, not user
+    # config, and riding home-defaults means bootstrap keeps it fresh across
+    # images unless the user deliberately overrides it with a real file.
+    home.file.".config/opencode/plugins/airgap-preload.ts".source =
+      ../../agent/plugins/airgap-preload.ts;
+
+    # Editor integration. code-server (the pod's IDE) scans this dir, so a
+    # symlinked store path is enough. The user's own opencode.json is NOT
+    # packaged: the working config already lives on the PVC, and a real file
+    # there would shadow this anyway.
+    home.file.".local/share/code-server/extensions/sst-dev.opencode".source = opencodeVscode;
+    home.file.".local/share/vsix/sst-dev.opencode-0.0.13.vsix".source = opencodeVsix;
+
+    # Zed: agent integration through opencode's ACP mode. JSONC, so the
+    # comment survives. A packaged DEFAULT: bootstrap never clobbers a real
+    # settings.json on the PVC -- merge this block into yours by hand if you
+    # already have Zed configured.
+    home.file.".config/zed/settings.json".text = ''
+      // Packaged default from the airgap closure. Zed reads JSONC. If you keep
+      // your own settings.json (real file on the PVC), merge the
+      // agent_servers block into it -- this default will not overwrite it.
+      {
+        "agent_servers": {
+          "OpenCode": {
+            "type": "custom",
+            "command": "opencode",
+            "args": ["acp"]
+          }
+        }
+      }
+    '';
   };
 }

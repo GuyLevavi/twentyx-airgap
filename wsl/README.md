@@ -76,3 +76,16 @@ The Windows-side configuration (WezTerm config, VS Code settings) is not managed
 It could be — `home.activation` copying into `/mnt/c/Users/<you>/` — but copying,
 never symlinking: Windows applications do not reliably follow WSL symlinks, and a
 half-working config is worse than an unmanaged one.
+
+## Agent and containers on WSL
+
+- **opencode** and **herdr** are in the closure, same as the pod — no extra
+  setup. The preload plugin is seeded as a packaged default; opencode's own
+  config is yours, in `~/.config/opencode/`.
+- The official VS Code extension (`sst-dev.opencode`) ships as a raw `.vsix` at
+  `~/.local/share/vsix/` — install it on the **Windows** side via
+  "Install from VSIX", since the airgap has no marketplace.
+- **podman** runs at the system level (`virtualisation.podman` in
+  `nix/hosts/wsl.nix`), docker-compatible. In a RunAI pod it comes from the
+  closure instead, pointed at a `vfs` storage.conf by bootstrap, with root
+  available via `sudo`.

@@ -8,10 +8,10 @@
 #
 #   nix-layer.tar.gz        the toolchain closure
 #   nix-layer-nvim.tar.gz   the same plus LazyVim
-#   repo-layer.tar          the dispatcher and scripts (also built by CI)
+#   repo-layer.tar          libexec + agent helpers (also built by CI)
 #
-# The node layer is NOT built here: it needs npm against internal Artifactory,
-# so it is built inside the gap by docker/Containerfile.node.
+# There is no node layer: opencode comes from the Nix closure, so nothing
+# needs npm against a registry any more.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -46,5 +46,5 @@ cat <<EOF
 
   Carry these in, then inside the gap:
     ./scripts/push-artifactory.sh $OUT/nix-layer.tar.gz $OUT/nix-layer-nvim.tar.gz
-  CI builds the node layer and runs docker/assemble.sh from there.
+  CI tars this checkout as repo-layer.tar and runs docker/assemble.sh from there.
 EOF

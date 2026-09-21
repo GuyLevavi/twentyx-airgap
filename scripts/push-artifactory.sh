@@ -19,7 +19,6 @@ set -euo pipefail
 
 ART_URL="${ARTIFACTORY_URL:?set ARTIFACTORY_URL, e.g. https://artifactory.internal/artifactory}"
 GENERIC_REPO="${ARTIFACTORY_GENERIC_REPO:-generic-local}"
-NPM_REPO="${ARTIFACTORY_NPM_REPO:-npm-local}"
 VERSION="${AIRGAP_VERSION:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../VERSION" 2>/dev/null || echo dev)}"
 DEST_PATH="$GENERIC_REPO/airgap/$VERSION/"
 
@@ -58,9 +57,4 @@ cat <<EOF
   CI fetches layers from there; see .gitlab-ci.yml:
 
     AIRGAP_LAYER_URL=$ART_URL/$DEST_PATH
-
-  To also publish the pi package to $NPM_REPO (so pods can install it
-  without an image rebuild):
-
-    npm publish --registry $ART_URL/api/npm/$NPM_REPO/ ./pi
 EOF
