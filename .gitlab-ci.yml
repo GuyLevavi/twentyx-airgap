@@ -14,10 +14,10 @@
 stages: [lint, assemble]
 
 variables:
-  AIRGAP_REGISTRY: "$CI_REGISTRY_IMAGE"
-  AIRGAP_BASE_REGISTRY: "quay.internal/ai"      # TODO: real path, see NOTES.md
-  AIRGAP_BASE_TAG: "latest"
-  AIRGAP_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
+  IMAGE_REGISTRY: "$CI_REGISTRY_IMAGE"
+  BASE_REGISTRY: "quay.internal/ai"      # TODO: real path, see NOTES.md
+  BASE_TAG: "latest"
+  IMAGE_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
   # Where push-artifactory.sh put the transferred layers.
   LAYER_BASE_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0"
 
@@ -26,9 +26,9 @@ lint:
   stage: lint
   image: koalaman/shellcheck-alpine:stable
   script:
-    - shellcheck -S warning libexec/airgap-* agent/*.sh scripts/*.sh docker/*.sh
+    - shellcheck -S warning libexec/airgap-* agent/*.sh tests/*.sh scripts/*.sh docker/*.sh
   rules:
-    - changes: [libexec/**/*, agent/**/*, scripts/**/*, docker/**/*]
+    - changes: [libexec/**/*, agent/**/*, tests/**/*, scripts/**/*, docker/**/*]
 
 # ---------------------------------------------------------------------------
 # Registry-side append. Seconds per variant: each blob is uploaded once and
@@ -36,13 +36,16 @@ lint:
 assemble:
   stage: assemble
   # Only needs crane, jq, tar and the artifacts; the slim base is plenty.
-  image: "$AIRGAP_BASE_REGISTRY/base-slim:$AIRGAP_BASE_TAG"
+  image: "$BASE_REGISTRY/base-slim:$BASE_TAG"
   script:
     - |
-      for f in nix-layer.tar.gz nix-layer-nvim.tar.gz; do
-        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-          -o "dist/$f" "$LAYER_BASE_URL/$f"
-      done
+      # The plain layer is a hard requirement; the nvim flavor is optional
+      # (a transfer without it must not fail CI -- assemble.sh copes).
+      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+        -o dist/nix-layer.tar.gz "$LAYER_BASE_URL/nix-layer.tar.gz"
+      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+        -o dist/nix-layer-nvim.tar.gz "$LAYER_BASE_URL/nix-layer-nvim.tar.gz" ||
+        echo "note: nix-layer-nvim.tar.gz not in Artifactory -- plain flavor only"
     # Built here rather than carried: it is 80KB of this very checkout, and
     # rebuilding it is what makes a script change a one-commit deploy.
     - ./docker/mklayer.sh dist/repo-layer.tar

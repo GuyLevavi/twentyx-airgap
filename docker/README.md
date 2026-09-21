@@ -26,8 +26,8 @@ and with it the only CI stage that needed Artifactory.
 
 ## The design
 
-    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (414MB)
-                                            nix-layer-nvim.tar.gz  (634MB)
+    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (~740MB)
+                                            nix-layer-nvim.tar.gz  (~950MB)
     TRANSFER  physical, then scripts/push-artifactory.sh
     INSIDE    .gitlab-ci.yml  ->  repo-layer.tar (tar of the checkout)
               docker/assemble.sh  ->  crane append + crane mutate
@@ -54,7 +54,7 @@ Two settings look like they can be overwritten and cannot:
   import without them. There is no shell at image-config level to expand `$PATH`, so `assemble.sh`
   reads the base's own value with `crane config` and *prepends* to it.
 - **`ENTRYPOINT`.** On the `vscode-*` bases it launches code-server. Replacing it is how
-  `airgap-entrypoint` gets to run at all, so the original is recorded in `AIRGAP_BASE_ENTRYPOINT`
+  `airgap-entrypoint` gets to run at all, so the original is recorded in `BASE_ENTRYPOINT`
   and handed over to when the container is started with no arguments.
 
 Both were being clobbered before; both are silent failures rather than build errors.
@@ -72,7 +72,7 @@ tmux handed that literal string would create a directory named `$(id`.
 
 ## Constraint
 
-Stage 2 cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
+Stage 2 (the crane-mutate step in assemble.sh) cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
 `LABEL`) via `crane mutate`. Anything requiring execution must happen at container startup in
 `airgap-entrypoint` (or, for the sudo setuid bit, in `mklayer.sh` — Nix strips setuid from build
 outputs, so the repo layer sets it on the copy it re-tars).
@@ -83,7 +83,7 @@ lets the WSL target share the same Nix expressions.
 ## Two flavors
 
 `nvim` roughly adds 220MB, and not every workspace wants an editor in it. Every variant is built
-twice, `-nvim` suffixed, from the same node and repo blobs. If `nix-layer-nvim.tar.gz` is absent,
+twice, `-nvim` suffixed, from the same nix and repo blobs. If `nix-layer-nvim.tar.gz` is absent,
 `assemble.sh` builds the plain flavor only and says so.
 
 ## Fallback if crane is unavailable

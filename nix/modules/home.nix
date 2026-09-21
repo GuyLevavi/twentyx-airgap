@@ -44,6 +44,14 @@ let
     url = "https://sst-dev.gallery.vsassets.io/_apis/public/gallery/publisher/sst-dev/extension/opencode/0.0.13/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage";
     hash = "sha256-6adXUaoh/OP5yYItH3GAQ7GpupfmTGaxkKP6hYUMYNQ=";
   };
+
+  # Zed's remote-development server, built by the same zed-editor derivation.
+  # Shipping it in the closure is what makes Zed remote work offline: the
+  # client looks under ~/.zed_server/ for a file named after its OWN version
+  # string and only checks that it runs -- no download, ever.
+  zedRemote = pkgs.zed-editor.remote_server;
+  zedRemoteExecName = pkgs.zed-editor.remoteServerExecutableName or
+    "zed-remote-server-stable-${pkgs.zed-editor.version}+stable";
 in
 {
   imports = [
@@ -121,16 +129,38 @@ in
           to the work address is what stops a renamed workspace from stranding
           a session's history in a new directory.
 
-          `airgap doctor` prints which rule fired, so a wrong value here is
+          `airgap-doctor` prints which rule fired, so a wrong value here is
           visible rather than silent.
         '';
       };
+    };
+
+    zed.remoteClientVersion = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        The EXACT version string of the Zed client that will connect to this
+        host remotely (Windows client: run `zed --version` there; the remote
+        filename embeds it, build metadata included). When set, a shim named
+        after that string is placed in ~/.zed_server as a packaged default, so
+        Zed's remote development works offline: the client checks only that
+        `<file> version` exits 0 and never downloads. Bump the option whenever
+        the Windows client is updated. Empty = ship the nixpkgs-named server
+        binary only. Caveat: some client versions phone cloud.zed.dev for a
+        metadata check before looking at ~/.zed_server (upstream zed#53763);
+        verify against your client version, and if it does, the request must
+        fail fast rather than hang -- verify on first connect.
+      '';
     };
   };
 
   config = {
     home.stateVersion = "25.05";
     programs.home-manager.enable = cfg.target == "wsl";
+
+    # home-manager's reference man page drags a full python3 + nixos-render-docs
+    # into BOTH closures for documentation nobody reads offline. ~133 MB.
+    manual.manpages.enable = false;
 
     # ── Environment that a foreign container does not provide ────────────
     # On NixOS these are set by the system. In a RunAI pod nothing sets them,
@@ -151,8 +181,10 @@ in
       # truecolor detection fails and LazyVim falls back to 16 colours.
       COLORTERM = "truecolor";
 
-      EDITOR = "nvim";
-      VISUAL = "nvim";
+      # The plain pod flavor has no nvim — an $EDITOR pointing at it would
+      # fail the first `git commit` at the worst moment. nano is 2 MB.
+      EDITOR = if cfg.nvim.enable then "nvim" else "nano";
+      VISUAL = if cfg.nvim.enable then "nvim" else "nano";
       PAGER = "less";
       LESS = "-FRX";
 
@@ -224,5 +256,24 @@ in
         }
       }
     '';
+
+    # Zed remote development, fully declared. The server binary ships under
+    # its nixpkgs name; when the connecting client's version is declared
+    # (airgap.zed.remoteClientVersion), a shim with the EXACT filename the
+    # client looks for execs it. Both are packaged defaults -- overridable,
+    # never fetched at runtime. The client version must be bumped in lockstep
+    # with the Windows Zed install (auto-update stays off, same as vscode).
+    home.file.".zed_server/${zedRemoteExecName}".source =
+      "${zedRemote}/bin/${zedRemoteExecName}";
+    home.file.".zed_server/zed-remote-server-stable-${cfg.zed.remoteClientVersion}" =
+      lib.mkIf (cfg.zed.remoteClientVersion != "") {
+        executable = true;
+        text = ''
+          #!/bin/sh
+          # Packaged default: the client requires this exact filename (its own
+          # version string) and only checks that "<file> version" exits 0.
+          exec "${zedRemote}/bin/${zedRemoteExecName}" "$@"
+        '';
+      };
   };
 }

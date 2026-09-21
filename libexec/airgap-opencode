@@ -22,8 +22,8 @@
 # opencode runs clean. Children run exactly as an interactive shell does.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
-. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
+. "$TOOLCHAIN_ROOT/libexec/airgap-common.sh"
 
 # HOME is only correct once a login shell has sourced the drop-ins. A payload
 # reached via `runai exec -- airgap-opencode` or a code-server task starts with
@@ -49,13 +49,13 @@ fi
 
 # Byte-for-byte. The plugin and BASH_ENV script must reproduce this exactly,
 # never approximate it.
-export AIRGAP_ORIG_LD_PRELOAD="${LD_PRELOAD:-}"
+export PRELOAD_ORIGINAL="${LD_PRELOAD:-}"
 
-if [ "${AIRGAP_PRELOAD_STRIP:-1}" = "1" ] && [ -n "${LD_PRELOAD:-}" ]; then
+if [ "${PRELOAD_STRIP:-1}" = "1" ] && [ -n "${LD_PRELOAD:-}" ]; then
     # Only intervene if a RunAI preloader is actually present. On a workstation
     # or a non-fractioned pod there is nothing to neutralize.
-    if printf '%s' "$LD_PRELOAD" | grep -Eq "${AIRGAP_PRELOAD_PATTERN:-/runai/shared/}"; then
-        OC_BIN="$(PATH="${PATH//$AIRGAP_ROOT\/libexec:/}" command -v opencode 2>/dev/null || true)"
+    if printf '%s' "$LD_PRELOAD" | grep -Eq "${PRELOAD_PATTERN:-/runai/shared/}"; then
+        OC_BIN="$(PATH="${PATH//$TOOLCHAIN_ROOT\/libexec:/}" command -v opencode 2>/dev/null || true)"
         # The replacement libc must come from the SAME glibc as the binary it
         # is preloaded into. opencode is Nix-built (glibc 2.4x); preloading the
         # base image's system libc into it is a GLIBC_PRIVATE symbol-lookup
@@ -73,7 +73,7 @@ if [ "${AIRGAP_PRELOAD_STRIP:-1}" = "1" ] && [ -n "${LD_PRELOAD:-}" ]; then
         if [ -z "$LIBC" ] || [ ! -e "$LIBC" ]; then
             # Fallbacks: explicit override, then ldconfig (system libc), then
             # the standard Debian path.
-            LIBC="${AIRGAP_LIBC:-}"
+            LIBC="${PRELOAD_LIBC:-}"
             if [ -z "$LIBC" ]; then
                 LIBC="$(ldconfig -p 2>/dev/null | awk '/libc\.so\.6/ {print $NF; exit}' || true)"
             fi
@@ -93,10 +93,10 @@ fi
 
 # Tool shells are spawned non-interactively via $SHELL; fish ignores BASH_ENV,
 # which is half of the child-restore path. Pin bash unless told otherwise.
-export SHELL="${AIRGAP_OC_SHELL:-/bin/bash}"
+export SHELL="${AGENT_SHELL:-/bin/bash}"
 
-if [ -n "${AIRGAP_ORIG_LD_PRELOAD:-}" ]; then
-    export BASH_ENV="$AIRGAP_ROOT/agent/restore-preload.sh"
+if [ -n "${PRELOAD_ORIGINAL:-}" ]; then
+    export BASH_ENV="$TOOLCHAIN_ROOT/agent/restore-preload.sh"
 fi
 
 command -v opencode >/dev/null 2>&1 || die "opencode not found on PATH"

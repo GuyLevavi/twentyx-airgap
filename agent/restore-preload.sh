@@ -8,6 +8,6 @@
 #
 # No-op unless a stash exists, and idempotent under nesting.
 
-if [ -n "${AIRGAP_ORIG_LD_PRELOAD:-}" ]; then
-    export LD_PRELOAD="$AIRGAP_ORIG_LD_PRELOAD"
+if [ -n "${PRELOAD_ORIGINAL:-}" ]; then
+    export LD_PRELOAD="$PRELOAD_ORIGINAL"
 fi

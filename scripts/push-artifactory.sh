@@ -19,7 +19,7 @@ set -euo pipefail
 
 ART_URL="${ARTIFACTORY_URL:?set ARTIFACTORY_URL, e.g. https://artifactory.internal/artifactory}"
 GENERIC_REPO="${ARTIFACTORY_GENERIC_REPO:-generic-local}"
-VERSION="${AIRGAP_VERSION:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../VERSION" 2>/dev/null || echo dev)}"
+VERSION="${LAYER_VERSION:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../VERSION" 2>/dev/null || echo dev)}"
 DEST_PATH="$GENERIC_REPO/airgap/$VERSION/"
 
 upload() {
@@ -47,7 +47,9 @@ upload() {
     fi
 }
 
-echo "==> $ART_URL/$DEST_PATH"
+say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+
+say "$ART_URL/$DEST_PATH"
 for f in "$@"; do upload "$f"; done
 
 cat <<EOF
@@ -56,5 +58,5 @@ cat <<EOF
 
   CI fetches layers from there; see .gitlab-ci.yml:
 
-    AIRGAP_LAYER_URL=$ART_URL/$DEST_PATH
+    LAYER_URL=$ART_URL/$DEST_PATH
 EOF

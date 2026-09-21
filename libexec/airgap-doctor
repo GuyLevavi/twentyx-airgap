@@ -7,8 +7,8 @@
 # endpoint.
 set -uo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
-. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
+. "$TOOLCHAIN_ROOT/libexec/airgap-common.sh"
 
 # $HOME is only correct once bootstrap's shell drop-in has run. Anything
 # launched outside an interactive login -- `runai exec -- airgap-doctor`, a
@@ -24,19 +24,19 @@ kv()    { printf '  %-22s %s\n' "$1" "$2"; }
 
 # ── layers ────────────────────────────────────────────────────────────────
 say "layers"
-kv "AIRGAP_ROOT" "$AIRGAP_ROOT"
+kv "TOOLCHAIN_ROOT" "$TOOLCHAIN_ROOT"
 kv "HOME"        "$HOME"
 # No subshell, so the provenance variables set as a side effect survive.
 airgap_user >/dev/null
-kv "user" "$AIRGAP_USER_RESOLVED (uid $(id -u), gid $(id -g))"
-kv "identity via" "$AIRGAP_USER_SOURCE"
-case "$AIRGAP_USER_SOURCE" in
+kv "user" "$SESSION_USER_RESOLVED (uid $(id -u), gid $(id -g))"
+kv "identity via" "$SESSION_USER_SOURCE"
+case "$SESSION_USER_SOURCE" in
     hostname*)
         warn "identity came from the workspace name, which changes between sessions."
         warn "it is also wrong for any username containing a dash."
-        warn "pin it: set airgap.git.userEmail in Nix, or export AIRGAP_USER=<you>" ;;
+        warn "pin it: set airgap.git.userEmail in Nix, or export SESSION_USER=<you>" ;;
 esac
-kv "version" "$(cat "$AIRGAP_ROOT/VERSION" 2>/dev/null || echo dev)"
+kv "version" "$(cat "$TOOLCHAIN_ROOT/VERSION" 2>/dev/null || echo dev)"
 
 if airgap_home_is_durable; then
     ok "HOME is on the PVC -- state survives a restart"
@@ -52,8 +52,8 @@ check "\$HOME is writable" "[ -w '$HOME' ]"
 # of content-addressed store paths, and a truncated transfer or a botched
 # `crane append` produces binaries that vanish rather than binaries that error.
 say "nix closure"
-PROFILE="$AIRGAP_ROOT/profile"
-DEFAULTS="$(readlink -f "$AIRGAP_ROOT/home-defaults" 2>/dev/null || true)"
+PROFILE="$TOOLCHAIN_ROOT/profile"
+DEFAULTS="$(readlink -f "$TOOLCHAIN_ROOT/home-defaults" 2>/dev/null || true)"
 
 if [ -d "$PROFILE/bin" ]; then
     ok "profile $(readlink -f "$PROFILE")"
@@ -63,12 +63,12 @@ else
     fails=$((fails+1))
 fi
 
-if [ -f "$AIRGAP_ROOT/store-paths" ]; then
+if [ -f "$TOOLCHAIN_ROOT/store-paths" ]; then
     total=0; missing=0
     while IFS= read -r p; do
         total=$((total + 1))
         [ -e "$p" ] || { missing=$((missing + 1)); [ "$missing" -le 3 ] && bad "absent: $p"; }
-    done < "$AIRGAP_ROOT/store-paths"
+    done < "$TOOLCHAIN_ROOT/store-paths"
     if [ "$missing" -eq 0 ]; then
         ok "all $total store paths present"
     else
@@ -76,7 +76,7 @@ if [ -f "$AIRGAP_ROOT/store-paths" ]; then
         fails=$((fails+1))
     fi
 else
-    warn "no $AIRGAP_ROOT/store-paths; cannot verify the closure"
+    warn "no $TOOLCHAIN_ROOT/store-paths; cannot verify the closure"
 fi
 
 # ── defaults actually installed ───────────────────────────────────────────
@@ -91,7 +91,7 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     kv "packaged" "$want"
     kv "linked into \$HOME" "$have"
     if [ "$want" -gt 0 ] && [ "$have" -eq 0 ]; then
-        bad "nothing was linked -- run: $AIRGAP_ROOT/libexec/airgap-bootstrap"
+        bad "nothing was linked -- run: $TOOLCHAIN_ROOT/libexec/airgap-bootstrap"
         fails=$((fails+1))
     elif [ "$have" -lt "$((want / 2))" ]; then
         warn "fewer links than defaults; some may be overridden by real files (expected)"
@@ -106,13 +106,13 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     if [ "$stale" -gt 0 ]; then
         bad "$stale dangling link(s) into /nix/store -- stale from a previous image"
         find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | head -3 | sed 's/^/       /'
-        bad "fix with: $AIRGAP_ROOT/libexec/airgap-bootstrap"
+        bad "fix with: $TOOLCHAIN_ROOT/libexec/airgap-bootstrap"
         fails=$((fails+1))
     else
         ok "no stale links from a previous image"
     fi
 else
-    bad "no $AIRGAP_ROOT/home-defaults -- the Nix layer is incomplete"
+    bad "no $TOOLCHAIN_ROOT/home-defaults -- the Nix layer is incomplete"
     fails=$((fails+1))
 fi
 
@@ -123,7 +123,7 @@ fi
 # THIS environment pointing at the eval-time home? That is the symptom, and it
 # is what actually breaks (starship silently loses its config, completions
 # silently never load).
-EVAL_HOME="$(cat "$AIRGAP_ROOT/eval-home" 2>/dev/null || true)"
+EVAL_HOME="$(cat "$TOOLCHAIN_ROOT/eval-home" 2>/dev/null || true)"
 if [ -n "$EVAL_HOME" ] && [ "$EVAL_HOME" != "$HOME" ]; then
     stragglers=""
     while IFS= read -r v; do
@@ -148,7 +148,7 @@ for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq opencod
     fi
 done
 # Optional by flavor: absence is a fact, not a failure.
-for t in nvim nvtop herdr; do
+for t in nvim nvtop herdr code-server; do
     if command -v "$t" >/dev/null 2>&1; then ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
     else warn "$t not in this image flavor"; fi
 done
@@ -217,9 +217,9 @@ fi
 # ── environment-provided assets ───────────────────────────────────────────
 say "env injection"
 if INJ="$(airgap_injection_exports)"; then
-    dir="$(printf '%s\n' "$INJ" | awk -F'\t' '$1=="AIRGAP_ENV_DIR" {print $2}')"
+    dir="$(printf '%s\n' "$INJ" | awk -F'\t' '$1=="ENV_INJECTION_DIR" {print $2}')"
     kv "source" "$dir"
-    printf '%s\n' "$INJ" | awk -F'\t' '$1 != "AIRGAP_ENV_DIR" {printf "  %-20s -> %s\n", $1, $2}'
+    printf '%s\n' "$INJ" | awk -F'\t' '$1 != "ENV_INJECTION_DIR" {printf "  %-20s -> %s\n", $1, $2}'
     # A CA bundle that is wired but unreadable is worse than absent: TLS fails
     # with a confusing message instead of a clear one.
     ca="$(printf '%s\n' "$INJ" | awk -F'\t' '$1=="SSL_CERT_FILE" {print $2}')"
@@ -246,7 +246,7 @@ fi
 # ── gpu / preloaders ──────────────────────────────────────────────────────
 say "gpu / preloaders"
 kv "LD_PRELOAD"             "${LD_PRELOAD:-}"
-kv "AIRGAP_ORIG_LD_PRELOAD" "${AIRGAP_ORIG_LD_PRELOAD:-}"
+kv "PRELOAD_ORIGINAL" "${PRELOAD_ORIGINAL:-}"
 if command -v nvidia-smi >/dev/null 2>&1; then
     ok "nvidia-smi: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
 else
@@ -257,19 +257,19 @@ if command -v python >/dev/null 2>&1; then
     kv "torch.cuda (shell)" \
         "$(python -c 'import torch;print(torch.cuda.is_available())' 2>/dev/null || echo 'n/a')"
     kv "torch.cuda (agent)" \
-        "$(LD_PRELOAD="${AIRGAP_ORIG_LD_PRELOAD:-${LD_PRELOAD:-}}" \
+        "$(LD_PRELOAD="${PRELOAD_ORIGINAL:-${LD_PRELOAD:-}}" \
            python -c 'import torch;print(torch.cuda.is_available())' 2>/dev/null || echo 'n/a')"
 fi
 
 # ── model endpoint ────────────────────────────────────────────────────────
 say "model endpoint"
-BASE="${AIRGAP_LLM_BASE_URL:-}"
+BASE="${LLM_BASE_URL:-}"
 if [ -z "$BASE" ]; then
-    warn "AIRGAP_LLM_BASE_URL unset -- opencode will not find the vLLM endpoint"
+    warn "LLM_BASE_URL unset -- opencode will not find the vLLM endpoint"
     fails=$((fails+1))
 else
     kv "base url" "$BASE"
-    kv "token"    "$([ -n "${AIRGAP_LLM_API_KEY:-}" ] && echo set || echo MISSING)"
+    kv "token"    "$([ -n "${LLM_API_KEY:-}" ] && echo set || echo MISSING)"
     if curl -sf --max-time 5 "$BASE/models" >/dev/null 2>&1; then
         ok "reachable: $(curl -sf --max-time 5 "$BASE/models" | jq -r '.data[].id' 2>/dev/null | paste -sd, -)"
     else

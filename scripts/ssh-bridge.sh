@@ -22,10 +22,12 @@
 #       StrictHostKeyChecking accept-new
 #
 # Zed remote: "Connect to Remote Server" -> ssh://runai-workspace (or the
-# localhost:port form). Zed will try to download its matching remote-server
-# binary, which cannot work in the airgap -- see NOTES.md for the pre-seed
-# procedure. The OpenCode integration needs none of that: it runs
-# `opencode acp` locally (see the packaged Zed settings default).
+# localhost:port form). The remote server ships in the closure as a packaged
+# default under ~/.zed_server -- nothing downloads. The only knob is
+# airgap.zed.remoteClientVersion in nix/modules/home.nix, which must carry the
+# Windows client's exact `zed --version` string. The OpenCode integration
+# needs none of that: it runs `opencode acp` locally (see the packaged Zed
+# settings default).
 set -euo pipefail
 
 WORKLOAD="${1:?usage: ssh-bridge.sh <runai-workload> [port]}"

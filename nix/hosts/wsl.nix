@@ -21,6 +21,14 @@ let
   # machine least able to debug it.
   pubkeyFile = ../../cache-pubkey;
   havePubkey = builtins.pathExists pubkeyFile;
+
+  # The internal CA bundle, same file the pod gets via the env-injection
+  # mount. WSL does not run airgap-bootstrap, so without this nothing on the
+  # WSL side trusts the internal CA: push-artifactory.sh, the runai CLI and
+  # uv all do TLS against Artifactory. Gitignored and optional — carry it with
+  # the transfer (wsl/README.md), presence is detected like cache-pubkey.
+  caBundle = ../../ca-bundle.crt;
+  haveCaBundle = builtins.pathExists caBundle;
 in
 {
   wsl = {
@@ -74,6 +82,10 @@ in
   };
 
   nixpkgs.config.allowUnfree = true;
+
+  # Internal CA trust for the WSL side (pod side uses the env-injection
+  # contract instead). No-op until ca-bundle.crt is carried across.
+  security.pki.certificateFiles = lib.optionals haveCaBundle [ caBundle ];
 
   # ── VS Code from Windows ────────────────────────────────────────────────
   # This works today on Fedora only because Fedora is FHS: the prebuilt

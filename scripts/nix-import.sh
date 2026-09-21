@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SRC="${1:?usage: nix-import.sh <dir containing nix-transfer-*.tar.gz>}"
-DEST="${AIRGAP_CACHE_DIR:-/var/cache/nix-transfer}"
+DEST="${NIX_TRANSFER_CACHE:-/var/cache/nix-transfer}"
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 

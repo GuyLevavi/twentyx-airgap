@@ -19,6 +19,7 @@ actually references, and nothing else.
 | Python | Nix (3.11 + 3.12, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
 | Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
 | Agent | opencode + herdr | opencode (via `airgap-opencode`) + herdr |
+| Editor | zed (GUI), VS Code desktop over Remote-SSH | code-server (closure) + zed remote server |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
 tells you what that costs before you carry it anywhere.
@@ -28,8 +29,8 @@ tells you what that costs before you carry it anywhere.
 | | |
 |---|---|
 | WSL bootstrap, one file | **948 MB** (4.3 GiB system + flake inputs, xz) |
-| `nix-layer.tar.gz` | 414 MB |
-| `nix-layer-nvim.tar.gz` | 634 MB |
+| `nix-layer.tar.gz` | ~740 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
+| `nix-layer-nvim.tar.gz` | ~950 MB |
 | `repo-layer.tar` | ~80 KB |
 
 The whole airgapped NixOS-WSL fits in a single transfer under a 2.5GB per-file
@@ -44,7 +45,7 @@ enumerate, and there is always another tool writing a dotfile nobody listed.
 
 | Layer | Path | Rule |
 |---|---|---|
-| Packaged defaults | `$AIRGAP_ROOT/home-defaults` → `/nix/store` | immutable |
+| Packaged defaults | `$TOOLCHAIN_ROOT/home-defaults` → `/nix/store` | immutable |
 | Yours | `$HOME` on `/data/<user>` | durable, never clobbered |
 
 Inside `$HOME` the distinction is visible in the filesystem: **a symlink into the
@@ -59,6 +60,7 @@ reconstructible by definition.
 ```
 airgap-doctor        layers, closure, terminal, sudo, podman, env, endpoint
 airgap-opencode      launch opencode with the RunAI preload handled
+code-server          the pod IDE — in the closure, ahead of the base's copy
 sudo <cmd>           the runtime user (gid 0) has passwordless root
 podman ...           rootful via sudo; storage.conf prewritten (vfs)
 ```
@@ -84,9 +86,31 @@ names are simply present at their path — that is the extension point for the
 next "thing that needs to be there". `airgap-doctor` reports what was found.
 The system trust store is also updated best-effort via sudo (Debian bases).
 
+Two related, operator-supplied values are plain env, not files:
+`LLM_BASE_URL` + `LLM_API_KEY` point the agent at the internal
+vLLM endpoint (doctor probes `$BASE/models`). On WSL, the same cluster CA is
+wired declaratively instead — carry `ca-bundle.crt` next to the flake
+(`security.pki.certificateFiles` picks it up if present).
+
+Override variables — no `AIRGAP_` prefix; nothing else in these images uses
+generic names, so the name is the documentation (all optional, all documented
+at their use site; see [`MANUAL.md`](MANUAL.md) for the walkthrough):
+
+`SESSION_USER`, `SESSION_HOME` (identity / relocated home),
+`EPHEMERAL_CACHE` (bootstrap scratch dir),
+`PRELOAD_STRIP`, `PRELOAD_PATTERN`, `PRELOAD_RESTORE_AGENT_BASH`,
+`PRELOAD_LIBC` (opencode launcher; the stash it hands to children is
+`PRELOAD_ORIGINAL`),
+`AGENT_SHELL` (which shell opencode spawns for tools),
+`SSH_BRIDGE_USER`, `SSH_BRIDGE_KEYDIR` (sshd bridge),
+`LAYER_VERSION`, `REUSE_CACHE`, `CACHE_SIGN_KEY`, `NIX_TRANSFER_CACHE`,
+`LAYER_NIX`, `LAYER_NIX_NVIM`, `LAYER_REPO`, `IMAGE_REGISTRY`,
+`BASE_REGISTRY`, `BASE_TAG`, `IMAGE_VARIANTS` (scripts + CI),
+`TEST_*` (test harness).
+
 ## Default overrides without a transfer
 
-Packaged defaults live in `$AIRGAP_ROOT/home-defaults` as a directory of
+Packaged defaults live in `$TOOLCHAIN_ROOT/home-defaults` as a directory of
 per-file symlinks into the store — and overlayfs **merges directories across
 layers**. So the repo layer, which CI re-tars per commit, can override any
 individual packaged default by shipping a real file at the same path
@@ -124,7 +148,7 @@ true at once, so treat the process and its children separately:
 - `libexec/airgap-opencode` replaces `LD_PRELOAD` with the libc **matching the
   binary's own glibc** (resolved with `ldd` — a system libc preloaded into a
   Nix-built binary is a `GLIBC_PRIVATE` error, not a no-op), stashing the
-  original in `AIRGAP_ORIG_LD_PRELOAD`
+  original in `PRELOAD_ORIGINAL`
 - `agent/plugins/airgap-preload.ts` restores the stash via opencode's
   `shell.env` hook; `agent/restore-preload.sh` does the same via `BASH_ENV` for
   any non-interactive bash the hook does not cover
@@ -156,13 +180,15 @@ nix/runai/layer.nix           the closure -> an OCI layer tarball
 libexec/airgap-*              bootstrap, doctor, entrypoint, opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/nix-export.sh         run OUTSIDE -> a sharded, signed binary cache
+scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
 scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory, for CI
 scripts/ssh-bridge.sh         run on WSL  -> socat bridge: Zed/SSH into a pod
 tests/                        container integration tests (podman, no cluster)
 docker/                       registry-side assemble (no npm, no node layer)
 NOTES.md                      open items + design notes
+ARCHITECTURE.md               the tech tour: how it works, in what order to read this
+MANUAL.md                     the step-by-step: build, transfer, connect, daily use
 ```
 
 ## Testing without the gap
@@ -185,18 +211,30 @@ fractioning preloaders — only a fractioned pod can (see NOTES.md).
 
 ## Before the first transfer
 
-Two values only you can supply:
+One value only you can supply:
 
 1. **`airgap.git.userEmail`** in `nix/modules/home.nix`. It is load-bearing
    beyond git: its local part names your directory on the shared PVC, and it
    sits above the hostname rule precisely because it is stable across sessions.
-2. **A signing key**, optional but nearly free:
-   ```
-   nix key generate-secret --key-name airgap-transfer > ~/.config/airgap/cache-priv.key
-   ```
-   `nix-export.sh` then writes `cache-pubkey`, and `nix/hosts/wsl.nix` keys both
-   `trusted-public-keys` and `require-sigs` off that file's existence — so
-   neither path needs an edit. Without it, the import runs unverified and says so.
+
+No signing key, by decision: integrity is the content-addressed store hash for
+the binary cache (a damaged chunk fails on the path it damaged) and the
+`.sha256` sidecars for the layer tarballs. `nix/hosts/wsl.nix` keys
+`require-sigs` off `cache-pubkey`'s existence, so the unsigned path needs no
+edit and says so when it runs.
+
+## Zed remote, declared
+
+The remote-development server is built by the same `zed-editor` derivation and
+ships in the closure as a packaged default under `~/.zed_server/`. Zed's
+client looks for a file named after its **own** version string and only checks
+that it runs — so the one thing to declare is
+`airgap.zed.remoteClientVersion` in `nix/modules/home.nix` (copy the exact
+`zed --version` output from the Windows client). Nothing downloads, ever;
+bump the option in lockstep with the Windows Zed install (auto-update stays
+off, same as vscode-server). The client reaches the host over plain SSH on
+WSL, or over `scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`) into a
+pod.
 
 ## Status
 

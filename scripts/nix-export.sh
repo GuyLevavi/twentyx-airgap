@@ -21,8 +21,8 @@ LIMIT=$((2400 * 1024 * 1024))   # stay under a 2.5GB single-file upload cap
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
-CACHE="${AIRGAP_REUSE_CACHE:-$OUT/cache}"
-if [ -n "${AIRGAP_REUSE_CACHE:-}" ]; then
+CACHE="${REUSE_CACHE:-$OUT/cache}"
+if [ -n "${REUSE_CACHE:-}" ]; then
     # Re-chunk an existing cache without redoing the xz pass. The real use
     # case: the chunks did not fit the upload cap and need splitting smaller,
     # which should not cost another twenty minutes of compression.
@@ -32,7 +32,7 @@ else
 fi
 
 # ── roots ─────────────────────────────────────────────────────────────────
-if [ -n "${AIRGAP_REUSE_CACHE:-}" ]; then
+if [ -n "${REUSE_CACHE:-}" ]; then
   say "reusing cache at $CACHE (skipping build and export)"
 else
 say "building"
@@ -54,8 +54,8 @@ STDENV="$(nix build --no-link --print-out-paths \
 [ -z "$STDENV" ] && STDENV="$(nix build --no-link --print-out-paths --impure --expr \
     "(import (builtins.getFlake (toString ./.)).inputs.nixpkgs {}).stdenvNoCC")"
 
-say "exporting closure to a signed binary cache"
-KEY="${AIRGAP_SIGN_KEY:-$HOME/.config/airgap/cache-priv.key}"
+say "exporting closure to a binary cache"
+KEY="${CACHE_SIGN_KEY:-$HOME/.config/airgap/cache-priv.key}"
 SIGN=()
 if [ -f "$KEY" ]; then
     SIGN=(--secret-key "$KEY")
@@ -67,7 +67,7 @@ if [ -f "$KEY" ]; then
     echo "  signing with $KEY; public key -> cache-pubkey (transfer it too)"
 else
     echo "  note: no signing key at $KEY -- the far side falls back to require-sigs = false." >&2
-    echo "  generate one with: nix key generate-secret --key-name airgap-transfer > $KEY" >&2
+    echo "  (unsigned is the decided default; the key path is kept for when that changes)" >&2
     # Stale key from a previous signed export would make the far side demand
     # signatures that this unsigned transfer does not carry.
     rm -f cache-pubkey

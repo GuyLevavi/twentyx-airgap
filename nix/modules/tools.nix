@@ -79,6 +79,14 @@ in
       man-pages-posix
       glow # reading plan.md / agent output in-terminal
 
+      # ── terminal ───────────────────────────────────────────────────────
+      # infocmp MUST be on PATH in the pod: fish clamps every unknown TERM to
+      # xterm-256color when it cannot probe, silently defeating the shipped
+      # wezterm/tmux-256color terminfo, and airgap-doctor counts it as a
+      # failure. ncurses is already in the closure via TERMINFO_DIRS — this
+      # only puts its bin/ on PATH. Zero closure growth.
+      ncurses
+
       # ── debugging what already bit you ─────────────────────────────────
       # The LD_PRELOAD hunt in NOTES.md and the OpenCode microarchitecture
       # segfault were both ten-minute problems with these present.
@@ -88,6 +96,16 @@ in
       patchelf
       psmisc
       procs
+
+      # ── TLS debugging ──────────────────────────────────────────────────
+      # openssl is in the closure transitively; the CLI is what turns
+      # "endpoint not reachable" into a diagnosis against the injected CA.
+      openssl
+
+      # ── patching ───────────────────────────────────────────────────────
+      # git apply covers git-generated patches; distro/vendored patches and
+      # some pip build flows want the real thing, and slim bases omit it.
+      patch
 
       # ── pod networking ─────────────────────────────────────────────────
       # The slim bases ship none of this, and without it you are blind the
@@ -109,10 +127,6 @@ in
       # Terminal multiplexer for agent sessions; sessions outlive their SSH
       # exec, state per pane.
       herdr
-      # GUI editor (WSLg); its headless value is the agent integration via
-      # `opencode acp` (packaged settings default) and, over the sshd -i
-      # bridge, remote sessions into a pod.
-      zed-editor
 
       # ── data ───────────────────────────────────────────────────────────
       sqlite # atuin's own store, plus general use
@@ -135,6 +149,10 @@ in
       glab # you are on GitLab and had vendored gh
       moreutils # sponge, ts
     ]
+    ++ lib.optionals (!cfg.nvim.enable) [
+      # The plain flavor has no nvim; see EDITOR in home.nix.
+      nano
+    ]
     ++ lib.optionals (!wsl) [
       # ── RunAI pod only ─────────────────────────────────────────────────
       # WSL gets these from the system (NixOS), a pod has to carry them.
@@ -152,6 +170,14 @@ in
       # sshd for the sshd -i bridge (libexec/airgap-sshd-inetd): Zed/SSH into
       # a pod with no exposed SSH port. On WSL this comes from the system.
       openssh
+      # The pod's IDE, in the closure rather than borrowed from the base:
+      # slim bases have no editor at all, and the vscode-* bases' bundled
+      # code-server carries its own Node build — the same
+      # bundled-runtime-microarchitecture trap that SIGILL'd opencode. The
+      # nixpkgs build uses a baseline Node and lands on PATH ahead of the
+      # base's copy (our PATH prepend wins), so the base entrypoint launches
+      # this one. The sst-dev.opencode extension is seeded in home.nix.
+      code-server
       # The runtime user (uid 10001, gid 0) elevates through the sudoers file
       # shipped in the repo layer; docker/mklayer.sh adds the setuid copy.
       # On NixOS sudo is a system setuid wrapper, so this is pod-only.
@@ -189,6 +215,12 @@ in
       visidata
     ]
     ++ lib.optionals wsl [
+      # ── GUI editor ─────────────────────────────────────────────────────
+      # The pod gets zed's remote_server output instead (see home.nix) — the
+      # full GUI drags nodejs, gstreamer and wayland into the layer for a
+      # binary that can never open a display there.
+      zed-editor
+
       # ── Nix development, now that the config is Nix ────────────────────
       # Pointless in a pod: there is no Nix there to inspect.
       nixd

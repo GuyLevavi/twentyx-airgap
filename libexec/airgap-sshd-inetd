@@ -16,8 +16,8 @@
 # binary protocol with echo/CRLF translation.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
-. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
+. "$TOOLCHAIN_ROOT/libexec/airgap-common.sh"
 
 [ "$(id -u)" -eq 0 ] || die "must run as root -- the client runs: runai exec -i <workload> -- sudo $0"
 
@@ -25,7 +25,7 @@ AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
 # with; the SSH login name must match it because we may have to register the
 # passwd entry ourselves.
 RUN_UID="${SUDO_UID:-10001}"
-RUN_USER="${AIRGAP_SSH_USER:-jensen}"
+RUN_USER="${SSH_BRIDGE_USER:-jensen}"
 DHOME="$(airgap_home)"
 
 # sshd cannot resolve the login user without a passwd entry, and OpenShift's
@@ -45,7 +45,7 @@ mkdir -p /run/sshd && chmod 0755 /run/sshd 2>/dev/null || true
 
 # Host keys are ephemeral, one pair per pod, regenerated when absent. Clients
 # use StrictHostKeyChecking=accept-new; identity is pubkey-based anyway.
-KEYDIR="${AIRGAP_SSH_KEYDIR:-/tmp/airgap-ssh-keys}"
+KEYDIR="${SSH_BRIDGE_KEYDIR:-/tmp/airgap-ssh-keys}"
 umask 077
 mkdir -p "$KEYDIR"
 KEY="$KEYDIR/ssh_host_ed25519_key"

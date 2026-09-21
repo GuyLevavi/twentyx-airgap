@@ -17,7 +17,7 @@
 # connected machine; pulls ubuntu:24.04 once as the mock base.
 #
 #   ./tests/test-container.sh
-#   AIRGAP_TEST_NIX_LAYER=/path/nix-layer.tar.gz ./tests/test-container.sh
+#   TEST_NIX_LAYER=/path/nix-layer.tar.gz ./tests/test-container.sh
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -30,16 +30,16 @@ if ! command -v crane >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || ! co
 fi
 need podman
 
-REG_PORT="${AIRGAP_TEST_PORT:-5597}"
+REG_PORT="${TEST_REGISTRY_PORT:-5597}"
 REG="127.0.0.1:$REG_PORT"
 REG_NAME="airgap-test-registry-$$"
 WORK="$(mktemp -d /tmp/airgap-test-XXXXXX)"
 # Persistent throwaway store: first run pays the build, reruns are fast.
 # Wipe it (rm -rf) if it ever looks wedged; it caches nothing but store paths.
-TEST_STORE="${AIRGAP_TEST_STORE:-/tmp/airgap-test-store}"
+TEST_STORE="${TEST_STORE:-/tmp/airgap-test-store}"
 # The throwaway nix chroot store (if used) is read-only; neutralize before rm.
-# AIRGAP_TEST_KEEP=1 leaves the registry up for debugging (rm it by hand).
-trap 'chmod -R u+w "$WORK" >/dev/null 2>&1; if [ -z "${AIRGAP_TEST_KEEP:-}" ]; then podman rm -f "$REG_NAME" >/dev/null 2>&1; fi; rm -rf "$WORK"' EXIT
+# TEST_KEEP=1 leaves the registry up for debugging (rm it by hand).
+trap 'chmod -R u+w "$WORK" >/dev/null 2>&1; if [ -z "${TEST_KEEP:-}" ]; then podman rm -f "$REG_NAME" >/dev/null 2>&1; fi; rm -rf "$WORK"' EXIT
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -49,13 +49,6 @@ expect_ok() {
     local desc="$1"
     shift
     if "$@" >/dev/null 2>&1; then ok "$desc"; else bad "$desc"; fi
-}
-# expect_rc <expected-exit> <desc> <cmd...>
-expect_rc() {
-    local want="$1" desc="$2" got=0
-    shift 2
-    "$@" >/dev/null 2>&1 || got=$?
-    if [ "$got" -eq "$want" ]; then ok "$desc"; else bad "$desc (exit $got, want $want)"; fi
 }
 # expect_grep <desc> <pattern> <cmd...>
 # Captures first, greps second: grep -q closing the pipe early gives the
@@ -83,19 +76,19 @@ podman push --tls-verify=false -q docker.io/library/ubuntu:24.04 "$REG/base-slim
 
 # ── layers ────────────────────────────────────────────────────────────────
 say "layers"
-if [ -n "${AIRGAP_TEST_NIX_LAYER:-}" ]; then
-    cp "${AIRGAP_TEST_NIX_LAYER:?}" "$WORK/nix-layer.tar.gz"
+if [ -n "${TEST_NIX_LAYER:-}" ]; then
+    cp "${TEST_NIX_LAYER:?}" "$WORK/nix-layer.tar.gz"
 else
     # A chroot store prints logical /nix/store paths but materializes them
     # under its own root -- hence the "$TEST_STORE$P" copy source.
     P="$(nix build --store "$TEST_STORE" .#runai-layer --no-link --print-out-paths | tail -1)"
     cp "$TEST_STORE$P" "$WORK/nix-layer.tar.gz"
 fi
-AIRGAP_LAYER_NIX="$WORK/nix-layer.tar.gz" ./docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
+LAYER_NIX="$WORK/nix-layer.tar.gz" ./docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
 
 # Determinism: identical inputs -> byte-identical blob, or every rebuild
 # invalidates the registry cache for nothing.
-./docker/mklayer.sh "$WORK/repo-layer2.tar" >/dev/null
+LAYER_NIX="$WORK/nix-layer.tar.gz" ./docker/mklayer.sh "$WORK/repo-layer2.tar" >/dev/null
 h1="$(sha256sum "$WORK/repo-layer.tar" | cut -d' ' -f1)"
 h2="$(sha256sum "$WORK/repo-layer2.tar" | cut -d' ' -f1)"
 if [ "$h1" = "$h2" ]; then ok "repo layer is deterministic"; else bad "repo layer is deterministic"; fi
@@ -109,8 +102,8 @@ printf '[global]\nindex-url = https://artifactory.internal/api/pypi/pypi/simple\
 printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "$WORK/env/ca-bundle.crt"
 
 say "assembling"
-AIRGAP_REGISTRY="$REG" AIRGAP_BASE_REGISTRY="$REG" AIRGAP_VARIANTS="base-slim" \
-    AIRGAP_LAYER_NIX="$WORK/nix-layer.tar.gz" AIRGAP_LAYER_REPO="$WORK/repo-layer.tar" \
+IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
+    LAYER_NIX="$WORK/nix-layer.tar.gz" LAYER_REPO="$WORK/repo-layer.tar" \
     ./docker/assemble.sh test >/dev/null
 IMAGE="$REG/workspace:test-base-slim"
 
@@ -120,7 +113,7 @@ IMAGE="$REG/workspace:test-base-slim"
 # silently run a cached image from before the layers changed.
 run_ic() {
     podman run --rm --pull=always --tls-verify=false --user 10001:0 --tmpfs /data \
-        -e AIRGAP_USER=jensen \
+        -e SESSION_USER=jensen \
         --mount "type=bind,src=$WORK/hostile.so,dst=/tmp/hostile.so,ro" \
         --mount "type=bind,src=$WORK/env,dst=/opt/airgap-env,ro" \
         "$IMAGE" "$@"
@@ -152,16 +145,18 @@ else
     bad "repro: hostile preloader kills the agent binary (exit $repro_rc)"
 fi
 expect_grep "launcher: opencode survives the hostile preloader" "[0-9]*\.[0-9]*" \
-    run_ic -e LD_PRELOAD=/tmp/hostile.so -e AIRGAP_PRELOAD_PATTERN=hostile \
+    run_ic -e LD_PRELOAD=/tmp/hostile.so -e PRELOAD_PATTERN=hostile \
         bash -c '/opt/airgap/libexec/airgap-opencode --version'
 expect_ok "children: BASH_ENV restores the original preload" \
-    run_ic bash -c 'AIRGAP_ORIG_LD_PRELOAD=/tmp/hostile.so BASH_ENV=/opt/airgap/agent/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
+    run_ic bash -c 'PRELOAD_ORIGINAL=/tmp/hostile.so BASH_ENV=/opt/airgap/agent/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
 
 say "packaged defaults + env injection"
 expect_ok "opencode preload plugin seeded" \
     run_ic bash -c 'test -f /data/jensen/.config/opencode/plugins/airgap-preload.ts'
 expect_ok "zed agent_servers default seeded" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
+expect_ok "zed remote server shipped as a packaged default" \
+    run_ic bash -c 'f=$(echo /data/jensen/.zed_server/zed-remote-server-*); test -x "$f"'
 expect_ok "env injection: pip.conf wired" \
     run_ic bash -c 'test "$PIP_CONFIG_FILE" = /opt/airgap-env/pip.conf'
 expect_ok "env injection: CA bundle wired" \

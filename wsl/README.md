@@ -82,6 +82,10 @@ half-working config is worse than an unmanaged one.
 - **opencode** and **herdr** are in the closure, same as the pod — no extra
   setup. The preload plugin is seeded as a packaged default; opencode's own
   config is yours, in `~/.config/opencode/`.
+- **Zed remote** into the pod or into WSL: the remote server is in the
+  closure under `~/.zed_server/`; set `airgap.zed.remoteClientVersion` to the
+  Windows client's exact `zed --version` string. Watch for a client-side
+  `cloud.zed.dev` preflight on first connect (see the option comment).
 - The official VS Code extension (`sst-dev.opencode`) ships as a raw `.vsix` at
   `~/.local/share/vsix/` — install it on the **Windows** side via
   "Install from VSIX", since the airgap has no marketplace.
@@ -89,3 +93,7 @@ half-working config is worse than an unmanaged one.
   `nix/hosts/wsl.nix`), docker-compatible. In a RunAI pod it comes from the
   closure instead, pointed at a `vfs` storage.conf by bootstrap, with root
   available via `sudo`.
+- **Internal CA**: carry `ca-bundle.crt` (the same file the pod's env-injection
+  mount receives) next to the flake — `nix/hosts/wsl.nix` wires it into the
+  system trust store when present, which is what `push-artifactory.sh`, the
+  runai CLI and `uv` need for TLS against Artifactory.

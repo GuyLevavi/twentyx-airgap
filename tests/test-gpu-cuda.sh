@@ -17,9 +17,9 @@
 #           nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 #   else:   nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
 #
-#   AIRGAP_TEST_TORCH_IMAGE=pytorch/pytorch:latest ./tests/test-gpu-cuda.sh
-#   AIRGAP_TEST_TORCH_IMAGE=pytorch/pytorch:latest \
-#     AIRGAP_TEST_ASSEMBLED_IMAGE=<assembled workspace image> ./tests/test-gpu-cuda.sh
+#   TEST_TORCH_IMAGE=pytorch/pytorch:latest ./tests/test-gpu-cuda.sh
+#   TEST_TORCH_IMAGE=pytorch/pytorch:latest \
+#     TEST_ASSEMBLED_IMAGE=<assembled workspace image> ./tests/test-gpu-cuda.sh
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -29,16 +29,16 @@ need podman
 need nvidia-smi
 
 # Default: run the check inside the upstream torch image itself (proves the
-# host's GPU container stack). Point AIRGAP_TEST_ASSEMBLED_IMAGE at an
+# host's GPU container stack). Point TEST_ASSEMBLED_IMAGE at an
 # assembled workspace image to prove OUR image passes GPUs through.
-TORCH_IMAGE="${AIRGAP_TEST_ASSEMBLED_IMAGE:-${AIRGAP_TEST_TORCH_IMAGE:?set AIRGAP_TEST_TORCH_IMAGE, e.g. pytorch/pytorch:latest}}"
+TORCH_IMAGE="${TEST_ASSEMBLED_IMAGE:-${TEST_TORCH_IMAGE:?set TEST_TORCH_IMAGE, e.g. pytorch/pytorch:latest}}"
 
 say "host GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 nvidia-smi >/dev/null 2>&1 || { echo "nvidia-smi failed" >&2; exit 1; }
 
 run_gpu() {
     podman run --rm --tls-verify=false --user 10001:0 --tmpfs /data \
-        --gpus all -e AIRGAP_USER=jensen "$@" "$TORCH_IMAGE"
+        --gpus all -e SESSION_USER=jensen "$@" "$TORCH_IMAGE"
 }
 
 say "torch.cuda inside the container"
@@ -47,7 +47,7 @@ check "torch.cuda.is_available() is true" \
 check "a CUDA tensor actually computes on device" \
     "run_gpu python -c 'import torch; assert (torch.ones(4, device=\"cuda\") + 1).sum().item() == 8'"
 
-if [ -n "$AIRGAP_TEST_ASSEMBLED_IMAGE" ]; then
+if [ -n "$TEST_ASSEMBLED_IMAGE" ]; then
     say "assembled image: doctor's two-sided torch check"
     check "doctor reports torch.cuda true in both envs" \
         "run_gpu /opt/airgap/libexec/airgap-doctor 2>&1 | grep 'torch.cuda' | grep -c True | grep -q 2"

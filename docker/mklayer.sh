@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT="${1:-dist/repo-layer.tar}"
-NIX_LAYER="${AIRGAP_LAYER_NIX:-dist/nix-layer.tar.gz}"
+NIX_LAYER="${LAYER_NIX:-dist/nix-layer.tar.gz}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 

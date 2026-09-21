@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers. Sourced, never executed.
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
 
 say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }
@@ -18,17 +18,17 @@ bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 # only platform-provided signal -- but workspace names are not stable across
 # sessions, so a stable git identity is preferred when one exists.
 #
-# `airgap doctor` prints which rule fired, so a surprising answer is visible
+# `airgap-doctor` prints which rule fired, so a surprising answer is visible
 # rather than silently misfiling your state.
-# Sets AIRGAP_USER_RESOLVED and AIRGAP_USER_SOURCE as a side effect, so callers
+# Sets SESSION_USER_RESOLVED and SESSION_USER_SOURCE as a side effect, so callers
 # that want the provenance can invoke it WITHOUT a subshell:
-#     airgap_user >/dev/null; echo "$AIRGAP_USER_RESOLVED via $AIRGAP_USER_SOURCE"
-# shellcheck disable=SC2034  # AIRGAP_USER_SOURCE is read by callers, not here
+#     airgap_user >/dev/null; echo "$SESSION_USER_RESOLVED via $SESSION_USER_SOURCE"
+# shellcheck disable=SC2034  # SESSION_USER_SOURCE is read by callers, not here
 airgap_user() {
     local u
-    if [ -n "${AIRGAP_USER:-}" ]; then
-        AIRGAP_USER_SOURCE="AIRGAP_USER"; AIRGAP_USER_RESOLVED="$AIRGAP_USER"
-        printf '%s' "$AIRGAP_USER"; return
+    if [ -n "${SESSION_USER:-}" ]; then
+        SESSION_USER_SOURCE="SESSION_USER"; SESSION_USER_RESOLVED="$SESSION_USER"
+        printf '%s' "$SESSION_USER"; return
     fi
     # --global is load-bearing, not decoration. A plain `git config --get`
     # honours a per-REPOSITORY user.email, so the resolved identity -- and
@@ -41,7 +41,7 @@ airgap_user() {
     # this reads exactly the value Nix set.
     u="$(git config --global --get user.email 2>/dev/null || true)"
     if [ -n "$u" ]; then
-        AIRGAP_USER_SOURCE="git user.email"; AIRGAP_USER_RESOLVED="${u%%@*}"
+        SESSION_USER_SOURCE="git user.email"; SESSION_USER_RESOLVED="${u%%@*}"
         printf '%s' "${u%%@*}"; return
     fi
     # Hostname is `<workspace-name>-<n>-<n>`, and workspace names follow a
@@ -50,18 +50,18 @@ airgap_user() {
     #
     # This is wrong for any username containing a dash. That is why it sits
     # BELOW git user.email in the chain rather than above it, and why
-    # `airgap doctor` prints which rule fired: a surprising answer should be
+    # `airgap-doctor` prints which rule fired: a surprising answer should be
     # visible, not silently misfile a session's history.
     u="$(hostname 2>/dev/null || true)"
     u="$(printf '%s' "$u" | sed -E 's/(-[0-9]+)+$//')"
     if [ -n "$u" ] && [ "$u" != "$(hostname 2>/dev/null)" ]; then
-        AIRGAP_USER_SOURCE="hostname (workspace <username>-<whatever>-<n>-<n>)"
-        AIRGAP_USER_RESOLVED="${u%%-*}"
+        SESSION_USER_SOURCE="hostname (workspace <username>-<whatever>-<n>-<n>)"
+        SESSION_USER_RESOLVED="${u%%-*}"
         printf '%s' "${u%%-*}"; return
     fi
-    AIRGAP_USER_SOURCE="USERNAME/USER fallback"
-    AIRGAP_USER_RESOLVED="${USERNAME:-${USER:-unknown}}"
-    printf '%s' "$AIRGAP_USER_RESOLVED"
+    SESSION_USER_SOURCE="USERNAME/USER fallback"
+    SESSION_USER_RESOLVED="${USERNAME:-${USER:-unknown}}"
+    printf '%s' "$SESSION_USER_RESOLVED"
 }
 
 # ── environment-provided assets ───────────────────────────────────────────
@@ -82,7 +82,7 @@ airgap_injection_exports() {
     local d v
     for d in /opt/airgap-env /data/.airgap-env; do
         [ -d "$d" ] || continue
-        printf 'AIRGAP_ENV_DIR\t%s\n' "$d"
+        printf 'ENV_INJECTION_DIR\t%s\n' "$d"
         if [ -f "$d/pip.conf" ]; then
             printf 'PIP_CONFIG_FILE\t%s\n' "$d/pip.conf"
         fi
@@ -109,7 +109,7 @@ airgap_injection_exports() {
 # nvim, the LSPs and pip on a network filesystem are painfully slow. Cache is
 # by definition reconstructible, so it stays on fast ephemeral local disk.
 airgap_home() {
-    if [ -n "${AIRGAP_HOME:-}" ]; then printf '%s' "$AIRGAP_HOME"; return; fi
+    if [ -n "${SESSION_HOME:-}" ]; then printf '%s' "$SESSION_HOME"; return; fi
     local base
     for base in /data /code; do
         if [ -d "$base" ] && [ -w "$base" ]; then
@@ -125,7 +125,7 @@ airgap_home() {
 airgap_home_is_durable() {
     # An explicit override is taken at its word: the caller knows where their
     # durable storage is mounted better than this heuristic does.
-    [ -n "${AIRGAP_HOME:-}" ] && return 0
+    [ -n "${SESSION_HOME:-}" ] && return 0
     local h; h="$(airgap_home)"
     case "$h" in /data/*|/code/*) [ -d "$(dirname "$h")" ] ;; *) return 1 ;; esac
 }

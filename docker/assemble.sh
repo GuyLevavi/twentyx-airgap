@@ -20,14 +20,14 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 TAG_PREFIX="${1:?usage: assemble.sh <tag-prefix>}"
 
-REGISTRY="${AIRGAP_REGISTRY:?set AIRGAP_REGISTRY, e.g. quay.internal/ai}"
-BASE_REGISTRY="${AIRGAP_BASE_REGISTRY:-$REGISTRY}"
-VARIANTS="${AIRGAP_VARIANTS:-base-slim base-pytorch vscode-slim vscode-pytorch}"
-BASE_TAG="${AIRGAP_BASE_TAG:-latest}"
+REGISTRY="${IMAGE_REGISTRY:?set IMAGE_REGISTRY, e.g. quay.internal/ai}"
+BASE_REGISTRY="${BASE_REGISTRY:-$REGISTRY}"
+VARIANTS="${IMAGE_VARIANTS:-base-slim base-pytorch vscode-slim vscode-pytorch}"
+BASE_TAG="${BASE_TAG:-latest}"
 
-LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer.tar.gz}"
-LAYER_NIX_NVIM="${AIRGAP_LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
-LAYER_REPO="${AIRGAP_LAYER_REPO:-dist/repo-layer.tar}"
+LAYER_NIX="${LAYER_NIX:-dist/nix-layer.tar.gz}"
+LAYER_NIX_NVIM="${LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
+LAYER_REPO="${LAYER_REPO:-dist/repo-layer.tar}"
 
 command -v crane >/dev/null || { echo "crane not found (nix shell .# gives you one)" >&2; exit 1; }
 command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
@@ -118,9 +118,9 @@ for variant in $VARIANTS; do
         # Image config only; no layer traffic.
         crane mutate "$dest" -t "$dest" \
             "${ENVARGS[@]}" \
-            --env AIRGAP_ROOT=/opt/airgap \
+            --env TOOLCHAIN_ROOT=/opt/airgap \
             --env "PATH=${NEWPATH}" \
-            --env "AIRGAP_BASE_ENTRYPOINT=${BASE_ENTRY}" \
+            --env "BASE_ENTRYPOINT=${BASE_ENTRY}" \
             --entrypoint /opt/airgap/libexec/airgap-entrypoint \
             --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
             --label "airgap.variant=${variant}" \

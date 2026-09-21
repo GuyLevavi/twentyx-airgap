@@ -11,3 +11,4 @@ node_modules/
 # deliberately? No: it is per-machine. nix/hosts/wsl.nix picks it up if present
 # and falls back to require-sigs = false when it is absent.
 cache-pubkey
+ca-bundle.crt

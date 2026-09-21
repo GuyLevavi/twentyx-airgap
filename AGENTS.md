@@ -1,6 +1,6 @@
 # AGENTS.md
 
-A toolchain for an **airgapped** RunAI/OpenShift environment and a NixOS-WSL laptop, from one source of truth. `README.md` is the authoritative overview; `NOTES.md` lists open items and in-cluster facts (some registry names there are still placeholders). Read both before making non-trivial changes.
+A toolchain for an **airgapped** RunAI/OpenShift environment and a NixOS-WSL laptop, from one source of truth. `README.md` is the authoritative overview; `ARCHITECTURE.md` is the how-it-works tour with a reading order for new readers; `MANUAL.md` is the step-by-step; `NOTES.md` lists open items and in-cluster facts (some registry names there are still placeholders). Read them before making non-trivial changes.
 
 ## Verification (there is no test suite — but there are tests)
 
@@ -35,13 +35,13 @@ Adding a package to `nix/modules/tools.nix` changes both targets at once. Shell/
 Bases are 15–30 GB; two layers are appended registry-side with `crane append`, never `FROM base-pytorch`. Constraints that are silent failures, not build errors:
 
 - The closure must land at literal `/nix/store` — ELF interpreters are absolute store paths.
-- `crane mutate` must **prepend** to the base's `PATH` (torch breaks without conda paths) and never replace `ENTRYPOINT` — the base's is stashed in `AIRGAP_BASE_ENTRYPOINT` and handed over.
+- `crane mutate` must **prepend** to the base's `PATH` (torch breaks without conda paths) and never replace `ENTRYPOINT` — the base's is stashed in `BASE_ENTRYPOINT` and handed over.
 - Session env (`TERMINFO_DIRS`, `LOCALE_ARCHIVE`, …) must be image ENV via `layer.nix`'s `session-env`, not shell rc — `runai exec` and code-server never source rc files. Image ENV does no expansion; shell-expression values are filtered out in `assemble.sh`.
 - Nix **strips setuid bits** from build outputs. The setuid `sudo` copy is made in `mklayer.sh` (extracted from the nix layer, `chmod 4555` — not 4755, the tar's `g=u` would make it group-writable).
 
 ## LD_PRELOAD / opencode split
 
-RunAI injects GPU-fractioning libs via `LD_PRELOAD` (they crash opencode), but CUDA needs them back in every command the agent runs. `libexec/airgap-opencode` replaces the preload with the libc **matching the target binary's own glibc** (via `ldd` — a *system* libc preloaded into a Nix binary is a `GLIBC_PRIVATE` error) and stashes the original in `AIRGAP_ORIG_LD_PRELOAD`; `agent/plugins/airgap-preload.ts` (`shell.env` hook) and `agent/restore-preload.sh` (`BASH_ENV`) restore it for children. Gotcha: `ldd/ldconfig -p | awk '…exit'` returns 141 (SIGPIPE) under `pipefail` — always add `|| true`.
+RunAI injects GPU-fractioning libs via `LD_PRELOAD` (they crash opencode), but CUDA needs them back in every command the agent runs. `libexec/airgap-opencode` replaces the preload with the libc **matching the target binary's own glibc** (via `ldd` — a *system* libc preloaded into a Nix binary is a `GLIBC_PRIVATE` error) and stashes the original in `PRELOAD_ORIGINAL`; `agent/plugins/airgap-preload.ts` (`shell.env` hook) and `agent/restore-preload.sh` (`BASH_ENV`) restore it for children. Gotcha: `ldd/ldconfig -p | awk '…exit'` returns 141 (SIGPIPE) under `pipefail` — always add `|| true`.
 
 ## `$HOME` layering rule
 
@@ -67,4 +67,4 @@ Cluster-specific files (internal CA bundle, pip.conf, nginx site config) are nev
 - `mklayer.sh` builds `repo-layer.tar` as plain tar (text, no container); CI rebuilds it per commit — it's the one-commit deploy path.
 - Identity in a pod comes from `airgap_user()` in `libexec/airgap-common.sh` (env → git email → hostname → `$USER`); the hostname rule is wrong for usernames with a dash, which is why git identity is set declaratively via `airgap.git.userEmail` in `nix/modules/home.nix`.
 - First WSL artifact: `nix build .#wsl-tarball && sudo ./result/bin/nixos-wsl-tarball-builder` — see `wsl/README.md` (VS Code server must be pre-seeded; auto-update pinned off on Windows).
-- Local connected machine: `nix build .#runai-layer` may fail with a stale `yodl-4.05.00.drv` input (`...source.drv does not exist`) — local store damage, not the flake; see NOTES.md §9, or build into a chroot store (`nix build --store /tmp/store .#runai-layer`).
+- Local connected machine: the store was repaired 2026-09 (both layer flavors build on the default store); if a "store path ... does not exist" ever reappears, the damage classes, the `nix copy` skip-on-row gotcha and the remedies are in NOTES.md §9 — the chroot store (`nix build --store /tmp/airgap-test-store .#runai-layer`) is the donor and fallback.

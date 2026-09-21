@@ -5,6 +5,7 @@
 # interactive sessions. The BASH_EXECS_FISH marker survives the exec, so a
 # deliberate nested `bash` from inside fish does not bounce straight back.
 {
+  lib,
   pkgs,
   config,
   ...
@@ -100,8 +101,10 @@ in
       lt = "eza --tree --icons --level=2";
       lg = "lazygit";
       g = "git";
-      k = "kubectl";
-    };
+    }
+    # kubectl is WSL-only by design; a dead abbreviation in the pod is noise
+    # that suggests a capability the pod deliberately does not have.
+    // lib.optionalAttrs cfg.tools.cluster.enable { k = "kubectl"; };
     shellAliases = {
       ls = "eza --icons --group-directories-first";
       cat = "bat -p";

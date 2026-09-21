@@ -9,19 +9,19 @@
  *      torch.cuda.is_available() goes False in every command the agent runs.
  *
  * libexec/airgap-opencode neutralizes LD_PRELOAD for the opencode process and
- * stashes the original in AIRGAP_ORIG_LD_PRELOAD. This plugin puts it back on
+ * stashes the original in PRELOAD_ORIGINAL. This plugin puts it back on
  * every shell execution (agent tools and user terminals), so opencode runs
  * clean while everything it spawns sees exactly what an interactive shell
  * sees.
  *
  * Belt and suspenders: agent/restore-preload.sh (via BASH_ENV) does the same
  * for any bash the plugin path does not cover. Disable both with
- * AIRGAP_PRELOAD_RESTORE=0.
+ * PRELOAD_RESTORE_AGENT_BASH=0.
  */
 
 export const AirgapPreload = async () => {
-  const stashed = process.env.AIRGAP_ORIG_LD_PRELOAD
-  const enabled = process.env.AIRGAP_PRELOAD_RESTORE !== "0"
+  const stashed = process.env.PRELOAD_ORIGINAL
+  const enabled = process.env.PRELOAD_RESTORE_AGENT_BASH !== "0"
 
   // Nothing was stripped -> nothing to restore. Stay a no-op so the plugin is
   // safe on a workstation or a non-fractioned pod.
