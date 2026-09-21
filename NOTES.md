@@ -209,7 +209,9 @@ in the gap: whether RunAI sets `no-new-privileges`**, which would block the
 setuid bit entirely -- `airgap-doctor`'s sudo line answers it on a real pod.
 
 GPU: `tests/test-gpu-cuda.sh` verifies passthrough + `torch.cuda` on a host
-with the nvidia CDI setup (one-time, root). What no local test can claim:
+with the nvidia CDI setup (one-time, root) -- which means gpubox only: the
+work laptop's WSL PC is CPU-only (nothing to set up there), and on RunAI the
+cluster injects the GPUs into pods itself. What no local test can claim:
 CUDA under the REAL fractioning preloaders (they are proprietary) -- only a
 fractioned pod answers that. The preload split itself is fully covered.
 

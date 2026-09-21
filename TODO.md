@@ -13,14 +13,19 @@ command or decision.
       read-only — the diagnosis, remedies and the `nix copy` skip-on-row
       gotcha are recorded in NOTES.md §9.
 
-- [ ] **[root] One-time CDI setup for GPU tests** (tests/test-gpu-cuda.sh header):
+- [ ] **[root, gpubox only] One-time CDI setup for GPU tests** (tests/test-gpu-cuda.sh header):
 
       ```bash
       # NixOS: add  hardware.nvidia-container-toolkit.enable = true;  and rebuild, then
       sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
       ```
 
-- [ ] **Run the GPU test** (closes the only CUDA claim the suite cannot make):
+- [ ] **[gpubox] Run the GPU test** (closes the only CUDA claim the suite
+      cannot make locally). gpubox is the only machine this applies to: the
+      work WSL PC is CPU-only (run `test-container.sh` there, nothing GPU
+      related), and on RunAI the cluster itself injects the GPUs — the
+      in-pod `airgap-doctor` two-sided torch check is what answers CUDA
+      there (see the transfer checklist):
 
       ```bash
       TEST_TORCH_IMAGE=pytorch/pytorch:latest ./tests/test-gpu-cuda.sh

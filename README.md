@@ -206,8 +206,10 @@ nix develop -c ./tests/test-container.sh
 ```
 
 `tests/test-gpu-cuda.sh` is opt-in for GPU hosts (needs the nvidia CDI setup
-described in its header); what it cannot verify locally — CUDA under the real
-fractioning preloaders — only a fractioned pod can (see NOTES.md).
+described in its header) — in practice that is gpubox only: the work WSL PC
+is CPU-only, and on RunAI the cluster injects GPUs into pods itself. What it
+cannot verify locally — CUDA under the real fractioning preloaders — only a
+fractioned pod can (see NOTES.md).
 
 ## Before the first transfer
 
