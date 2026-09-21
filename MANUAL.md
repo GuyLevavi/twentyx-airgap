@@ -17,12 +17,24 @@ files or DB rows — see NOTES.md §9 for the diagnosis classes and the repair
 (recipe: copy files from a chroot store, then one `nix copy` as root), or
 build into a throwaway store: `nix build --store /tmp/airgap-test-store .#runai-layer`.
 
-Declare what only you know, in `nix/modules/home.nix`:
+Declare what only you know, in `nix/modules/home.nix` — **both are closure
+values, so decide them before the layer build** (a later fix costs a
+transfer; the zed one can also be hot-fixed post-transfer as a repo-layer
+default override, a one-commit git text change):
 
 1. `airgap.git.userEmail` — load-bearing beyond git: its local part names your
    directory on the shared PVC.
 2. `airgap.zed.remoteClientVersion` — the exact `zed --version` string of the
    Windows client that will connect to pods (enables Zed remote offline).
+
+What you fill in **at the airgap side instead** (no transfer involved):
+
+- `.gitlab-ci.yml` cluster facts (`BASE_REGISTRY`, `BASE_TAG`,
+  `LAYER_BASE_URL`, lint-image digest) — git text, edited on the work WSL PC
+  and pushed to the internal GitLab before the first CI run.
+- `nix/packages/runai-cli.nix` — fill version/hash/URL on the work PC (the
+  binary's URL is only reachable there), then rebuild offline. Day-one
+  fallback: put the binary in `~/.local/bin` by hand and pin it later.
 
 ## 1. The WSL machine (NixOS inside the gap)
 
