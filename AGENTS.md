@@ -27,8 +27,8 @@ Adding a package to `nix/modules/tools.nix` changes both targets at once. Shell/
 
 - **Git is text-only, enforced by design.** No vendored blobs, no binaries, no lockfile-generated artifacts. The closure replaces any manifest/CHECKSUMS scheme.
 - **Never run Nix inside a pod.** `nix/runai/layer.nix` extracts the built closure as an OCI layer tarball; the lock is law in the airgap (`nix flake update` only on a connected machine).
-- Pin inputs deliberately; most follow `nixpkgs`. The `vscode-server` input must *not* (overriding a nonexistent input warns on every eval). Marketplace extensions and tarball fetches pin exact hashes — re-pin only when upstream mutates the asset (this bit once: the tldr release zip, see `tools.nix`).
-- Offline-unfriendly tools must have their caches pinned to store paths, never `XDG_CACHE_HOME` (see tealdeer in `tools.nix`), and auto-updates disabled (upstream's `updateOnActivation` errors if set).
+- Pin inputs deliberately; most follow `nixpkgs`. The `vscode-server` input must *not* (overriding a nonexistent input warns on every eval). Marketplace extensions and tarball fetches pin exact hashes — re-pin only when upstream mutates the asset.
+- Auto-updates are disabled everywhere: a runtime fetch in the gap is a hang, not an error (tldr/tealdeer was removed entirely for this reason — a 2 MB nicety that mutated upstream three times is not worth a fetch class that bites).
 
 ## Image assembly (`docker/`)
 

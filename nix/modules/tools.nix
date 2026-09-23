@@ -9,57 +9,11 @@
 let
   cfg = config.airgap;
   wsl = cfg.target == "wsl";
-
-  # tealdeer downloads its page cache on first use. Inside the gap that is not
-  # an error, it is a DNS lookup that hangs -- so the pages have to be a store
-  # path, fetched here on the connected machine and carried across like
-  # everything else. This is the shape the old manifest.toml was reaching for,
-  # except Nix pins the hash and puts it in the closure automatically.
-  #
-  # A git-tree pin, not the release zip: upstream re-uploaded the v2.3 release
-  # asset twice, breaking the hash both times. A commit rev is immutable --
-  # this class of fetch can never bite again. To refresh pages, bump the rev
-  # and re-pin the hash with the `got:` value the build prints.
-  tldrPages = pkgs.fetchFromGitHub {
-    owner = "tldr-pages";
-    repo = "tldr";
-    rev = "e1ba0d7ec4a37e2b04c4b67256d0e27ea21b6b35";
-    hash = "sha256-ThQPnY8Tmx+tZwIJ9crHtq59NoTBjS067SyKWV41K/g=";
-  };
-
-  # tealdeer looks for `<cache_dir>/tldr-pages/pages.<lang>/<platform>/`.
-  # Only the two platforms that can ever match: the archive also carries
-  # android, osx, freebsd, netbsd, openbsd, sunos, dos and cisco-ios pages,
-  # none of which will ever be looked up from a Linux container.
-  tldrCache = pkgs.runCommand "tldr-cache" { } ''
-    mkdir -p $out/tldr-pages/pages.en
-    cp -r ${tldrPages}/common ${tldrPages}/linux $out/tldr-pages/pages.en/
-  '';
 in
 {
   programs.bat.enable = true;
   programs.eza.enable = true;
   programs.ripgrep.enable = true;
-
-  programs.tealdeer = {
-    enable = true;
-    settings = {
-      # A store path, so it is read-only and shared -- and deliberately not
-      # under XDG_CACHE_HOME, which airgap-bootstrap puts on ephemeral local
-      # disk. A cache you cannot refill is not a cache; it is data.
-      directories.cache_dir = "${tldrCache}";
-      # Without this every invocation tries the network first.
-      updates.auto_update = false;
-    };
-    # Otherwise the module installs a systemd timer running `tldr --update`.
-    # On WSL that is a unit failing on every boot against a network that is not
-    # there; in a pod there is no systemd to run it at all. The cache is a
-    # store path -- updating it means a new closure, which means a transfer.
-    #
-    # (upstream removed the matching `updateOnActivation` for the same reason:
-    # activation must not need the network. Setting it now is a hard error.)
-    enableAutoUpdates = false;
-  };
 
   home.packages =
     with pkgs;

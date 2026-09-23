@@ -16,7 +16,7 @@ Two environments must work with **zero network access**:
    system inside WSL2, because the machine itself is outside the gap.
 
 Everything the pod will ever need (compilers, editors, the agent binary, man
-pages, tldr pages) must cross the gap as **planned artifacts**, never fetched
+pages) must cross the gap as **planned artifacts**, never fetched
 at runtime. The whole repo is one machine that produces those artifacts.
 
 ## The one idea: Nix computes the closure
