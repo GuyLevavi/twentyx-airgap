@@ -131,11 +131,24 @@
         # with no Nix anywhere on it.
         #
         #   nix build .#wsl-tarball
-        #   sudo ./result/bin/nixos-wsl-tarball-builder     # -> nixos.wsl
+        #   ./result/bin/nixos-wsl-tarball-builder        # -> nixos.wsl
         #
-        # It runs as root because it assembles a filesystem image; it does not
-        # touch the running system.
-        wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
+        # No sudo: the upstream builder demands EUID 0 for its chroot and
+        # bind mounts, so the wrapper re-execs it inside a user namespace
+        # (`unshare -rm`, this uid mapped to namespace-root). Nothing it
+        # produces is owned by root — nixos.wsl lands owned by the invoking
+        # user, unlike the sudo run. Set AIRGAP_NO_UNSHARE=1 to skip the
+        # namespace if a caller genuinely is root (or cannot use userns).
+        wsl-tarball =
+          let
+            inner = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
+          in
+          pkgs.writeShellScriptBin "nixos-wsl-tarball-builder" ''
+            if [ "$(id -u)" = 0 ] || [ -n "''${AIRGAP_NO_UNSHARE:-}" ]; then
+              exec ${inner}/bin/nixos-wsl-tarball-builder "$@"
+            fi
+            exec ${pkgs.util-linux}/bin/unshare -rm ${inner}/bin/nixos-wsl-tarball-builder "$@"
+          '';
 
         # ── the Windows-side half of the first transfer ───────────────────
         # WSL2 MSI (Store-less Windows) + the Zed installer pinned to the

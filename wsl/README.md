@@ -10,7 +10,7 @@ outside and imported by `wsl.exe`, which needs nothing installed on Windows.
 
 ```bash
 nix build .#wsl-tarball
-sudo ./result/bin/nixos-wsl-tarball-builder     # -> nixos.wsl
+./result/bin/nixos-wsl-tarball-builder          # -> nixos.wsl (no sudo; user-ns)
 sha256sum nixos.wsl > nixos.wsl.sha256
 ```
 

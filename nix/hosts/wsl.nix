@@ -9,6 +9,8 @@
 {
   lib,
   pkgs,
+  config,
+  inputs,
   username,
   ...
 }:
@@ -40,6 +42,33 @@ let
     zedVersion = pkgs.zed-editor.version;
   };
   vscodeCommit = "2242ebbb54efeeb0129e08e919e7e8d43033cd83"; # VS Code 1.139.0; keep in sync with windows-kit.nix
+
+  # WSL-registry files the upstream tarballBuilder installs into the tarball.
+  # wsl-distribution.conf is what makes `wsl --import` register the distro
+  # with a Start-Menu shortcut; the default configuration.nix is the
+  # just-in-case file a teammate finds under /etc/nixos.
+  wslDistroConf = pkgs.writeText "wsl-distribution.conf" ''
+    [oobe]
+    defaultName = NixOS
+
+    [shortcut]
+    icon = /etc/nixos.ico
+  '';
+  defaultNixosConfig = pkgs.writeText "default-configuration.nix" ''
+    # This is the entry the shipped system already builds from; the durable
+    # rebuild path on the WSL machine is this repository's flake, transferred
+    # by nix-import.sh. Kept here so /etc/nixos is not empty.
+    { config, lib, pkgs, ... }:
+
+    {
+      imports = [ <nixos-wsl/modules> ];
+
+      wsl.enable = true;
+      wsl.defaultUser = "${username}";
+
+      system.stateVersion = "25.05";
+    }
+  '';
 in
 {
   wsl = {
@@ -204,6 +233,81 @@ in
     openssh
     socat # client side of the sshd -i bridge into RunAI pods
   ];
+
+  # ── the WSL rootfs tarball, built without root ─────────────────────────
+  # Replaces the upstream tarballBuilder: its nixos-install path cannot run
+  # in a user namespace — the trusted daemon copies the closure into the
+  # chroot store as real root, then the namespaced client chowns
+  # daemon-owned files and gets EINVAL. Same outcome here with the client
+  # doing every write: `nix copy --to local?root=` is in-process, the
+  # system profile is a direct symlink, and `tar --owner=0` stamps root
+  # ownership into the archive at packaging time (which also makes the
+  # bytes reproducible across runs). The wrapper in flake.nix still re-execs
+  # via `unshare -rm` so nothing lands owned by the real user mid-build.
+  # No vscode-server pre-seed at build time (that was nixos-install's
+  # chroot activation) — the seed snippet runs on first boot instead,
+  # unpacking the same pinned tarball, same end state.
+  system.build.tarballBuilder = lib.mkForce (pkgs.writeShellApplication {
+    name = "nixos-wsl-tarball-builder";
+    runtimeInputs = with pkgs; [
+      coreutils
+      gnutar
+      pigz
+      config.nix.package
+    ];
+    text = ''
+      out="nixos.wsl"
+      if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" = "-h" ]; }; then
+        echo "Usage: $0 [output.tar.gz]"
+        exit 1
+      fi
+      [ "$#" -eq 1 ] && out="$1"
+
+      root=$(mktemp -d)
+      trap 'rm -rf "$root"' EXIT
+
+      # Every nix invocation against the chroot store must run with an empty
+      # build-users-group: the default ("nixbld") makes the LocalStore init
+      # chown the store dir to the group's gid, which is not mapped inside
+      # the user namespace → EINVAL. With an empty group the check is
+      # skipped entirely; the imported system's own nix.conf is untouched.
+      export NIX_CONFIG="build-users-group = "
+
+      echo "[NixOS-WSL] Installing..."
+      install -d "$root/nix/store" "$root/nix/var/nix/profiles/per-user/root" "$root/etc"
+
+      # Copy the closure client-side and register the store DB from nix's own
+      # dump format (`nix-store --dump-db` → `--load-db`, proven round trip).
+      # This is the one step that forced root in the upstream builder: with
+      # nixos-install, the trusted daemon copies the closure as real root and
+      # the namespaced client then chowns daemon-owned files → EINVAL. Here
+      # the client does every write, so `unshare -rm` is self-sufficient.
+      # Ownership is stamped into the tarball by --owner=0 at packaging time;
+      # file modes and timestamps come straight from the store.
+      nix path-info -r ${config.system.build.toplevel} | while read -r storePath; do
+        cp -r --preserve=mode,timestamps "$storePath" "$root/nix/store/"
+      done
+      nix path-info -r ${config.system.build.toplevel} \
+        | xargs -d '\n' nix-store --dump-db \
+        | nix-store --store "local?root=$root" --load-db
+
+      echo "[NixOS-WSL] Setting the system profile..."
+      install -d "$root/nix/var/nix/profiles/per-user/root" "$root/etc"
+      ln -sfn ${config.system.build.toplevel} "$root/nix/var/nix/profiles/system"
+      touch "$root/etc/NIXOS"
+
+      echo "[NixOS-WSL] Adding wsl-distribution.conf"
+      install -Dm644 ${wslDistroConf} "$root/etc/wsl-distribution.conf"
+      install -Dm644 ${inputs.nixos-wsl}/assets/NixOS-WSL.ico "$root/etc/nixos.ico"
+
+      echo "[NixOS-WSL] Adding default config..."
+      install -Dm644 ${defaultNixosConfig} "$root/etc/nixos/configuration.nix"
+
+      echo "[NixOS-WSL] Compressing..."
+      tar -C "$root" -c --sort=name --mtime='@1' --numeric-owner --owner=0 --group=0 --hard-dereference . \
+        | pigz > "$out"
+    '';
+  });
 
   system.stateVersion = "25.05";
 }

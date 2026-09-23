@@ -57,9 +57,9 @@ each imports their own tarball. Set the WSL username first (a per-machine,
 gitignored one-liner, not a closure value):
 
 ```bash
-echo <your-name> > wsl-username                # only if you are not the default
-nix build .#wsl-tarball                        # ~4.3 GB, one file
-sudo ./result/bin/nixos-wsl-tarball-builder    # writes dist/nixos-wsl.tar.gz
+echo <your-name> > wsl-username                 # only if you are not the default
+nix build .#wsl-tarball                         # ~1.4 GB, one file
+./result/bin/nixos-wsl-tarball-builder dist/nixos-wsl.tar.gz   # no sudo
 ```
 
 **One-time setup on Windows — from absolute zero, no WSL installed.**

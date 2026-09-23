@@ -36,9 +36,10 @@ fi
 if [ ! -f "$OUT/nixos-wsl.tar.gz" ]; then
     say "building the NixOS-WSL tarball"
     nix build .#wsl-tarball --no-link --print-out-paths >/dev/null
-    sudo ./result/bin/nixos-wsl-tarball-builder
-    mv nixos.wsl "$OUT/nixos-wsl.tar.gz" 2>/dev/null || \
-        { [ -f "$OUT/nixos-wsl.tar.gz" ] || { echo "tarball builder did not produce nixos.wsl" >&2; exit 1; }; }
+    # The builder self-elevates via a user namespace — no sudo, and the
+    # output file is owned by the invoking user. -f in case the target
+    # exists (stale or root-owned from older runs).
+    ./result/bin/nixos-wsl-tarball-builder "$OUT/nixos-wsl.tar.gz"
     rm -f result
 fi
 
@@ -46,7 +47,9 @@ fi
 say "collecting the windows kit"
 KIT="$(nix build .#windows-kit --no-link --print-out-paths)"
 mkdir -p "$OUT/windows-kit"
-cp -L "$KIT"/./* "$OUT/windows-kit/"
+# -f: the store sources are read-only, so earlier copies landed mode 444 —
+# a plain cp cannot overwrite them. -f unlinks and rewrites.
+cp -Lf "$KIT"/./* "$OUT/windows-kit/"
 rm -f result
 
 # ── 4. the long docs + the short one ─────────────────────────────────────
