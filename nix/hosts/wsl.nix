@@ -119,7 +119,10 @@ in
     seed="$home/.vscode-server/bin/$commit"
     if [ ! -d "$seed" ]; then
         mkdir -p "$seed"
-        tar -xzf "${windowsKit.vscodeServerTar}" -C "$seed" --strip-components=1
+        # Absolute tar: the activation environment has no tar on PATH (the
+        # seed ran as a bare command name once and failed with 127 in the
+        # nixos-install chroot AND at boot).
+        ${pkgs.gnutar}/bin/tar -xzf "${windowsKit.vscodeServerTar}" -C "$seed" --strip-components=1
         chown -R ${username}:users "$home/.vscode-server"
     fi
   '';

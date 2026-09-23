@@ -58,7 +58,7 @@ gitignored one-liner, not a closure value):
 
 ```bash
 echo <your-name> > wsl-username                # only if you are not the default
-nix build .#wsl-tarball                        # ~948 MB, one file
+nix build .#wsl-tarball                        # ~4.3 GB, one file
 sudo ./result/bin/nixos-wsl-tarball-builder    # writes dist/nixos-wsl.tar.gz
 ```
 
@@ -135,10 +135,11 @@ Carry, in one go:
 | `dist/nix-layer.tar.gz` (+`-nvim` optional) | ~847 / ~880 MB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
 | `nix-export.sh` chunks | ~1 GB | WSL binary cache |
-| `nixos-wsl.tar.gz` (first time only) | ~948 MB | `wsl --import` |
+| `nixos-wsl.tar.gz` (first time only) | ~4.3 GB | `wsl --import` |
 | `.#windows-kit` result | ~125 MB | Windows machines: Zed installer (release-matched with the closure) + WSL2 MSI |
 
-Any file >2.5 GB cap is already sharded by the exporter.
+The WSL bootstrap is one ~4.3 GB file; the binary-cache exporter shards by
+default if the cache chunks ever exceed a per-file cap.
 
 ## 4. Registry side (inside the gap)
 

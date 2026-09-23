@@ -28,14 +28,17 @@ tells you what that costs before you carry it anywhere.
 
 | | |
 |---|---|
-| WSL bootstrap, one file | **948 MB** (4.3 GiB system + flake inputs, xz) |
+| WSL bootstrap, one file | **~4.3 GB** (gzip; grew with the declared LSPs, clangd and the vscode-server pre-seed) |
 | `nix-layer.tar.gz` | ~740 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
 | `nix-layer-nvim.tar.gz` | ~880 MB |
 | `repo-layer.tar` | ~80 KB |
 
-The whole airgapped NixOS-WSL fits in a single transfer under a 2.5GB per-file
-cap. `nix-export.sh` shards anyway if it ever stops fitting; reassembly is
-order-independent because the cache is content-addressed.
+The WSL bootstrap is a single ~4.3 GB gzip'd tarball (`.wsl` is just the
+extension — `wsl --import` takes the same bytes under any name). The
+binary-cache exporter shards by default; reassembly is order-independent
+because the cache is content-addressed. If the size ever hurts, the single
+biggest lever is clangd (~2 GB of the WSL closure) — removable as an offline
+config edit on the WSL machine itself, no transfer needed.
 
 ## The two layers at runtime
 
