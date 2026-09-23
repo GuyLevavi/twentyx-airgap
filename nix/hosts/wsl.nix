@@ -131,6 +131,33 @@ in
     enable = true;
     settings.PasswordAuthentication = false;
   };
+  # ── git: neutral settings, system scope ────────────────────────────────
+  # Same file the repo layer ships into pods (docker/mklayer.sh) — keep the
+  # two in sync. No packaged ~/.config/git/config anywhere: per-user identity
+  # is a real file on the durable home (git config --global user.email),
+  # because a store symlink would make that write fail.
+  environment.etc."gitconfig".text = ''
+    # Managed by the airgap flake. Per-user identity belongs in the user's
+    # own ~/.config/git/config (durable home), set once: git config --global.
+    [init]
+    	defaultBranch = main
+    [pull]
+    	rebase = true
+    [pager]
+    	diff = delta
+    	log = delta
+    	reflog = delta
+    	show = delta
+    [interactive]
+    	diffFilter = delta --color-only
+    [delta]
+    	navigate = true
+    	side-by-side = true
+    	line-numbers = true
+    [merge]
+    	conflictstyle = diff3
+  '';
+
   environment.systemPackages = with pkgs; [
     gitMinimal
     wget

@@ -38,23 +38,36 @@ the TUI gets the matching-libc no-op preload, and every bash child gets the orig
 `agent/plugins/airgap-preload.ts` (opencode `shell.env` hook) plus `agent/restore-preload.sh`
 (`BASH_ENV`). Set `PRELOAD_RESTORE_AGENT_BASH=0` to disable the restore half.
 
-## 2. Identity on the shared PVC  [RESOLVED -- implemented]
+## 2. Identity on the shared PVC  [RESOLVED -- implemented, team-shaped]
 
 Probe output confirmed: every runtime user is `jensen`, uid 10001, gid 0, and the hostname is
 `<workspace-name>-<n>-<n>` where workspace names follow a `<username>-<whatever>` convention.
-The OS knows nothing about who you are; the hostname is the only platform-provided signal, and it
-is not stable across sessions.
+The OS knows nothing about who you are; the workspace name is the per-user signal the platform
+gives.
 
 Resolution chain in `airgap_user()`, first hit wins:
 
-1. `$SESSION_USER` (explicit override)
-2. local part of `git config user.email` -- set declaratively via `airgap.git.userEmail`
-3. hostname, stripped of the `-<n>-<n>` suffix, leading component
+1. `$SESSION_USER` (explicit override -- the dash-in-username escape hatch)
+2. hostname, stripped of the `-<n>-<n>` suffix, leading component -- **the
+   intended rule**: the platform's own per-user convention, and the reason a
+   baked identity is NOT part of the image
+3. local part of `git config user.email` -- the USER's own, set once on the
+   durable PVC (`git config --global user.email`); it can only ever fire
+   when rule 2 produced nothing, so configuring git later can never
+   relocate an existing directory
 4. `$USERNAME` / `$USER`
 
-Rule 3 is **wrong for any username containing a dash**. That is exactly why it sits below the git
-identity rather than above it, and why `airgap-doctor` prints which rule fired -- a surprising
-answer should be visible, not silently misfile a session's history in a new directory.
+This is deliberately **not** what it used to be: a baked `airgap.git.userEmail`
+sat at rank 2, which was right for a single owner and wrong for a team -- the
+closure is distributed, so a baked email would file every teammate's state
+into the owner's PVC directory. Consequently there is also NO packaged
+`~/.config/git/config`: it would be a store symlink, and `git config --global`
+on the PVC could never write through it (EROFS). The neutral git settings
+(defaultBranch, pager/delta) ship as `/etc/gitconfig` from the repo layer
+(pod) and `environment.etc` (WSL), and each user owns their identity as a real
+file on the durable home. Renaming a workspace changes rule 2's answer -- that
+tradeoff is accepted and visible (doctor prints which rule fired); the
+override at rank 1 exists for it.
 
 It picks `/data/<user>` (falling back to `/code/<user>`) as the relocated `$HOME`. A wrong guess
 is cosmetic, never destructive.
@@ -320,9 +333,12 @@ it is not relitigated:
   the remote server as a second output (`remote_server`), shipped as a
   packaged default under `~/.zed_server/`. The client looks for a file named
   after its own version string and only checks `<file> version` exits 0 --
-  so `airgap.zed.remoteClientVersion` (nix/modules/home.nix) declares the
-  Windows client's exact `zed --version` string and a shim with that name
-  execs the store binary. Nothing downloads, ever. Known edge: the client
+  so `.#windows-kit` ships a Windows installer pinned to the SAME upstream
+  release as the closure's zed-editor, and shims for both `<v>` and `<v>+stable`
+  spellings are generated from `airgap.zed.remoteClientVersion` (default =
+  the nixpkgs version). Nothing downloads, ever; the only manual act left is
+  re-pinning the installer when nixpkgs bumps (nix/packages/windows-kit.nix).
+  Known edge: the client
   resolves `.zed_server` relative to the SSH session's `$HOME`, which is why
   the entrypoint/sshd-inetd self-registration must point at the PVC home --
   it does. The `opencode acp` integration needs none of this: it runs

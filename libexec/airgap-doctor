@@ -31,10 +31,11 @@ airgap_user >/dev/null
 kv "user" "$SESSION_USER_RESOLVED (uid $(id -u), gid $(id -g))"
 kv "identity via" "$SESSION_USER_SOURCE"
 case "$SESSION_USER_SOURCE" in
-    hostname*)
-        warn "identity came from the workspace name, which changes between sessions."
-        warn "it is also wrong for any username containing a dash."
-        warn "pin it: set airgap.git.userEmail in Nix, or export SESSION_USER=<you>" ;;
+    hostname*|SESSION_USER) : ;;   # the intended signals; nothing to say
+    *)
+        warn "identity fell through to '$SESSION_USER_SOURCE': the workspace name"
+        warn "did not match <username>-<*>-<n>-<n>. Per-user PVC dirs depend on it."
+        warn "pin it: set SESSION_USER=<you> in the RunAI workspace env." ;;
 esac
 kv "version" "$(cat "$TOOLCHAIN_ROOT/VERSION" 2>/dev/null || echo dev)"
 

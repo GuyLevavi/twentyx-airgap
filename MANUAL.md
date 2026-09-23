@@ -17,15 +17,17 @@ files or DB rows — see NOTES.md §9 for the diagnosis classes and the repair
 (recipe: copy files from a chroot store, then one `nix copy` as root), or
 build into a throwaway store: `nix build --store /tmp/airgap-test-store .#runai-layer`.
 
-Declare what only you know, in `nix/modules/home.nix` — **both are closure
-values, so decide them before the layer build** (a later fix costs a
-transfer; the zed one can also be hot-fixed post-transfer as a repo-layer
-default override, a one-commit git text change):
+Declare what only you know — nothing here is a closure value any more:
 
-1. `airgap.git.userEmail` — load-bearing beyond git: its local part names your
-   directory on the shared PVC.
-2. `airgap.zed.remoteClientVersion` — the exact `zed --version` string of the
-   Windows client that will connect to pods (enables Zed remote offline).
+- Identity in a pod comes from the workspace-name convention
+  (`<username>-<whatever>-<n>-<n>` → first part = your PVC directory). No
+  email is baked in: this toolchain is distributed to a team, and a baked
+  identity would file everyone's state into one person's directory. If your
+  username contains a dash, set `SESSION_USER=<you>` in the workspace env
+  (RunAI pod template) — that is the override chain's first rule.
+- Git identity is per-user and cheaply editable on purpose: one
+  `git config --global user.email` on the durable home, a real file, done
+  forever. Nothing in the image owns it.
 
 What you fill in **at the airgap side instead** (no transfer involved):
 
@@ -35,6 +37,13 @@ What you fill in **at the airgap side instead** (no transfer involved):
 - `nix/packages/runai-cli.nix` — fill version/hash/URL on the work PC (the
   binary's URL is only reachable there), then rebuild offline. Day-one
   fallback: put the binary in `~/.local/bin` by hand and pin it later.
+
+Also build the Windows-side kit while connected — it is what makes the
+Windows half of the gap turnkey:
+
+```bash
+nix build .#windows-kit       # Zed installer (release-matched) + WSL2 MSI
+```
 
 ## 1. The WSL machine (NixOS inside the gap)
 
@@ -68,7 +77,9 @@ After the reboot, still Administrator PowerShell:
 
 ```powershell
 wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
-wsl --update                     # WSL2 kernel; on Win10 install wsl_update_x64.msi from Microsoft first
+# WSL2 itself: on an internet-less Windows, install the MSI from the kit
+# (windows-kit result). On a connected one, `wsl --update` does the same.
+msiexec /i wsl.2.9.12.0.x64.msi
 wsl --import twentyx D:\wsl\nixos C:\path\to\nixos-wsl.tar.gz --version 2
 wsl -d twentyx                   # you are now inside the NixOS machine
 ```
@@ -122,6 +133,7 @@ Carry, in one go:
 | `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
 | `nix-export.sh` chunks | ~1 GB | WSL binary cache |
 | `nixos-wsl.tar.gz` (first time only) | ~948 MB | `wsl --import` |
+| `.#windows-kit` result | ~250 MB | Windows machines: Zed installer (release-matched with the closure) + WSL2 MSI |
 
 Any file >2.5 GB cap is already sharded by the exporter.
 

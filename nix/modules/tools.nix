@@ -63,6 +63,15 @@ in
     [
       # ── core CLI ───────────────────────────────────────────────────────
       fd
+      # gitMinimal, not full git: 159 MB of closure vs 385. The neutral git
+      # settings ship as /etc/gitconfig (repo layer / environment.etc); there
+      # is deliberately NO packaged ~/.config/git/config — it would be a
+      # store symlink, and `git config --global user.email` on the PVC could
+      # then never write (EROFS through the symlink). Every user owns their
+      # git identity as a real file on the durable home.
+      gitMinimal
+      delta
+      lazygit
       jq
       yq-go # you had jq and zero YAML tooling, on OpenShift
       btop

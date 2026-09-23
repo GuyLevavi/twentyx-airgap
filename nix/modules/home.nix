@@ -52,8 +52,15 @@ let
   zedRemote = pkgs.zed-editor.remote_server;
   zedRemoteExecName = pkgs.zed-editor.remoteServerExecutableName or
     "zed-remote-server-stable-${pkgs.zed-editor.version}+stable";
+
+  # The nixpkgs-named server binary already covers one spelling; ship the
+  # other spellings as shims only when they differ from it.
+  zedClientShims = builtins.filter (n: n != zedRemoteExecName) (lib.unique [
+    "zed-remote-server-stable-${cfg.zed.remoteClientVersion}"
+    "zed-remote-server-stable-${cfg.zed.remoteClientVersion}+stable"
+  ]);
 in
-{
+  {
   imports = [
     # Always imported; nvim.nix gates it on airgap.nvim.enable, because
     # `imports` cannot depend on config without infinite recursion.
@@ -113,43 +120,21 @@ in
       };
     };
 
-    git = {
-      userName = lib.mkOption {
-        type = lib.types.str;
-        default = "guy";
-      };
-      userEmail = lib.mkOption {
-        type = lib.types.str;
-        default = "guylevavi@gmail.com";
-        description = ''
-          Load-bearing beyond git: airgap_user() takes the local part of this
-          address as the identity, and that identity names the per-user
-          directory on the shared PVC. It sits above the hostname rule in the
-          chain precisely because it is stable across sessions, so setting it
-          to the work address is what stops a renamed workspace from stranding
-          a session's history in a new directory.
-
-          `airgap-doctor` prints which rule fired, so a wrong value here is
-          visible rather than silent.
-        '';
-      };
-    };
-
     zed.remoteClientVersion = lib.mkOption {
       type = lib.types.str;
-      default = "";
+      default = pkgs.zed-editor.version;
       description = ''
         The EXACT version string of the Zed client that will connect to this
-        host remotely (Windows client: run `zed --version` there; the remote
-        filename embeds it, build metadata included). When set, a shim named
-        after that string is placed in ~/.zed_server as a packaged default, so
-        Zed's remote development works offline: the client checks only that
-        `<file> version` exits 0 and never downloads. Bump the option whenever
-        the Windows client is updated. Empty = ship the nixpkgs-named server
-        binary only. Caveat: some client versions phone cloud.zed.dev for a
-        metadata check before looking at ~/.zed_server (upstream zed#53763);
-        verify against your client version, and if it does, the request must
-        fail fast rather than hang -- verify on first connect.
+        host remotely. DEFAULT = the nixpkgs zed-editor version, because the
+        Windows installer shipped in `.#windows-kit` is pinned to the same
+        upstream release — use the shipped installer and this matches by
+        construction, no manual step. Shims are generated for both spellings
+        a stable client reports (`<v>` and `<v>+stable`); override only if
+        someone brings a differently-built client. Bump in lockstep with the
+        installer pin (nix/packages/zed-windows.nix) whenever nixpkgs moves.
+        Caveat: some client versions phone cloud.zed.dev for a metadata check
+        before looking at ~/.zed_server (upstream zed#53763); verify against
+        your client version on first connect.
       '';
     };
   };
@@ -206,74 +191,85 @@ in
       LANG = "en_US.UTF-8";
     };
 
-    programs.git = {
-      enable = true;
-      package = pkgs.gitMinimal; # full git is 385 MB of closure; this is 159
-      settings = {
-        user.name = cfg.git.userName;
-        user.email = cfg.git.userEmail;
-        init.defaultBranch = "main";
-        pull.rebase = true;
-        core.editor = "nvim";
-      };
-    };
+    # ── git: the binary and NOTHING else ──────────────────────────────────
+    # Deliberately no packaged ~/.config/git/config: it would be a store
+    # symlink, and `git config --global user.email` on the PVC would then
+    # try to write through it and fail. The neutral settings (defaultBranch,
+    # pager, delta) ship as /etc/gitconfig instead — from the repo layer in a
+    # pod, from environment.etc on WSL — and every user owns
+    # ~/.config/git/config as a real, durable, editable file. Identity in a
+    # pod comes from the workspace-name convention (airgap_user in
+    # airgap-common.sh), never from a baked email: this closure is
+    # distributed to a team.
+    home.packages = [ pkgs.gitMinimal ];
 
-    programs.delta = {
-      enable = true;
-      enableGitIntegration = true;
-    };
-    programs.lazygit.enable = true;
-
-    # ── opencode ──────────────────────────────────────────────────────────
-    # The preload plugin ships as a packaged default: it is OUR fix, not user
-    # config, and riding home-defaults means bootstrap keeps it fresh across
-    # images unless the user deliberately overrides it with a real file.
-    home.file.".config/opencode/plugins/airgap-preload.ts".source =
-      ../../agent/plugins/airgap-preload.ts;
-
-    # Editor integration. code-server (the pod's IDE) scans this dir, so a
-    # symlinked store path is enough. The user's own opencode.json is NOT
-    # packaged: the working config already lives on the PVC, and a real file
-    # there would shadow this anyway.
-    home.file.".local/share/code-server/extensions/sst-dev.opencode".source = opencodeVscode;
-    home.file.".local/share/vsix/sst-dev.opencode-0.0.13.vsix".source = opencodeVsix;
-
-    # Zed: agent integration through opencode's ACP mode. JSONC, so the
-    # comment survives. A packaged DEFAULT: bootstrap never clobbers a real
-    # settings.json on the PVC -- merge this block into yours by hand if you
-    # already have Zed configured.
-    home.file.".config/zed/settings.json".text = ''
-      // Packaged default from the airgap closure. Zed reads JSONC. If you keep
-      // your own settings.json (real file on the PVC), merge the
-      // agent_servers block into it -- this default will not overwrite it.
+    # All packaged defaults in one merge. Each entry is a per-file symlink:
+    # bootstrap links it into $HOME only when no real file is there, and the
+    # repo layer can override any single one per commit (overlayfs merges
+    # directories across layers).
+    home.file = lib.mkMerge [
+      # The preload plugin is OUR fix, not user config: riding home-defaults
+      # means bootstrap keeps it fresh across images unless the user
+      # deliberately overrides it with a real file.
       {
-        "agent_servers": {
-          "OpenCode": {
-            "type": "custom",
-            "command": "opencode",
-            "args": ["acp"]
-          }
-        }
+        ".config/opencode/plugins/airgap-preload.ts".source = ../../agent/plugins/airgap-preload.ts;
       }
-    '';
 
-    # Zed remote development, fully declared. The server binary ships under
-    # its nixpkgs name; when the connecting client's version is declared
-    # (airgap.zed.remoteClientVersion), a shim with the EXACT filename the
-    # client looks for execs it. Both are packaged defaults -- overridable,
-    # never fetched at runtime. The client version must be bumped in lockstep
-    # with the Windows Zed install (auto-update stays off, same as vscode).
-    home.file.".zed_server/${zedRemoteExecName}".source =
-      "${zedRemote}/bin/${zedRemoteExecName}";
-    home.file.".zed_server/zed-remote-server-stable-${cfg.zed.remoteClientVersion}" =
-      lib.mkIf (cfg.zed.remoteClientVersion != "") {
-        executable = true;
-        text = ''
-          #!/bin/sh
-          # Packaged default: the client requires this exact filename (its own
-          # version string) and only checks that "<file> version" exits 0.
-          exec "${zedRemote}/bin/${zedRemoteExecName}" "$@"
+      # Editor integration. code-server (the pod's IDE) scans this dir, so a
+      # symlinked store path is enough. The user's own opencode.json is NOT
+      # packaged: the working config already lives on the PVC, and a real
+      # file there would shadow this anyway.
+      {
+        ".local/share/code-server/extensions/sst-dev.opencode".source = opencodeVscode;
+        ".local/share/vsix/sst-dev.opencode-0.0.13.vsix".source = opencodeVsix;
+      }
+
+      # Zed: agent integration through opencode's ACP mode. JSONC, so the
+      # comment survives. bootstrap never clobbers a real settings.json on
+      # the PVC -- merge this block into yours by hand if you already have
+      # Zed configured.
+      {
+        ".config/zed/settings.json".text = ''
+          // Packaged default from the airgap closure. Zed reads JSONC. If you
+          // keep your own settings.json (real file on the PVC), merge the
+          // agent_servers block into it -- this default will not overwrite.
+          {
+            "agent_servers": {
+              "OpenCode": {
+                "type": "custom",
+                "command": "opencode",
+                "args": ["acp"]
+              }
+            }
+          }
         '';
-      };
+      }
+
+      # Zed remote development, fully declared. The server binary ships
+      # under its nixpkgs name; shims with the filenames a client looks for
+      # exec it. The default client version matches the nixpkgs release --
+      # the same release the shipped Windows installer (.#windows-kit) is
+      # pinned to -- so using the shipped installer means connecting needs
+      # zero manual steps. Packaged defaults: overridable, never fetched.
+      {
+        ".zed_server/${zedRemoteExecName}".source = "${zedRemote}/bin/${zedRemoteExecName}";
+      }
+      (lib.listToAttrs (map
+        (name: {
+          name = ".zed_server/${name}";
+          value = {
+            executable = true;
+            text = ''
+              #!/bin/sh
+              # Packaged default: the client requires this exact filename (its
+              # own version string) and only checks that "<file> version"
+              # exits 0 -- it never downloads.
+              exec "${zedRemote}/bin/${zedRemoteExecName}" "$@"
+            '';
+          };
+        })
+        zedClientShims)
+      )
+    ];
   };
 }

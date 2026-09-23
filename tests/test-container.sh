@@ -156,7 +156,9 @@ expect_ok "opencode preload plugin seeded" \
 expect_ok "zed agent_servers default seeded" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
 expect_ok "zed remote server shipped as a packaged default" \
-    run_ic bash -c 'f=$(echo /data/jensen/.zed_server/zed-remote-server-*); test -x "$f"'
+    run_ic bash -c 'ls /data/jensen/.zed_server | grep -q zed-remote-server'
+expect_ok "zed remote client-version shims shipped (both spellings)" \
+    run_ic bash -c 'f=/data/jensen/.zed_server/zed-remote-server-stable-*+stable; [ -x $f ] || [ -x /data/jensen/.zed_server/zed-remote-server-stable-1.17.2 ]'
 expect_ok "env injection: pip.conf wired" \
     run_ic bash -c 'test "$PIP_CONFIG_FILE" = /opt/airgap-env/pip.conf'
 expect_ok "env injection: CA bundle wired" \

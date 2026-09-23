@@ -213,11 +213,13 @@ fractioned pod can (see NOTES.md).
 
 ## Before the first transfer
 
-One value only you can supply:
-
-1. **`airgap.git.userEmail`** in `nix/modules/home.nix`. It is load-bearing
-   beyond git: its local part names your directory on the shared PVC, and it
-   sits above the hostname rule precisely because it is stable across sessions.
+Nothing personal is declared in the closure. Identity in a pod comes from the
+platform: the workspace name (`<username>-<whatever>-<n>-<n>` → first part =
+your PVC directory; `SESSION_USER` env overrides for usernames with a dash).
+Git identity is a real file on the durable home — one
+`git config --global user.email` per person, editable forever, owned by the
+user rather than by Nix (this toolchain is distributed to a team, and a baked
+email would file everyone's state into the owner's directory).
 
 No signing key, by decision: integrity is the content-addressed store hash for
 the binary cache (a damaged chunk fails on the path it damaged) and the
@@ -228,15 +230,17 @@ edit and says so when it runs.
 ## Zed remote, declared
 
 The remote-development server is built by the same `zed-editor` derivation and
-ships in the closure as a packaged default under `~/.zed_server/`. Zed's
-client looks for a file named after its **own** version string and only checks
-that it runs — so the one thing to declare is
-`airgap.zed.remoteClientVersion` in `nix/modules/home.nix` (copy the exact
-`zed --version` output from the Windows client). Nothing downloads, ever;
-bump the option in lockstep with the Windows Zed install (auto-update stays
-off, same as vscode-server). The client reaches the host over plain SSH on
-WSL, or over `scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`) into a
-pod.
+ships in the closure as packaged defaults under `~/.zed_server/`. Zed's client
+looks for a file named after its **own** version string and only checks that
+it runs — so the version match must come from the artifact, not a manual step:
+`.#windows-kit` ships a **Windows Zed installer pinned to the same upstream
+release** as the closure's zed-editor. Use the shipped installer and the
+versions match by construction; shims for both spellings a stable client
+reports (`1.17.2`, `1.17.2+stable`) are generated automatically. Keep Zed's
+auto-update OFF on Windows (the closure's server moves only when the pin in
+`nix/packages/windows-kit.nix` moves). The client reaches the host over plain
+SSH on WSL, or over `scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`)
+into a pod.
 
 ## Status
 

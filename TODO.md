@@ -90,19 +90,23 @@ Start a workspace, then:
       Verify the privsep-user / passwd self-registration held. Then point
       Zed at `ssh://<that host>` if you want Zed-remote.
 
-## 4. Zed remote — set the client version, that is all
+## 4. Zed remote — matched by construction, verify once
 
-The remote server ships in the closure (`zed-editor.remote_server`), placed in
-`~/.zed_server/` as a packaged default. Zed's client looks for a file named
-after its OWN version string, so:
+The remote server ships in the closure (`zed-editor.remote_server`) and the
+Windows installer pinned to the SAME upstream release ships in
+`.#windows-kit` — install the shipped installer and the versions match with
+no manual step (shims for both `<v>` and `<v>+stable` are generated).
 
-- [ ] On Windows, get the client's exact version string: `zed --version`.
-- [ ] Set `airgap.zed.remoteClientVersion` in `nix/modules/home.nix` to that
-      string (build metadata included) and rebuild — offline, seconds.
-- [ ] Rebuild the layer only when the closure changed (`nix build
-      .#runai-layer`); the WSL side just needs `nixos-rebuild switch`.
-- [ ] Update the option whenever the Windows Zed is updated (auto-update is
-      pinned off anyway, same as vscode-server).
+- [ ] On Windows, install the kit's `Zed-x86_64-*-setup.exe` and turn
+      auto-update OFF in Zed settings.
+- [ ] On first connect, if the client still wants cloud.zed.dev first
+      (upstream zed#53763), record it — the fix is the
+      `airgap.zed.remoteClientVersion` override in `nix/modules/home.nix`,
+      set to that client's exact `zed --version` string.
+- [ ] When nixpkgs bumps zed-editor: re-pin the installer
+      (`nix/packages/windows-kit.nix` — URL + `nix store prefetch-file`
+      hash) and rebuild; the shims move with `airgap.zed.remoteClientVersion`
+      (default = the nixpkgs version).
 
 ## 5. WSL (independent track, wsl/README.md)
 

@@ -10,18 +10,23 @@ ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
 # Who are we, for picking a per-user directory on the shared /code PVC?
-# Runtime user is `jensen` for everyone, and the workspace name is not stable,
-# so fall through a chain of increasingly desperate guesses. A wrong answer is
-# cosmetic (state lands in the wrong subdir), never destructive.
-# Probe findings: every runtime user is uid 10001/gid 0, so the OS knows nothing
-# about who you are. The hostname is `<workspace-name>-<n>-<n>`, which is the
-# only platform-provided signal -- but workspace names are not stable across
-# sessions, so a stable git identity is preferred when one exists.
+# The runtime user is a fixed generic name (e.g. `jensen`) for everyone, and
+# the toolchain is distributed to a whole team -- so identity must come from
+# something the PLATFORM gives per user, not from anything baked into the
+# image (a baked identity would file every teammate's state into one person's
+# directory).
+#
+# Probe findings: every runtime user is uid 10001/gid 0, so the OS knows
+# nothing about who you are. The hostname is `<workspace-name>-<n>-<n>`, and
+# workspace names follow a `<username>-<whatever>` convention -- that is the
+# per-user signal, and it is the default. Its instability (renamed workspaces)
+# and its dash-blindness (first dash-component only) are accepted, documented
+# tradeoffs; the explicit override is the escape hatch.
 #
 # `airgap-doctor` prints which rule fired, so a surprising answer is visible
 # rather than silently misfiling your state.
-# Sets SESSION_USER_RESOLVED and SESSION_USER_SOURCE as a side effect, so callers
-# that want the provenance can invoke it WITHOUT a subshell:
+# Sets SESSION_USER_RESOLVED and SESSION_USER_SOURCE as a side effect, so
+# callers that want the provenance can invoke it WITHOUT a subshell:
 #     airgap_user >/dev/null; echo "$SESSION_USER_RESOLVED via $SESSION_USER_SOURCE"
 # shellcheck disable=SC2034  # SESSION_USER_SOURCE is read by callers, not here
 airgap_user() {
@@ -30,34 +35,30 @@ airgap_user() {
         SESSION_USER_SOURCE="SESSION_USER"; SESSION_USER_RESOLVED="$SESSION_USER"
         printf '%s' "$SESSION_USER"; return
     fi
-    # --global is load-bearing, not decoration. A plain `git config --get`
-    # honours a per-REPOSITORY user.email, so the resolved identity -- and
-    # therefore $HOME -- would depend on which directory you happened to run
-    # from. Working in a repo with its own user.email would silently relocate
-    # your state to a different PVC directory, which is precisely the failure
-    # this chain exists to avoid.
-    #
-    # home-manager writes ~/.config/git/config, which git treats as global, so
-    # this reads exactly the value Nix set.
-    u="$(git config --global --get user.email 2>/dev/null || true)"
-    if [ -n "$u" ]; then
-        SESSION_USER_SOURCE="git user.email"; SESSION_USER_RESOLVED="${u%%@*}"
-        printf '%s' "${u%%@*}"; return
-    fi
-    # Hostname is `<workspace-name>-<n>-<n>`, and workspace names follow a
+    # Hostname is `<workspace-name>-<n>-<n>`; workspace names follow a
     # `<username>-<whatever>` convention -- so strip the pod/replica suffix,
-    # then take the leading component.
+    # then take the leading component. This is what keeps teammates' state in
+    # their own PVC directories without anyone configuring anything.
     #
-    # This is wrong for any username containing a dash. That is why it sits
-    # BELOW git user.email in the chain rather than above it, and why
-    # `airgap-doctor` prints which rule fired: a surprising answer should be
-    # visible, not silently misfile a session's history.
+    # It is wrong for any username containing a dash, and it changes if the
+    # workspace is renamed. Both are why the explicit override exists above
+    # and why `airgap-doctor` prints which rule fired: a surprising answer
+    # should be visible, not silently misfile a session's history.
     u="$(hostname 2>/dev/null || true)"
     u="$(printf '%s' "$u" | sed -E 's/(-[0-9]+)+$//')"
     if [ -n "$u" ] && [ "$u" != "$(hostname 2>/dev/null)" ]; then
         SESSION_USER_SOURCE="hostname (workspace <username>-<whatever>-<n>-<n>)"
         SESSION_USER_RESOLVED="${u%%-*}"
         printf '%s' "${u%%-*}"; return
+    fi
+    # Your own git identity, set once per user on the durable PVC with
+    # `git config --global user.email`. It sits BELOW the workspace rule so a
+    # later `git config` can never silently relocate an existing directory,
+    # and it only fires when the workspace name gave us nothing at all.
+    u="$(git config --global --get user.email 2>/dev/null || true)"
+    if [ -n "$u" ]; then
+        SESSION_USER_SOURCE="git user.email"; SESSION_USER_RESOLVED="${u%%@*}"
+        printf '%s' "${u%%@*}"; return
     fi
     SESSION_USER_SOURCE="USERNAME/USER fallback"
     SESSION_USER_RESOLVED="${USERNAME:-${USER:-unknown}}"

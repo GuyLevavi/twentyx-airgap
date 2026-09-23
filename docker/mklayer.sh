@@ -47,6 +47,35 @@ cat > "$STAGE/etc/sudoers.d/airgap" <<'EOF'
 EOF
 chmod 0440 "$STAGE/etc/sudoers" "$STAGE/etc/sudoers.d/airgap"
 
+# ── git: neutral settings, system scope ───────────────────────────────────
+# There is deliberately no packaged ~/.config/git/config in the Nix layer: it
+# would be a store symlink and `git config --global user.email` on the PVC
+# could then never write through it. Identity is per-user on the durable home;
+# these shared, identity-free defaults ship here and in nix/hosts/wsl.nix
+# (environment.etc) — keep the two in sync.
+mkdir -p "$STAGE/etc"
+cat > "$STAGE/etc/gitconfig" <<'EOF'
+# Managed by the airgap repo layer. Per-user identity belongs in the user's
+# own ~/.config/git/config (durable PVC), set once: git config --global.
+[init]
+	defaultBranch = main
+[pull]
+	rebase = true
+[pager]
+	diff = delta
+	log = delta
+	reflog = delta
+	show = delta
+[interactive]
+	diffFilter = delta --color-only
+[delta]
+	navigate = true
+	side-by-side = true
+	line-numbers = true
+[merge]
+	conflictstyle = diff3
+EOF
+
 # The setuid sudo binary. Nix strips setuid bits from build outputs, so the
 # copy is done here, outside Nix: pull it out of the Nix layer (its RPATH and
 # plugin paths are absolute store paths that exist at runtime) and set the bit

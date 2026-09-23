@@ -129,6 +129,15 @@
         # It runs as root because it assembles a filesystem image; it does not
         # touch the running system.
         wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
+
+        # ── the Windows-side half of the first transfer ───────────────────
+        # WSL2 MSI (Store-less Windows) + the Zed installer pinned to the
+        # same upstream release as the closure's zed-editor, so the remote
+        # client and server match by construction. See
+        # nix/packages/windows-kit.nix for the re-pin procedure.
+        windows-kit = (pkgs.callPackage ./nix/packages/windows-kit.nix {
+          zedVersion = pkgs.zed-editor.version;
+        }).kit;
       };
 
       devShells.${system}.default = pkgs.mkShell {
