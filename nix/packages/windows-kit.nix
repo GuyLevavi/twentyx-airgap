@@ -29,10 +29,27 @@ let
     hash = "sha256-WAuLmQBi9kfyxqAvsw/GrBA1DuXhRKVrqwPUGdWfN9Y=";
   };
 
+  # VS Code: the installer the team installs, and the Linux server tarball
+  # for the SAME release (its commit), which nix/hosts/wsl.nix pre-seeds into
+  # ~/.vscode-server -- Remote-SSH works on first connect with no Store and
+  # no network. Re-pin in lockstep when VS Code updates: bump the version,
+  # fetch both URLs, re-pin the hashes and the commit in wsl.nix.
+  vscodeVersion = "1.139.0";
+  vscodeCommit = "2242ebbb54efeeb0129e08e919e7e8d43033cd83";
+  vscodeInstaller = pkgs.fetchurl {
+    url = "https://update.code.visualstudio.com/${vscodeVersion}/win32-x64/stable";
+    hash = "sha256-+IXC5n1W8E26LVyp9Oc6fcsS3+p/1ByHNc9FHjIS5Tw=";
+  };
+  vscodeServerTar = pkgs.fetchurl {
+    url = "https://update.code.visualstudio.com/commit:${vscodeCommit}/server-linux-x64/stable";
+    hash = "sha256-PBn/HVMPX9GLJwj4A/Iz3gTIFI6tQeJbednkvQHRonw=";
+  };
+
   kit = pkgs.runCommand "windows-kit-${zedVersion}" { } ''
     mkdir $out
     ln -s ${zedInstaller} $out/Zed-x86_64-${zedVersion}-setup.exe
     ln -s ${wslMsi} $out/wsl.2.9.12.0.x64.msi
+    ln -s ${vscodeInstaller} $out/VSCodeSetup-x64-${vscodeVersion}.exe
     cat > $out/README.txt <<'EOF'
     Windows-side artifacts for the airgap (build once on a connected machine,
     carry with the transfer). Nothing here runs on Linux.
@@ -42,6 +59,11 @@ let
                                closure. Install it, and in Zed settings set
                                "auto_update": false -- the remote server in
                                the images moves only when this pin moves.
+
+      VSCodeSetup-x64-*.exe    VS Code for Windows, pinned to the release the
+                               WSL machine pre-seeds its vscode-server for
+                               (same version + commit). Set
+                               "update.mode": "none" in VS Code settings.
 
       wsl.*.x64.msi            WSL2 itself, for Windows boxes with no Store
                                and no internet. Setup order: the two DISM
@@ -56,5 +78,11 @@ let
   '';
 in
 {
-  inherit zedInstaller wslMsi kit;
+  inherit
+    zedInstaller
+    wslMsi
+    vscodeInstaller
+    vscodeServerTar
+    kit
+    ;
 }

@@ -233,36 +233,55 @@ in
       # /etc/nixos zed.nix. bootstrap never clobbers a real settings.json on
       # the PVC -- merge this block into yours by hand if you already have
       # Zed configured.
-      {
-        ".config/zed/settings.json".text = ''
-          // Packaged default from the airgap closure. Zed reads JSONC. If you
-          // keep your own settings.json (real file on the PVC), merge the
-          // agent_servers and languages blocks into it -- this default will
-          // not overwrite.
-          {
-            "agent_servers": {
-              "OpenCode": {
-                "type": "custom",
-                "command": "opencode",
-                "args": ["acp"]
-              }
-            },
-            "languages": {
-              "Nix": {
-                "language_servers": ["nixd", "!nil"]
-              },
-              "Python": {
-                "language_servers": ["basedpyright", "!pyright", "ruff"],
-                "formatter": { "language_server": { "name": "ruff" } }
-              }
-            },
-            "telemetry": {
-              "metrics": false,
-              "diagnostics": false
-            }
-          }
-        '';
-      }
+      #
+      # PER-MACHINE personal config: a gitignored `zed-settings.json` next to
+      # the flake (same pattern as wsl-username / ca-bundle.crt) replaces
+      # this packaged default entirely -- one team member's fonts/themes do
+      # not ship to everyone. The airgap blocks below (languages wiring,
+      # telemetry off) are safe to lose only on a machine that carries the
+      # personal file deliberately; pods read the same packaged default, so
+      # a builder's personal file leaks into the layer only where the file
+      # exists. On a pod, the durable per-user route is a real
+      # settings.json on the PVC -- it shadows this default forever.
+      (
+        let
+          zedSettingsFile = ../../zed-settings.json;
+        in
+        {
+          ".config/zed/settings.json".text =
+            if builtins.pathExists zedSettingsFile
+            then builtins.readFile zedSettingsFile
+            else
+              ''
+                // Packaged default from the airgap closure. Zed reads JSONC. If
+                // you keep your own settings.json (real file on the PVC), merge
+                // the agent_servers and languages blocks into it -- this
+                // default will not overwrite.
+                {
+                  "agent_servers": {
+                    "OpenCode": {
+                      "type": "custom",
+                      "command": "opencode",
+                      "args": ["acp"]
+                    }
+                  },
+                  "languages": {
+                    "Nix": {
+                      "language_servers": ["nixd", "!nil"]
+                    },
+                    "Python": {
+                      "language_servers": ["basedpyright", "!pyright", "ruff"],
+                      "formatter": { "language_server": { "name": "ruff" } }
+                    }
+                  },
+                  "telemetry": {
+                    "metrics": false,
+                    "diagnostics": false
+                  }
+                }
+              '';
+        }
+      )
 
       # Zed remote development, fully declared. The server binary ships
       # under its nixpkgs name; shims with the filenames a client looks for

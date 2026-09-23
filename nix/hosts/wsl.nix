@@ -29,6 +29,17 @@ let
   # the transfer (wsl/README.md), presence is detected like cache-pubkey.
   caBundle = ../../ca-bundle.crt;
   haveCaBundle = builtins.pathExists caBundle;
+
+  # In the airgap the server tarball cannot be downloaded, so it is pre-seeded
+  # from the pinned kit (nix/packages/windows-kit.nix): the SAME release and
+  # commit as the VS Code installer the team installs, so Remote-SSH works on
+  # first connect. An activation script extracts it once, into the user's
+  # home, only when absent -- a real ~/.vscode-server dir is never clobbered
+  # (the $HOME layering rule).
+  windowsKit = pkgs.callPackage ../packages/windows-kit.nix {
+    zedVersion = pkgs.zed-editor.version;
+  };
+  vscodeCommit = "2242ebbb54efeeb0129e08e919e7e8d43033cd83"; # VS Code 1.139.0; keep in sync with windows-kit.nix
 in
 {
   wsl = {
@@ -102,10 +113,16 @@ in
     openssl
   ];
 
-  # In the airgap the server tarball cannot be downloaded, so it must be
-  # pre-seeded at ~/.vscode-server/bin/<commit>/ for the EXACT commit of the
-  # Windows VS Code build (`code --version`, second line). Pin VS Code's
-  # auto-update off on the Windows side or this breaks on every update.
+  system.activationScripts.vscodeServerSeed = lib.stringAfter [ "users" ] ''
+    commit="${vscodeCommit}"
+    home="/home/${username}"
+    seed="$home/.vscode-server/bin/$commit"
+    if [ ! -d "$seed" ]; then
+        mkdir -p "$seed"
+        tar -xzf "${windowsKit.vscodeServerTar}" -C "$seed" --strip-components=1
+        chown -R ${username}:users "$home/.vscode-server"
+    fi
+  '';
 
   virtualisation.podman = {
     enable = true;
