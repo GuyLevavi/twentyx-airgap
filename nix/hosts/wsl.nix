@@ -137,10 +137,11 @@ in
     seed="$home/.vscode-server/bin/$commit"
     if [ ! -d "$seed" ]; then
         mkdir -p "$seed"
-        # Absolute tar: the activation environment has no tar on PATH (the
-        # seed ran as a bare command name once and failed with 127 in the
-        # nixos-install chroot AND at boot).
-        ${pkgs.gnutar}/bin/tar -xzf "${windowsKit.vscodeServerTar}" -C "$seed" --strip-components=1
+        # Absolute paths for BOTH tar and gzip: the activation environment
+        # has neither on PATH, and tar -z execs `gzip` by NAME (bare tar once
+        # failed with 127, then bare -z failed with "gzip: Cannot exec").
+        ${pkgs.gzip}/bin/gzip -dc "${windowsKit.vscodeServerTar}" \
+            | ${pkgs.gnutar}/bin/tar -x -C "$seed" --strip-components=1
         chown -R ${username}:users "$home/.vscode-server"
     fi
   '';

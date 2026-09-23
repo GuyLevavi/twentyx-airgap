@@ -98,14 +98,15 @@ fi
 # ── 5. sidecars for everything that is not covered yet ───────────────────
 say "sha256 sidecars"
 cd "$OUT"
-for f in nixos-wsl.tar.gz windows-kit/*; do
-    [ -f "$f" ] || continue
-    case "$f" in *.sha256|*.txt) continue ;; esac
-    [ -f "$f.sha256" ] || sha256sum "$(basename "$f")" > "$f.sha256"
-done
-# the layers' sidecars already exist from build-layers.sh; refresh all as a set
-sha256sum nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar > CHECKSUMS.sha256 2>/dev/null || true
+[ -f nixos-wsl.tar.gz ] && [ ! -f nixos-wsl.tar.gz.sha256 ] && \
+    sha256sum nixos-wsl.tar.gz > nixos-wsl.tar.gz.sha256
+# the layers' sidecars come from build-layers.sh; the kit's own dir for the
+# installer files (sha256sum must run inside the dir — basenames break it)
+(
+    cd windows-kit 2>/dev/null || exit 0
+    [ -f CHECKSUMS.sha256 ] || sha256sum VSCodeSetup-* wsl.*.msi Zed-*-setup.exe > CHECKSUMS.sha256
+)
+echo "verify any time, from any directory:  cd $OUT && sha256sum -c ./*.sha256"
 
 say "bundle contents:"
 du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz windows-kit 2>/dev/null | sort -k2
-echo "verify any time, from any directory:  cd $OUT && sha256sum -c ./*.sha256"
