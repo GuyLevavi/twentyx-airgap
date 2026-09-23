@@ -133,7 +133,7 @@ Carry, in one go:
 | `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
 | `nix-export.sh` chunks | ~1 GB | WSL binary cache |
 | `nixos-wsl.tar.gz` (first time only) | ~948 MB | `wsl --import` |
-| `.#windows-kit` result | ~250 MB | Windows machines: Zed installer (release-matched with the closure) + WSL2 MSI |
+| `.#windows-kit` result | ~125 MB | Windows machines: Zed installer (release-matched with the closure) + WSL2 MSI |
 
 Any file >2.5 GB cap is already sharded by the exporter.
 
