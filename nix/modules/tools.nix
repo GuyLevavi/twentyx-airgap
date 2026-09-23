@@ -197,11 +197,14 @@ in
       visidata
     ]
     ++ lib.optionals wsl [
-      # ── GUI editor ─────────────────────────────────────────────────────
-      # The pod gets zed's remote_server output instead (see home.nix) — the
-      # full GUI drags nodejs, gstreamer and wayland into the layer for a
-      # binary that can never open a display there.
-      zed-editor
+      # ── GUI editor: REMOVED (2026-09, measured) ────────────────────────
+      # zed-editor used to be here for WSLg. But the airgap WSL machine is
+      # edited from the Windows Zed client (remote_server, shipped in
+      # home.nix for BOTH targets), from VS Code Remote-SSH and from nvim —
+      # the local GUI only ever added zed's own binary (~410 MB), mesa
+      # (~272 MB) and livekit-webrtc (~198 MB) to the SYSTEM closure, which
+      # is what pushed the WSL tarball over the transfer cap. Re-adding is a
+      # deliberate closure decision, not a tweak.
 
       # ── Nix development, now that the config is Nix ────────────────────
       # Pointless in a pod: there is no Nix there to inspect.
@@ -211,29 +214,30 @@ in
       deadnix
       nix-tree # how you will answer "why is this closure 700 MB"
 
-      # clangd for C/C++. ~700 MB of closure — the one LSP deliberately kept
-      # out of the pod layer; pods pay for the LSPs of the languages they
-      # actually edit, and the pod layer stays under a gigabyte.
-      clang-tools
-
       # Obsidian-style markdown LSP (wikilinks, backlinks, daily notes) for
       # the vault. Zed's extension resolves the binary from PATH first, so
       # this nix build is what actually runs. Vault lives on the laptop.
       markdown-oxide
+
+      # Deliberately ABSENT, measured against the tarball (6.6 GiB system
+      # closure, 2026-09): clang-tools (clangd) alone is ~1.4 GB of unpacked
+      # closure — C/C++ editing loses its LSP in the airgap until someone
+      # deliberately re-adds it AND re-exports the cache; python3.11 is gone
+      # (uv builds pinned 3.11 venvs without a system 3.11); and zed stays
+      # remote-only on WSL like in the pod — the GUI dragged mesa (272 MB),
+      # livekit-webrtc (198 MB) and the GUI binary (~410 MB) into the system
+      # for an editor that is reached from the Windows client anyway. The
+      # remote server still ships via home.nix, both targets.
     ]
     ++ lib.optionals cfg.python.enable [
       # WSL only. See airgap.python.enable — on the *-pytorch bases the system
       # interpreter owns torch and CUDA, and a Nix python there would shadow it
       # while being unable to see any of it.
       #
-      # python310 is gone from nixpkgs (past EOL, removed upstream); 3.11 and
-      # 3.12 are what remain of what you asked for.
-      # Two interpreters cannot both own `python3` and `lib/libpython3.so` in
-      # one profile, so the older one is lowPrio: buildEnv then resolves every
-      # conflicting file in favour of 3.12, while `python3.11` stays on PATH
-      # under its versioned name for `uv venv --python 3.11`.
+      # One interpreter: python3.12 (uv builds pinned 3.11 venvs by itself,
+      # and the second interpreter was 113 MB of closure for nothing — it
+      # cannot own `python3` in the same profile anyway).
       python312
-      (lib.lowPrio python311)
       uv
       ruff
     ];

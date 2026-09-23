@@ -51,8 +51,6 @@ in
     interop.register = true;
   };
 
-  networking.hostName = "airgap-wsl";
-  time.timeZone = "Asia/Jerusalem";
   i18n.defaultLocale = "en_US.UTF-8";
 
   # ── Offline substitution ────────────────────────────────────────────────
@@ -80,8 +78,28 @@ in
     auto-optimise-store = true;
   };
   # Never try the public cache; the DNS lookup cannot succeed and every
-  # operation would stall on it first.
+  # operation would stall on it first. This also keeps the <nixpkgs> channel
+  # out — it used to symlink the ENTIRE nixpkgs source tree (482 MB) into the
+  # system closure, dead weight on a machine whose source of truth is this
+  # flake. (hostName/timeZone live right above; do not lose them.)
   nix.channel.enable = false;
+
+  networking.hostName = "airgap-wsl";
+  time.timeZone = "Asia/Jerusalem";
+
+  # Headless by design: the editors run on Windows (Zed client, VS Code) or
+  # in a terminal (nvim). `hardware.graphics.enable` defaults to true on this
+  # NixOS and drags mesa (~272 MB) plus llvm-lib (~540 MB) into the closure
+  # via /etc/tmpfiles.d/graphics-driver.conf — measured dead weight here.
+  # If a GUI app is ever wanted natively on WSLg, re-enable deliberately.
+  # If a GUI app is ever wanted natively on WSLg, re-enable deliberately.
+  # mkForce: the NixOS-WSL module sets it true for graphics support.
+  hardware.graphics.enable = lib.mkForce false;
+
+  # The default global Nix registry pins <nixpkgs> to its source tree
+  # (187 MB via /etc/nix/registry.json) — and `nixpkgs#` lookups are not a
+  # thing this machine needs: it rebuilds from this flake.
+  nix.registry = lib.mkForce { };
 
   # GC on a machine where re-downloading is a physical transfer: keep more
   # history than a connected box would, because a mistaken collection is
