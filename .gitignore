@@ -12,3 +12,7 @@ node_modules/
 # and falls back to require-sigs = false when it is absent.
 cache-pubkey
 ca-bundle.crt
+
+# Per-machine WSL username (one word): each team member sets their own before
+# building their tarball. See the username block in flake.nix.
+wsl-username

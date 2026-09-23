@@ -15,13 +15,16 @@ let
   # path, fetched here on the connected machine and carried across like
   # everything else. This is the shape the old manifest.toml was reaching for,
   # except Nix pins the hash and puts it in the closure automatically.
-  tldrPages = pkgs.fetchzip {
-    # Hash re-pinned 2026-09: the v2.3 release asset was re-uploaded upstream,
-    # so the old pin no longer matches what GitHub serves. Content is still
-    # the tldr pages; the closure pins whatever this hash describes.
-    url = "https://github.com/tldr-pages/tldr/releases/download/v2.3/tldr-pages.en.zip";
-    hash = "sha256-EKNWCMVrbWTIdrXLnzDuqbyLawp/0uNKggiyeG2GZSA=";
-    stripRoot = false;
+  #
+  # A git-tree pin, not the release zip: upstream re-uploaded the v2.3 release
+  # asset twice, breaking the hash both times. A commit rev is immutable --
+  # this class of fetch can never bite again. To refresh pages, bump the rev
+  # and re-pin the hash with the `got:` value the build prints.
+  tldrPages = pkgs.fetchFromGitHub {
+    owner = "tldr-pages";
+    repo = "tldr";
+    rev = "e1ba0d7ec4a37e2b04c4b67256d0e27ea21b6b35";
+    hash = "sha256-ThQPnY8Tmx+tZwIJ9crHtq59NoTBjS067SyKWV41K/g=";
   };
 
   # tealdeer looks for `<cache_dir>/tldr-pages/pages.<lang>/<platform>/`.
@@ -141,6 +144,22 @@ in
       sqlite # atuin's own store, plus general use
       jless
 
+      # ── language servers: declared, not downloaded ─────────────────────
+      # One LSP set, consumed by BOTH editors: nvim natively (vim.lsp.config
+      # from PATH, nix/modules/nvim.nix) and Zed via PATH discovery — the
+      # same shape the /etc/nixos zed.nix extraPackages block uses. In the
+      # airgap this is the difference between editors that work and editors
+      # that hang trying to download a server at runtime. Keep this list in
+      # sync with nvim.nix's lspServers.
+      basedpyright
+      ruff
+      nixd
+      nixfmt
+      bash-language-server
+      yaml-language-server
+      taplo # pyproject.toml, and anything else TOML you touch
+      package-version-server # TOML package-version hover
+
       # ── archives / transfer ────────────────────────────────────────────
       rsync
       zstd
@@ -232,11 +251,21 @@ in
 
       # ── Nix development, now that the config is Nix ────────────────────
       # Pointless in a pod: there is no Nix there to inspect.
-      nixd
-      nixfmt
+      # (nixd/nixfmt are NOT here — they are LSP-level tools and live in the
+      # shared LSP group above, where Zed in a pod also finds them.)
       statix
       deadnix
       nix-tree # how you will answer "why is this closure 700 MB"
+
+      # clangd for C/C++. ~700 MB of closure — the one LSP deliberately kept
+      # out of the pod layer; pods pay for the LSPs of the languages they
+      # actually edit, and the pod layer stays under a gigabyte.
+      clang-tools
+
+      # Obsidian-style markdown LSP (wikilinks, backlinks, daily notes) for
+      # the vault. Zed's extension resolves the binary from PATH first, so
+      # this nix build is what actually runs. Vault lives on the laptop.
+      markdown-oxide
     ]
     ++ lib.optionals cfg.python.enable [
       # WSL only. See airgap.python.enable — on the *-pytorch bases the system

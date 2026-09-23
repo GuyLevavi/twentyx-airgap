@@ -9,7 +9,6 @@
   lib,
   pkgs,
   config,
-  inputs,
   ...
 }:
 let
@@ -50,21 +49,23 @@ let
   # client looks under ~/.zed_server/ for a file named after its OWN version
   # string and only checks that it runs -- no download, ever.
   zedRemote = pkgs.zed-editor.remote_server;
-  zedRemoteExecName = pkgs.zed-editor.remoteServerExecutableName or
-    "zed-remote-server-stable-${pkgs.zed-editor.version}+stable";
+  zedRemoteExecName =
+    pkgs.zed-editor.remoteServerExecutableName
+      or "zed-remote-server-stable-${pkgs.zed-editor.version}+stable";
 
   # The nixpkgs-named server binary already covers one spelling; ship the
   # other spellings as shims only when they differ from it.
-  zedClientShims = builtins.filter (n: n != zedRemoteExecName) (lib.unique [
-    "zed-remote-server-stable-${cfg.zed.remoteClientVersion}"
-    "zed-remote-server-stable-${cfg.zed.remoteClientVersion}+stable"
-  ]);
+  zedClientShims = builtins.filter (n: n != zedRemoteExecName) (
+    lib.unique [
+      "zed-remote-server-stable-${cfg.zed.remoteClientVersion}"
+      "zed-remote-server-stable-${cfg.zed.remoteClientVersion}+stable"
+    ]
+  );
 in
-  {
+{
   imports = [
     # Always imported; nvim.nix gates it on airgap.nvim.enable, because
     # `imports` cannot depend on config without infinite recursion.
-    inputs.lazyvim.homeManagerModules.default
     ./shell.nix
     ./tools.nix
     ./nvim.nix
@@ -224,15 +225,20 @@ in
         ".local/share/vsix/sst-dev.opencode-0.0.13.vsix".source = opencodeVsix;
       }
 
-      # Zed: agent integration through opencode's ACP mode. JSONC, so the
-      # comment survives. bootstrap never clobbers a real settings.json on
+      # Zed: agent integration through opencode's ACP mode, plus the
+      # language-server wiring that keeps the airgap honest: without the
+      # per-language overrides Zed tries to download its own LSP binaries at
+      # runtime, which hangs forever behind the gap. The PATH-resolved
+      # servers ship in the closure (tools.nix LSP group), exactly as in the
+      # /etc/nixos zed.nix. bootstrap never clobbers a real settings.json on
       # the PVC -- merge this block into yours by hand if you already have
       # Zed configured.
       {
         ".config/zed/settings.json".text = ''
           // Packaged default from the airgap closure. Zed reads JSONC. If you
           // keep your own settings.json (real file on the PVC), merge the
-          // agent_servers block into it -- this default will not overwrite.
+          // agent_servers and languages blocks into it -- this default will
+          // not overwrite.
           {
             "agent_servers": {
               "OpenCode": {
@@ -240,6 +246,19 @@ in
                 "command": "opencode",
                 "args": ["acp"]
               }
+            },
+            "languages": {
+              "Nix": {
+                "language_servers": ["nixd", "!nil"]
+              },
+              "Python": {
+                "language_servers": ["basedpyright", "!pyright", "ruff"],
+                "formatter": { "language_server": { "name": "ruff" } }
+              }
+            },
+            "telemetry": {
+              "metrics": false,
+              "diagnostics": false
             }
           }
         '';
@@ -254,8 +273,8 @@ in
       {
         ".zed_server/${zedRemoteExecName}".source = "${zedRemote}/bin/${zedRemoteExecName}";
       }
-      (lib.listToAttrs (map
-        (name: {
+      (lib.listToAttrs (
+        map (name: {
           name = ".zed_server/${name}";
           value = {
             executable = true;
@@ -267,9 +286,8 @@ in
               exec "${zedRemote}/bin/${zedRemoteExecName}" "$@"
             '';
           };
-        })
-        zedClientShims)
-      )
+        }) zedClientShims
+      ))
     ];
   };
 }

@@ -30,7 +30,7 @@ tells you what that costs before you carry it anywhere.
 |---|---|
 | WSL bootstrap, one file | **948 MB** (4.3 GiB system + flake inputs, xz) |
 | `nix-layer.tar.gz` | ~740 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
-| `nix-layer-nvim.tar.gz` | ~950 MB |
+| `nix-layer-nvim.tar.gz` | ~880 MB |
 | `repo-layer.tar` | ~80 KB |
 
 The whole airgapped NixOS-WSL fits in a single transfer under a 2.5GB per-file

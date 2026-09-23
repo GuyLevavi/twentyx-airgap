@@ -186,8 +186,8 @@ management, not the binary.
 
 ## 5. First transfer should be deliberately small
 
-Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~740 MB) and
-skip `-nvim` (~950 MB). `assemble.sh` detects the missing nvim tarball and builds one flavor.
+Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~847 MB) and
+skip `-nvim` (~880 MB). `assemble.sh` detects the missing nvim tarball and builds one flavor.
 
 That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things
 that can only fail against real internal bases: `PATH` prepending on a pytorch base and

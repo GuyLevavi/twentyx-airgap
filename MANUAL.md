@@ -52,9 +52,12 @@ your Nix store, your configs) booted in a lightweight VM that Windows manages.
 Files are shared both ways (`/mnt/c` from Linux, `\\wsl$\twentyx` from
 Windows). It is a real NixOS machine — rebuilds, systemd, everything.
 
-**One-time build on the connected machine (Linux):**
+**One-time build on the connected machine (Linux):** — per team member, since
+each imports their own tarball. Set the WSL username first (a per-machine,
+gitignored one-liner, not a closure value):
 
 ```bash
+echo <your-name> > wsl-username                # only if you are not the default
 nix build .#wsl-tarball                        # ~948 MB, one file
 sudo ./result/bin/nixos-wsl-tarball-builder    # writes dist/nixos-wsl.tar.gz
 ```
@@ -114,7 +117,7 @@ the right one (it matches the cluster's server version).
 
 ```bash
 ./scripts/build-layers.sh            # dist/nix-layer.tar.gz[.nvim] + repo-layer.tar
-./scripts/build-layers.sh plain      # first transfer: deliberately small (~740 MB)
+./scripts/build-layers.sh plain      # first transfer: deliberately small (~847 MB)
 ```
 
 Verify each artifact's `.sha256` sidecar — from any directory:
@@ -129,7 +132,7 @@ Carry, in one go:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/nix-layer.tar.gz` (+`-nvim` optional) | ~740 / ~950 MB | Artifactory → CI `crane append` |
+| `dist/nix-layer.tar.gz` (+`-nvim` optional) | ~847 / ~880 MB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
 | `nix-export.sh` chunks | ~1 GB | WSL binary cache |
 | `nixos-wsl.tar.gz` (first time only) | ~948 MB | `wsl --import` |
@@ -171,7 +174,7 @@ sudo podman images                                    # rootful podman, vfs prew
 Editors: `code-server` is in the closure and wins over the base's copy;
 a `vscode-*` workspace starts it via the base ENTRYPOINT. Zed remote connects
 through `scripts/ssh-bridge.sh` (WSL side) — see README "Zed remote, declared".
-The `-nvim` flavor adds LazyVim (~950 MB layer); plain ships `nano` as `EDITOR`.
+The `-nvim` flavor adds pure nvim + treesitter (~880 MB layer — LazyVim is gone; its LSPs moved to the shared Nix-declared set that Zed also reads); plain ships `nano` as `EDITOR`.
 
 ## 7. Updating later
 

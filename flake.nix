@@ -25,11 +25,6 @@
     # No `follows`: this flake declares no nixpkgs input, and overriding a
     # non-existent one is a warning on every single evaluation.
     vscode-server.url = "github:nix-community/nixos-vscode-server";
-
-    lazyvim = {
-      url = "github:pfassina/lazyvim-nix/v16.0.0";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
@@ -48,9 +43,21 @@
         config.allowUnfree = true;
       };
 
-      # The username differs per target: `gl` in WSL, resolved at runtime from
-      # the RunAI workspace name in a pod. Only the WSL side needs it at eval.
-      username = "gl";
+      # The WSL username is PER MACHINE, by design: the toolchain is
+      # distributed to a team, each member importing their own tarball under
+      # their own Windows user. It is a cheap config line, not a closure
+      # decision: put the username (one word) in a gitignored file next to
+      # the flake and it takes precedence -- `echo alice > wsl-username`,
+      # then `nix build .#wsl-tarball`. No file means the owner's default.
+      # The pod side never sees this: in a RunAI pod the identity is
+      # resolved at runtime from the workspace name (see airgap_user).
+      username =
+        let
+          f = ./wsl-username;
+        in
+        if builtins.pathExists f
+        then builtins.replaceStrings [ "\n" "\r" ] [ "" "" ] (builtins.readFile f)
+        else "gl";
 
       mkRunai =
         { nvim }:
@@ -135,9 +142,10 @@
         # same upstream release as the closure's zed-editor, so the remote
         # client and server match by construction. See
         # nix/packages/windows-kit.nix for the re-pin procedure.
-        windows-kit = (pkgs.callPackage ./nix/packages/windows-kit.nix {
-          zedVersion = pkgs.zed-editor.version;
-        }).kit;
+        windows-kit =
+          (pkgs.callPackage ./nix/packages/windows-kit.nix {
+            zedVersion = pkgs.zed-editor.version;
+          }).kit;
       };
 
       devShells.${system}.default = pkgs.mkShell {
