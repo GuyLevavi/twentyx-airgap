@@ -42,7 +42,7 @@ Also build the Windows-side kit while connected — it is what makes the
 Windows half of the gap turnkey:
 
 ```bash
-nix build .#windows-kit       # Zed installer (release-matched) + WSL2 MSI
+nix build .#windows-kit       # one tar.gz: Zed (release-matched), VS Code, WSL2 MSI
 ```
 
 ## 1. The WSL machine (NixOS inside the gap)
@@ -136,7 +136,7 @@ Carry, in one go:
 | `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
 | `nix-export.sh` chunks | ~1 GB | WSL binary cache |
 | `nixos-wsl.tar.gz` (first time only) | ~4.3 GB | `wsl --import` |
-| `.#windows-kit` result | ~125 MB | Windows machines: Zed installer (release-matched with the closure) + WSL2 MSI |
+| `.#windows-kit` result | ~660 MB | Windows machines: one tar.gz — Zed installer (release-matched with the closure), VS Code installer, WSL2 MSI. Ships as a single archive so no bare `.exe`/`.msi` crosses the gap; Windows extracts it with its built-in `tar.exe` |
 
 The WSL bootstrap is one ~4.3 GB file; the binary-cache exporter shards by
 default if the cache chunks ever exceed a per-file cap.

@@ -254,6 +254,7 @@ in
       gnutar
       pigz
       config.nix.package
+      nixos-install-tools
     ];
     text = ''
       out="nixos.wsl"
@@ -264,7 +265,15 @@ in
       [ "$#" -eq 1 ] && out="$1"
 
       root=$(mktemp -d)
-      trap 'rm -rf "$root"' EXIT
+      # Every command guarded: under errexit, an unguarded failure inside
+      # the EXIT trap aborts the remaining commands — an unguarded umount
+      # (host submounts inside the rbinds return nonzero) left a 4.6 GB
+      # tempdir behind after a successful tar (measured).
+      # chmod first: the copied store paths carry the store's read-only
+      # modes (r--r--r--), and plain rm cannot descend into those dirs —
+      # measured leaving a 4.6 GB /tmp tempdir behind and failing the run
+      # with rc=65 after a successful tar.
+      trap 'umount -R "$root/dev" "$root/sys" "$root/proc" 2>/dev/null || true; chmod -R u+w "$root" 2>/dev/null || true; rm -rf "$root" 2>/dev/null || true' EXIT
 
       # Every nix invocation against the chroot store must run with an empty
       # build-users-group: the default ("nixbld") makes the LocalStore init
@@ -296,6 +305,52 @@ in
       ln -sfn ${config.system.build.toplevel} "$root/nix/var/nix/profiles/system"
       touch "$root/etc/NIXOS"
 
+      # Run the system activation against the tarball root — the step the
+      # upstream builder got for free from nixos-install. This populates
+      # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
+      # shim), users and the vscode-server pre-seed. Without it the
+      # imported distro fails with "getpwuid(0) failed" and "execvpe
+      # (/bin/sh) failed" — measured. nixos-enter mounts only /dev /sys
+      # /proc and uses the chroot's own store; it self-namespaces so no
+      # bind leaks into the tar.
+      echo "[NixOS-WSL] Running the system activation..."
+      ln -sfn /proc/mounts "$root/etc/mtab"
+      # Run the system activation against the tarball root — the step the
+      # upstream builder got for free from nixos-install. This populates
+      # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
+      # shim), users and the vscode-server pre-seed. Without it the
+      # imported distro fails with "getpwuid(0) failed" and "execvpe
+      # (/bin/sh) failed" — measured. The bind mounts cover the specialfs
+      # snippet, whose own mounts fail in a user namespace (devpts gid,
+      # sysfs type) and are non-fatal: the activation continues and
+      # everything that matters lands in the root. The
+      # /nix/users-chown-to-unmapped-gid failures (specialfs, /etc/shadow)
+      # are corrected by tar --owner=0 at packaging time.
+      # switch-to-configuration was tried first — it is an ELF binary now
+      # and defers all work to actual boot; the direct activate script is
+      # what populates the tree.
+      echo "[NixOS-WSL] Running the system activation..."
+      ln -sfn /proc/mounts "$root/etc/mtab"
+      # These are the steps nixos-enter performs, in our existing mount
+      # namespace (its own nested re-exec cannot mount /proc here).
+      mount --make-rprivate /
+      mkdir -p "$root/dev" "$root/sys" "$root/proc"
+      mount --rbind /dev "$root/dev"
+      mount --rbind /sys "$root/sys"
+      mount --rbind /proc "$root/proc"
+      # || true: inside the namespace the activation *reports* failures —
+      # the specialfs mounts (devpts gid), the /etc/shadow chown (unmapped
+      # gid) and the seed's chown to the unmapped uid — but every file
+      # still lands, and tar --owner=0 stamps the final ownership into the
+      # archive. A nonzero activation here is expected; aborting on it
+      # would ship an unpopulated root (rc=64, no /etc/passwd — measured).
+      chroot "$root" /nix/var/nix/profiles/system/activate || true
+      # Best effort: the rbind'd trees hold host submounts (hugepages, fuse
+      # connections, module sysfs) that plain `umount -R` cannot fully
+      # unwind from here. Anything left over dies with the namespace, and
+      # the tar step above excludes /dev /sys /proc entirely.
+      umount -R "$root/dev" "$root/sys" "$root/proc" 2>/dev/null || true
+
       echo "[NixOS-WSL] Adding wsl-distribution.conf"
       install -Dm644 ${wslDistroConf} "$root/etc/wsl-distribution.conf"
       install -Dm644 ${inputs.nixos-wsl}/assets/NixOS-WSL.ico "$root/etc/nixos.ico"
@@ -304,8 +359,14 @@ in
       install -Dm644 ${defaultNixosConfig} "$root/etc/nixos/configuration.nix"
 
       echo "[NixOS-WSL] Compressing..."
-      tar -C "$root" -c --sort=name --mtime='@1' --numeric-owner --owner=0 --group=0 --hard-dereference . \
-        | pigz > "$out"
+      # /dev /sys /proc are bind-mounted host trees during the activation
+      # step — runtime mounts, not distro content (WSL mounts its own /dev
+      # and /proc at import). Excluding keeps live sysfs state (which tar
+      # reads with "file shrank" warnings) out of the archive.
+      tar -C "$root" -c --sort=name --mtime='@1' --numeric-owner --owner=0 --group=0 \
+        --hard-dereference \
+        --exclude=./dev --exclude=./sys --exclude=./proc \
+        . | pigz > "$out"
     '';
   });
 

@@ -76,6 +76,20 @@ let
        .#wsl-tarball -- see MANUAL.md section 1)
     EOF
   '';
+  # The kit as ONE archive: no bare .exe/.msi ever crosses the gap in a
+  # transfer or an email attachment — Windows 10/11 ships tar.exe (bsdtar),
+  # so extraction needs nothing installed:
+  #     tar -xf windows-kit.tar.gz
+  kitTarball = pkgs.runCommand "windows-kit-${zedVersion}.tar.gz" { } ''
+    mkdir bundle
+    ln -s ${kit} bundle/windows-kit
+    # -h dereferences the store symlinks into real bytes; sort+fixed
+    # mtime+owner keep the bytes reproducible for the sha256 sidecar.
+    tar -C bundle \
+      -c -h --sort=name --mtime='@1' --owner=0 --group=0 \
+      windows-kit \
+      | gzip -n > $out
+  '';
 in
 {
   inherit
@@ -84,5 +98,6 @@ in
     vscodeInstaller
     vscodeServerTar
     kit
+    kitTarball
     ;
 }

@@ -153,12 +153,14 @@
         # ── the Windows-side half of the first transfer ───────────────────
         # WSL2 MSI (Store-less Windows) + the Zed installer pinned to the
         # same upstream release as the closure's zed-editor, so the remote
-        # client and server match by construction. See
-        # nix/packages/windows-kit.nix for the re-pin procedure.
+        # client and server match by construction. Shipped as ONE tar.gz —
+        # no bare .exe/.msi crosses the gap (extract on Windows with its
+        # built-in tar.exe). See nix/packages/windows-kit.nix for the
+        # re-pin procedure.
         windows-kit =
           (pkgs.callPackage ./nix/packages/windows-kit.nix {
             zedVersion = pkgs.zed-editor.version;
-          }).kit;
+          }).kitTarball;
       };
 
       devShells.${system}.default = pkgs.mkShell {

@@ -10,12 +10,13 @@
 #     nix-layer-nvim.tar.gz{,.sha256}   same + nvim flavor
 #     repo-layer.tar{,.sha256}          this repo's text layer
 #     nixos-wsl.tar.gz{,.sha256}        the NixOS-WSL rootfs for wsl --import
-#     windows-kit/                      Zed + VS Code installers, WSL2 MSI
+#     windows-kit/windows-kit-*.tar.gz  one archive: Zed + VS Code installers, WSL2 MSI
 #     docs/                             long docs (README/ARCHITECTURE/MANUAL/NOTES)
 #     START-HERE.txt                    the short page for other users
 #
-# The NixOS-WSL tarball step needs root because it assembles a filesystem
-# image; the script asks for it only if that artifact is missing.
+# Nothing needs root anywhere in this script: the NixOS-WSL tarball builder
+# self-elevates via a user namespace and the output is owned by whoever runs
+# it.
 #
 # Every tarball gets a .sha256 sidecar. Verify from ANY directory:
 #   (cd <dir> && sha256sum -c ./*.sha256)
@@ -33,7 +34,11 @@ if [ ! -f "$OUT/nix-layer.tar.gz" ]; then
 fi
 
 # ── 2. the NixOS-WSL root tarball ─────────────────────────────────────────
-if [ ! -f "$OUT/nixos-wsl.tar.gz" ]; then
+# An existing tarball is not enough: if it predates a builder change it
+# must be rebuilt. The content probe is the guard — a healthy tarball
+# always carries the init shim; a stale one (pre-activation) does not.
+if [ ! -f "$OUT/nixos-wsl.tar.gz" ] || ! tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/dev/null | grep -m1 -q '^\./bin/init$'; then
+    rm -f "$OUT/nixos-wsl.tar.gz"
     say "building the NixOS-WSL tarball"
     nix build .#wsl-tarball --no-link --print-out-paths >/dev/null
     # The builder self-elevates via a user namespace — no sudo, and the
@@ -45,11 +50,13 @@ fi
 
 # ── 3. the Windows kit ────────────────────────────────────────────────────
 say "collecting the windows kit"
+# One tar.gz: no bare .exe/.msi crosses the gap (email filters, USB scanners,
+# transfer policies). Windows extracts it with its built-in tar.exe.
 KIT="$(nix build .#windows-kit --no-link --print-out-paths)"
 mkdir -p "$OUT/windows-kit"
-# -f: the store sources are read-only, so earlier copies landed mode 444 —
-# a plain cp cannot overwrite them. -f unlinks and rewrites.
-cp -Lf "$KIT"/./* "$OUT/windows-kit/"
+# strip the store-hash prefix: ship it as a clean windows-kit-<ver>.tar.gz
+KITNAME="$(basename "$KIT")"
+cp -f "$KIT" "$OUT/windows-kit/${KITNAME#*-}"
 rm -f result
 
 # ── 4. the long docs + the short one ─────────────────────────────────────
@@ -71,18 +78,20 @@ pinned and verified before crossing the gap.
 
 On Windows (PowerShell as Administrator, fresh machine):
 
+  # extract the kit archive first (Windows ships tar.exe):
+  tar -xf windows-kit\windows-kit-*.tar.gz        # -> windows-kit\windows-kit\
   dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
   dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
   # REBOOT, then:
-  msiexec /i windows-kit\wsl.2.9.12.0.x64.msi
+  msiexec /i windows-kit\windows-kit\wsl.2.9.12.0.x64.msi
   wsl --set-default-version 2
   wsl --import twentyx D:\wsl\nixos nixos-wsl.tar.gz --version 2
   wsl -d twentyx
 
-Install the editors from windows-kit\ (Zed and VS Code), and turn their
-auto-updaters OFF (Zed: settings auto_update=false; VS Code: update.mode
-none). Both connect into the Linux side out of the box; the matching
-server versions are pre-seeded.
+Install the editors from windows-kit\windows-kit\ (Zed and VS Code), and
+turn their auto-updaters OFF (Zed: settings auto_update=false; VS Code:
+update.mode none). Both connect into the Linux side out of the box; the
+matching server versions are pre-seeded.
 
 Inside the Linux machine (fish shell):
   opencode                 the AI agent
@@ -103,13 +112,17 @@ say "sha256 sidecars"
 cd "$OUT"
 # Always refreshed — a stale sidecar must never vouch for a new tarball.
 [ -f nixos-wsl.tar.gz ] && sha256sum nixos-wsl.tar.gz > nixos-wsl.tar.gz.sha256
-# the layers' sidecars come from build-layers.sh; the kit's own dir for the
-# installer files (sha256sum must run inside the dir — basenames break it)
+# the kit archive gets its own sidecar, bare filename like the others
 (
     cd windows-kit 2>/dev/null || exit 0
-    sha256sum VSCodeSetup-* wsl.*.msi Zed-*-setup.exe > CHECKSUMS.sha256
+    for kit in windows-kit-*.tar.gz; do
+        [ -f "$kit" ] || continue
+        sha256sum "$kit" > "$kit.sha256"
+    done
 )
-echo "verify any time, from any directory:  cd $OUT && sha256sum -c ./*.sha256"
+echo "verify any time, from any directory:"
+echo "  cd $OUT && sha256sum -c ./*.sha256"
+echo "  cd $OUT/windows-kit && sha256sum -c ./*.sha256"
 
 say "bundle contents:"
 du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz windows-kit 2>/dev/null | sort -k2
