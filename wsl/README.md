@@ -28,6 +28,44 @@ That gives you a working NixOS with the config already applied — the flake was
 evaluated when the tarball was built, so `fish`, `nvim`, the whole toolchain are
 there on first boot. Nothing further is required to *use* it.
 
+## Rehearsing "no WWW" on a connected machine
+
+The real environment has an internal network but no internet. The distro rides
+Windows' networking, so "offline" is a routing fact, not a distro property.
+The toolchain needs neither: every runtime fetch class is disabled (opencode's
+model fetch and updates, Zed and VS Code auto-updaters, tldr — everything
+pinned before crossing the gap). Rehearse it before trusting it. Two levels:
+
+**Level 1 — Windows-side blackout (total, stricter than reality).** Answers
+"does anything on first boot need a wire?": press Win+R → `ncpa.cpl` → disable
+the **WSL** adapter → `wsl -d twentyx`. First boot should complete normally:
+systemd up, tools present, the vscode-server seed intact. Re-enable after.
+
+**Level 2 — inside the distro: no route, internal-style DNS (realistic).**
+The machine keeps its Windows network; the distro is told the truth: outside
+is unreachable, only internal names resolve.
+
+```bash
+sudo ip route del default
+sudo sh -c 'echo "nameserver 192.168.7.7" > /etc/resolv.conf'   # a dead internal-style resolver
+```
+
+With no default route nothing can leave the laptop — any hidden network
+dependency fails immediately instead of hanging, exactly like in the gap.
+Run `opencode`, `zed`, `code` (Remote-SSH into itself), `nix build` of a
+`writeText` change — all must behave as if nothing happened.
+
+**Restore:** `wsl --shutdown` from PowerShell (resets routes and resolv.conf
+on next start), or re-add the route:
+
+```bash
+sudo ip route add default via <windows-gateway>   # the gateway `ip route` showed before deleting
+```
+
+If anything fails with the route deleted, do not "fix" it by installing or
+downloading anything — a runtime fetch is exactly what this toolchain exists
+to make impossible. A failure under Level 2 is a bug in the bundle; report it.
+
 ## Subsequent updates
 
 Once the machine exists, updates are binary-cache transfers rather than rootfs
