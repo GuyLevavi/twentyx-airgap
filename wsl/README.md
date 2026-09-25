@@ -89,6 +89,25 @@ Chunks may be transferred in **any order** and re-imported freely: the cache is
 content-addressed, so reassembly has no ordering requirement and no partial-state
 corruption mode. This was verified by extracting in reverse.
 
+## Windows → distro over SSH (Zed and VS Code)
+
+Both editors connect into the distro over SSH; sshd is already on
+(`services.openssh`, key-only). WSL2 forwards it to Windows' localhost.
+
+One-time key setup, in PowerShell:
+
+```powershell
+ssh-keygen -t ed25519                      # accept defaults, no passphrase or a stored one
+type $env:USERPROFILE\.ssh\id_ed25519.pub | wsl -d twentyx -- sh -c 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh'
+```
+
+Then connect — Zed: Remote Servers → New SSH Server → `gl@localhost`.
+The matching remote server is pre-seeded in `~/.zed_server/` (release-matched
+to the installer in the kit; see the `airgap.zed.remoteClientVersion` note and
+the `cloud.zed.dev` preflight caveat there). VS Code: install **Remote - SSH**,
+F1 → "Connect to Host" → `gl@localhost`; the server is pre-seeded for the kit's
+VS Code build, so nothing downloads.
+
 ## VS Code from Windows
 
 This is the one thing moving off Fedora **breaks**, and it fails silently: the
