@@ -354,3 +354,14 @@ it is not relitigated:
 - **shell.env hook**: verified against the shipped opencode version's
   documented behavior; upstream has a TODO about honoring `shell.env` in the
   v2 bash tool -- the `BASH_ENV` path is the belt to that suspenders.
+- **WSL first boot [root cause found 2026-09-26]**: the imported distro's `/`
+  shipped mode 0700 — the build root came from `mktemp -d` and tar recorded
+  that mode on the `./` entry, which extractors apply to the distro root. Every
+  non-root process then got EACCES traversing absolute paths (shell exec,
+  messagebus's journal connect, login's cd, the WSL relay); root bypassed it
+  via DAC_OVERRIDE, which is why the first iterations chased dbus and were
+  reverted. The builder now enforces one invariant for the whole tree (every
+  directory traversable) and fails the build if violated. A separate class —
+  ownership that cannot be set inside the build's user namespace (home dir) —
+  is restored by tmpfiles at boot. Full story, gotchas, and the
+  builder-is-the-weak-link assessment: `wsl/FIRST-BOOT.md`.

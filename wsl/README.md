@@ -14,8 +14,13 @@ nix build .#wsl-tarball
 sha256sum nixos.wsl > nixos.wsl.sha256
 ```
 
-`tarballBuilder` runs as root because it assembles a filesystem image. It does
-not touch the running system.
+`nixos.wsl` is assembled in-process inside a user namespace (`unshare -rm`, no
+sudo, nothing touched outside the build directory). That choice has its own
+failure modes — everything that needs real ownership at build time cannot get
+it — and the WSL first-boot forensics, gotchas and the honest assessment of
+this design live in `wsl/FIRST-BOOT.md`. Read that before editing
+`nix/hosts/wsl.nix` or the tarball builder. `wsl/SMOKE-TEST.md` is the
+verify-everything checklist (what to run after any import or rebuild).
 
 **Carry `nixos.wsl` in. On Windows:**
 
