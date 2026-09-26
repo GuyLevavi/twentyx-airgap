@@ -63,17 +63,19 @@ nvim --version | head -2                       # 0.12.x from the closure
 | `.yaml` | yamlls |
 | `.toml` | taplo |
 | `.sh` | bashls |
+| `.json` | jsonls |
 
 ```bash
-ps -o args= -u jensen | grep -E 'ruff|nixd|taplo|yaml-language|basedpyright|bash-language'
+ps -o args= -u jensen | grep -E 'ruff|nixd|taplo|yaml-language|basedpyright|bash-language|vscode-json'
 ```
 
 Expect real argv: `ruff server`, `taplo lsp stdio`,
 `yaml-language-server --stdio`, `basedpyright-langserver --stdio`,
-`bash-language-server start`. A bare binary printing help (the old failure)
-means the nvim fix did not land. Completion: type `vim.` in a `.lua`? (no
-lua_ls shipped) — type `pri` in a Python file and expect a completion menu.
-`:messages` must be clean of LSP errors.
+`bash-language-server start`, `vscode-json-language-server --stdio`. A bare
+binary printing help (the old failure) means the nvim fix did not land.
+Completion: type `vim.` in a `.lua`? (no lua_ls shipped) — type `pri` in a
+Python file and expect a completion menu. `:messages` must be clean of LSP
+errors.
 
 ## 3. Zed (from Windows)
 
@@ -89,7 +91,10 @@ matter for the airgap and have been added there (2026-09-26):
 ```
 
 Extensions install on the CLIENT and are propagated to the remote server on
-connect — the WSL side needs nothing extra.
+connect — the WSL side needs nothing extra. The kit also carries the theme
+files (`windows-kit\themes\*.json` → copy to `%APPDATA%\Zed\themes\`) and a
+client settings template; without them Zed offers registry downloads for
+themes/extensions instead.
 
 **The remote-server lookup is exact-match on the client's full version
 string** (`zed-remote-server-stable-<1.17.2+stable.349.c8e44cf...>`, build
@@ -195,11 +200,16 @@ podman run --rm -it alpine:latest echo hello   # only if the image is local
 Offline means no pulls: images must arrive as archives. Verify whichever
 images you carried (`podman images`, `podman load`).
 
-## 9. Editors from Windows over SSH (if not using Zed's WSL project)
+## 9. Editors from Windows (Zed WSL remote is the path)
 
-See `wsl/README.md` "SSH, both directions": keys, `gl@localhost`, VS Code
-Remote-SSH. Zed's own WSL integration needs none of it (it spawns the server
-itself), but the SSH path is the fallback and the one the pod side uses.
+Zed's WSL integration needs no SSH setup: it spawns the server itself (see
+§3). The SSH bridge remains for the pod side and as a fallback — see
+`wsl/README.md` "SSH, both directions": keys, `gl@localhost`.
+
+VS Code was dropped from the kit and the image (2026-09-26): the pre-seeded
+server cost ~500 MB in the image and ~220 MB in the kit, and Zed's WSL remote
+covers the same workflow. To bring it back, re-add the installer + server
+tarball to `nix/packages/windows-kit.nix` and the seed to `nix/hosts/wsl.nix`.
 
 ## 10. Nix itself
 

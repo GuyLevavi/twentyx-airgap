@@ -23,4 +23,8 @@ with pkgs;
   yaml-language-server
   taplo # pyproject.toml, and anything else TOML you touch
   package-version-server # package.json version hover (Zed side)
+  # JSON: Zed's built-in JSON support npm-installs this by default (measured:
+  # "npm info ... vscode-langservers-extracted" in the remote log). The nix
+  # build serves jsonls for nvim and the Zed pin; no node, no npm.
+  vscode-langservers-extracted
 ]

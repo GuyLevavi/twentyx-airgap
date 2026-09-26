@@ -10,7 +10,10 @@
 #     nix-layer-nvim.tar.gz             same + nvim flavor
 #     repo-layer.tar                    this repo's text layer
 #     nixos-wsl.tar.gz                  the NixOS-WSL rootfs for wsl --import
-#     windows-kit/windows-kit-*.tar.gz  one archive: Zed + VS Code installers, WSL2 MSI
+#     windows-kit/windows-kit-*.tar.gz  one archive: Zed + WSL2 MSI, themes,
+#                                       client templates (Zed settings, WezTerm)
+#     twentyx-airgap.bundle             the repo as a git bundle: the WSL side
+#                                       clones it and has the real history
 #     docs/                             long docs (README/ARCHITECTURE/MANUAL/NOTES)
 #     START-HERE.txt                    the short page for other users
 #
@@ -62,8 +65,10 @@ rm -f result
 say "carrying the documentation"
 mkdir -p "$OUT/docs"
 cp README.md ARCHITECTURE.md MANUAL.md NOTES.md TODO.md "$OUT/docs/"
-# wsl/README.md is part of the WSL story; the pod tree gets its own.
+# The wsl/ tree is part of the WSL story; the pod tree gets its own.
 cp wsl/README.md "$OUT/docs/wsl-README.md"
+cp wsl/FIRST-BOOT.md "$OUT/docs/wsl-FIRST-BOOT.md"
+cp wsl/SMOKE-TEST.md "$OUT/docs/wsl-SMOKE-TEST.md"
 
 if [ ! -f "$OUT/START-HERE.txt" ]; then
 cat > "$OUT/START-HERE.txt" <<'EOF'
@@ -106,7 +111,14 @@ ARCHITECTURE.md = why it is built this way.
 EOF
 fi
 
-# ── 5. the bundle at a glance ─────────────────────────────────────────────
+# ── 5. the repo itself, as a git bundle ───────────────────────────────────
+# The WSL side clones this (`git clone /mnt/c/twentyx/twentyx-airgap.bundle`)
+# and has the real history -- commits, diffs, bisect -- not a tar of the
+# working tree. Committed state only, text only, a few hundred KB.
+say "bundling the repo"
+git bundle create "$OUT/twentyx-airgap.bundle" --all >/dev/null
+
+# ── 6. the bundle at a glance ─────────────────────────────────────────────
 cd "$OUT"
 say "bundle contents:"
-du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz windows-kit 2>/dev/null | sort -k2
+du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz twentyx-airgap.bundle windows-kit 2>/dev/null | sort -k2

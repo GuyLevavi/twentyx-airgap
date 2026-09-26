@@ -278,9 +278,9 @@ in
                     }
                   },
                   // Pin every language server to its closure path. Without
-                  // this Zed falls back to downloading a server when the PATH
-                  // lookup misses (measured in the WSL remote session), which
-                  // is exactly the runtime fetch an airgap cannot afford.
+                  // this Zed falls back to fetching its own server at runtime
+                  // (measured in the WSL remote session), which is exactly the
+                  // runtime fetch an airgap cannot afford.
                   "lsp": {
                     "nixd": {
                       "binary": { "path": "${pkgs.nixd}/bin/nixd" }
@@ -290,8 +290,20 @@ in
                     },
                     "ruff": {
                       "binary": { "path": "${pkgs.ruff}/bin/ruff" }
+                    },
+                    // Zed's built-in JSON support npm-installs
+                    // vscode-langservers-extracted by default; this is the
+                    // closure build of the same server.
+                    "json-language-server": {
+                      "binary": { "path": "${pkgs.vscode-langservers-extracted}/bin/vscode-json-language-server" }
                     }
                   },
+                  // Prettier is downloaded through node when a language that
+                  // defaults to it (JSON/JS/TS/HTML/Markdown) is formatted.
+                  // Nothing in this toolchain uses it; the language servers
+                  // format instead. Measured: "Installing default prettier
+                  // and plugins" in the client log.
+                  "prettier": { "allowed": false },
                   "languages": {
                     "Nix": {
                       "language_servers": ["nixd", "!nil"]
@@ -310,6 +322,23 @@ in
               '';
         }
       )
+
+      # Zed tasks: a terminal opencode next to the ACP agent. The ACP entry
+      # above stays the default; this is the fallback for a session where the
+      # agent panel is not wanted. Packaged default: a real tasks.json wins.
+      {
+        ".config/zed/tasks.json".text = ''
+          // Run opencode in a Zed terminal (task: spawn, or the task picker).
+          [
+            {
+              "label": "opencode (terminal)",
+              "command": "opencode",
+              "use_new_terminal": true,
+              "allow_concurrent_runs": true
+            }
+          ]
+        '';
+      }
 
       # btop: a themed default instead of the stock black. The theme file
       # ships inside the closure's btop package (share/btop/themes);

@@ -32,16 +32,11 @@ let
   caBundle = ../../ca-bundle.crt;
   haveCaBundle = builtins.pathExists caBundle;
 
-  # In the airgap the server tarball cannot be downloaded, so it is pre-seeded
-  # from the pinned kit (nix/packages/windows-kit.nix): the SAME release and
-  # commit as the VS Code installer the team installs, so Remote-SSH works on
-  # first connect. An activation script extracts it once, into the user's
-  # home, only when absent -- a real ~/.vscode-server dir is never clobbered
-  # (the $HOME layering rule).
-  windowsKit = pkgs.callPackage ../packages/windows-kit.nix {
-    zedVersion = pkgs.zed-editor.version;
-  };
-  vscodeCommit = "2242ebbb54efeeb0129e08e919e7e8d43033cd83"; # VS Code 1.139.0; keep in sync with windows-kit.nix
+  # ── Windows-side assets ─────────────────────────────────────────────────
+  # The kit (Zed installer, themes, client settings templates, WSL2 MSI) is
+  # built by .#windows-kit; the WSL side itself needs nothing from it since
+  # the VS Code server pre-seed was dropped (Zed's WSL remote covers editing
+  # from Windows, and its server ships in this closure).
 
   # WSL-registry files the upstream tarballBuilder installs into the tarball.
   # wsl-distribution.conf is what makes `wsl --import` register the distro
@@ -145,39 +140,16 @@ in
   # contract instead). No-op until ca-bundle.crt is carried across.
   security.pki.certificateFiles = lib.optionals haveCaBundle [ caBundle ];
 
-  # ── VS Code from Windows ────────────────────────────────────────────────
-  # This works today on Fedora only because Fedora is FHS: the prebuilt
-  # vscode-server node binary hardcodes /lib64/ld-linux-x86-64.so.2, which
-  # NixOS does not have. Moving to NixOS-WSL breaks it, and the failure mode is
-  # a silent hang on "Setting up VS Code Server" rather than an error.
-  #
-  # Two independent fixes, both needed:
-  services.vscode-server.enable = true; # patches the server's node on install
-  programs.nix-ld.enable = true; # generic FHS interpreter for other prebuilts
+  # ── prebuilt binaries from other toolchains ─────────────────────────────
+  # nix-ld gives foreign prebuilts (the runai CLI, uv-managed interpreters,
+  # anything the team drops in) a generic FHS interpreter; NixOS has no
+  # /lib64/ld-linux-x86-64.so.2 of its own.
+  programs.nix-ld.enable = true;
   programs.nix-ld.libraries = with pkgs; [
     stdenv.cc.cc.lib
     zlib
     openssl
   ];
-
-  system.activationScripts.vscodeServerSeed = lib.stringAfter [ "users" ] ''
-    commit="${vscodeCommit}"
-    home="/home/${username}"
-    seed="$home/.vscode-server/bin/$commit"
-    if [ ! -d "$seed" ]; then
-        mkdir -p "$seed"
-        # Absolute paths for BOTH tar and gzip: the activation environment
-        # has neither on PATH, and tar -z execs `gzip` by NAME (bare tar once
-        # failed with 127, then bare -z failed with "gzip: Cannot exec").
-        ${pkgs.gzip}/bin/gzip -dc "${windowsKit.vscodeServerTar}" \
-            | ${pkgs.gnutar}/bin/tar -x -C "$seed" --strip-components=1
-        # || true: at build time the target uid is not mapped in the build's
-        # user namespace, so this chown returns EINVAL. It used to abort the
-        # whole activation snippet here; ownership is fixed at boot by the
-        # tmpfiles rule above, and tar --owner=0 stamps the archive anyway.
-        chown -R ${username}:users "$home/.vscode-server" || true
-    fi
-  '';
 
   virtualisation.podman = {
     enable = true;
@@ -206,8 +178,8 @@ in
 
   # /home/<user> has to be owned by the user with mode 0700. tmpfiles runs
   # as real root at boot: `d` creates it, `z` fixes ownership recursively
-  # (the vscode-server seed against the empty path has no writable parent
-  # at build time, so it lands root-owned too).
+  # (in the build's user namespace only uid 0 is mapped, so anything the
+  # chroot activation writes under the home lands root-owned).
   systemd.tmpfiles.rules = [
     "d /home/${username} 0700 ${username} users -"
     "z /home/${username} - ${username} users -"
@@ -351,9 +323,6 @@ in
   # ownership into the archive at packaging time (which also makes the
   # bytes reproducible across runs). The wrapper in flake.nix still re-execs
   # via `unshare -rm` so nothing lands owned by the real user mid-build.
-  # No vscode-server pre-seed at build time (that was nixos-install's
-  # chroot activation) — the seed snippet runs on first boot instead,
-  # unpacking the same pinned tarball, same end state.
   system.build.tarballBuilder = lib.mkForce (pkgs.writeShellApplication {
     name = "nixos-wsl-tarball-builder";
     runtimeInputs = with pkgs; [
@@ -417,7 +386,7 @@ in
       # Run the system activation against the tarball root — the step the
       # upstream builder got for free from nixos-install. This populates
       # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
-      # shim), users and the vscode-server pre-seed. Without it the
+      # shim) and users. Without it the
       # imported distro fails with "getpwuid(0) failed" and "execvpe
       # (/bin/sh) failed" — measured. nixos-enter mounts only /dev /sys
       # /proc and uses the chroot's own store; it self-namespaces so no
@@ -427,7 +396,7 @@ in
       # Run the system activation against the tarball root — the step the
       # upstream builder got for free from nixos-install. This populates
       # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
-      # shim), users and the vscode-server pre-seed. Without it the
+      # shim) and users. Without it the
       # imported distro fails with "getpwuid(0) failed" and "execvpe
       # (/bin/sh) failed" — measured. The bind mounts cover the specialfs
       # snippet, whose own mounts fail in a user namespace (devpts gid,

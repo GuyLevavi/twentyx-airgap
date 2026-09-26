@@ -124,8 +124,10 @@ installer and the match is by construction.
       sudo nixos-rebuild switch --flake /etc/nixos#wsl     # network down
       ```
 
-- [ ] Pre-seed the VS Code server for the exact Windows VS Code commit and
-      pin VS Code auto-update off on Windows (wsl/README.md).
+- [ ] Copy the kit's themes into `%APPDATA%\Zed\themes\` and
+      zed-client-settings.json into `%APPDATA%\Zed\settings.json`, keeping
+      Zed auto-update off (the closure's server moves only when the kit
+      installer + nix/zed-client-version.nix move together).
 - [ ] Install the runai CLI for the bridge client side. Preferred: the exact
       Linux executable the RunAI UI offers (it matches your cluster's server
       version). Make it a pinned, declared derivation instead of a stray

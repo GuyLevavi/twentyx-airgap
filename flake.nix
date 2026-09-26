@@ -16,15 +16,6 @@
       url = "github:nix-community/NixOS-WSL";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
-    # VS Code Server ships a prebuilt node that hardcodes
-    # /lib64/ld-linux-x86-64.so.2, which does not exist on NixOS. Without this
-    # module, connecting VS Code (Windows) to NixOS-WSL hangs forever on
-    # "Setting up VS Code Server" — the exact thing that works today only
-    # because Fedora is FHS.
-    # No `follows`: this flake declares no nixpkgs input, and overriding a
-    # non-existent one is a warning on every single evaluation.
-    vscode-server.url = "github:nix-community/nixos-vscode-server";
   };
 
   outputs =
@@ -33,7 +24,6 @@
       nixpkgs,
       home-manager,
       nixos-wsl,
-      vscode-server,
       ...
     }@inputs:
     let
@@ -90,7 +80,6 @@
         specialArgs = { inherit inputs username; };
         modules = [
           nixos-wsl.nixosModules.default
-          vscode-server.nixosModules.default
           home-manager.nixosModules.home-manager
           ./nix/hosts/wsl.nix
           {

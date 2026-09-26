@@ -1,0 +1,61 @@
+// Zed settings for the airgap Windows client — shipped in .#windows-kit.
+//
+// Copy to %APPDATA%\Zed\settings.json (merge into an existing file if you
+// have one; a real file always wins, which is why this cannot be pushed).
+// Everything here exists to keep the editor honest in the gap:
+//   - auto_update off: the client must stay at the kit installer's version,
+//     because the WSL side ships its remote server under that exact string.
+//   - telemetry off: no phone-home attempts to time out against.
+//   - auto_install_extensions: extensions install ON THE CLIENT and are
+//     propagated to the WSL remote server on connect.
+// The WSL-side settings (~/.config/zed/settings.json, a packaged default)
+// carry the language-server pins; this file only needs the client bits.
+{
+  // Adjust the username if your distro does not use the default `jensen`.
+  "wsl_connections": [
+    {
+      "distro_name": "twentyx",
+      "user": null,
+      "projects": [
+        {
+          "paths": [
+            "/home/jensen"
+          ]
+        }
+      ]
+    }
+  ],
+  "auto_update": false,
+  "telemetry": {
+    "metrics": false,
+    "diagnostics": false
+  },
+  "auto_install_extensions": {
+    "nix": true,
+    "basedpyright": true,
+    "ruff": true,
+    "toml": true
+  },
+  // Tokyo Night ships in the kit's themes\ folder; any of the shipped themes
+  // works here, or a Zed built-in like "Gruvbox Dark".
+  "theme": "Tokyo Night",
+  "base_keymap": "JetBrains",
+  "ui_font_size": 16,
+  "buffer_font_size": 15,
+  "buffer_font_family": "JetBrainsMono Nerd Font",
+  "project_panel": {
+    "dock": "left"
+  },
+  "git_panel": {
+    "dock": "left"
+  },
+  "outline_panel": {
+    "dock": "left"
+  },
+  "collaboration_panel": {
+    "dock": "left"
+  },
+  "agent": {
+    "dock": "right"
+  }
+}

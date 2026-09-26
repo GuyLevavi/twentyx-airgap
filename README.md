@@ -19,7 +19,7 @@ actually references, and nothing else.
 | Python | Nix (3.11 + 3.12, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
 | Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
 | Agent | opencode + herdr | opencode (via `run-opencode`) + herdr |
-| Editor | zed (GUI), VS Code desktop over Remote-SSH | code-server (closure) + zed remote server |
+| Editor | zed (Windows client + remote server), nvim | code-server (closure) + zed remote server |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
 tells you what that costs before you carry it anywhere.
@@ -28,12 +28,13 @@ tells you what that costs before you carry it anywhere.
 
 | | |
 |---|---|
-| WSL bootstrap, one file | **~4.3 GB** (gzip; grew with the declared LSPs, clangd and the vscode-server pre-seed) |
-| `nix-layer.tar.gz` | ~740 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
+| WSL bootstrap, one file | **~1.1 GB** (gzip; dropped ~500 MB with the VS Code server pre-seed, 2026-09-26) |
+| `nix-layer.tar.gz` | ~850 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
 | `nix-layer-nvim.tar.gz` | ~880 MB |
-| `repo-layer.tar` | ~80 KB |
+| `repo-layer.tar` | ~380 KB |
+| `windows-kit-*.tar.gz` | ~435 MB (Zed installer + WSL2 MSI + themes + client templates) |
 
-The WSL bootstrap is a single ~4.3 GB gzip'd tarball (`.wsl` is just the
+The WSL bootstrap is a single ~1.1 GB gzip'd tarball (`.wsl` is just the
 extension — `wsl --import` takes the same bytes under any name). The
 binary-cache exporter shards by default; reassembly is order-independent
 because the cache is content-addressed. If the size ever hurts, the single

@@ -48,6 +48,10 @@ let
       "lsp"
       "stdio"
     ];
+    jsonls = [
+      "vscode-json-language-server"
+      "--stdio"
+    ];
   };
 
   lspSetup = lib.concatStringsSep "\n" (

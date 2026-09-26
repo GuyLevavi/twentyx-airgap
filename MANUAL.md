@@ -42,7 +42,7 @@ Also build the Windows-side kit while connected — it is what makes the
 Windows half of the gap turnkey:
 
 ```bash
-nix build .#windows-kit       # one tar.gz: Zed (release-matched), VS Code, WSL2 MSI
+nix build .#windows-kit       # one tar.gz: Zed (release-matched), themes, templates, WSL2 MSI
 ```
 
 ## 1. The WSL machine (NixOS inside the gap)
@@ -108,8 +108,8 @@ sudo nixos-rebuild switch --flake /etc/nixos#... # or wherever the flake lives
 A config *edit* (not a new package) rebuilds offline in seconds — `writeText`
 and friends need no network. Adding a package is what needs a transfer.
 
-Daily drivers on WSL: `zed` (GUI), VS Code desktop over Remote-SSH (the host
-has `nix-ld`), `opencode`, `runai` CLI once pinned — see
+Daily drivers on WSL: Zed from Windows over its WSL remote (server ships in
+the closure), `opencode`, `runai` CLI once pinned — see
 `nix/packages/runai-cli.nix` for the recipe; the binary the RunAI UI offers is
 the right one (it matches the cluster's server version).
 
@@ -130,7 +130,7 @@ Carry, in one go:
 | `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
 | `nix-export.sh` chunks | ~1 GB | WSL binary cache |
 | `nixos-wsl.tar.gz` (first time only) | ~4.3 GB | `wsl --import` |
-| `.#windows-kit` result | ~660 MB | Windows machines: one tar.gz — Zed installer (release-matched with the closure), VS Code installer, WSL2 MSI. Ships as a single archive so no bare `.exe`/`.msi` crosses the gap; Windows extracts it with its built-in `tar.exe` |
+| `.#windows-kit` result | ~435 MB | Windows machines: one tar.gz — Zed installer (release-matched with the closure), theme files, Zed/WezTerm client templates, WSL2 MSI. Ships as a single archive so no bare `.exe`/`.msi` crosses the gap; Windows extracts it with its built-in `tar.exe` |
 
 The WSL bootstrap is one ~4.3 GB file; the binary-cache exporter shards by
 default if the cache chunks ever exceed a per-file cap.

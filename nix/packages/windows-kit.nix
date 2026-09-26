@@ -1,11 +1,12 @@
 # Windows-side transfer artifacts, pinned like everything else.
 #
 # .#windows-kit is what physically crosses the gap FOR the Windows machines:
-# the WSL2 MSI (so a Store-less, internet-less Windows can still get WSL2)
-# and the Zed installer pinned to the SAME upstream release as the nixpkgs
-# zed-editor in the closure -- client and remote server match by
-# construction, and nothing ever downloads at runtime. Git stays text-only:
-# these are store artifacts, fetched by hash like every other input.
+# the WSL2 MSI (so a Store-less, internet-less Windows can still get WSL2),
+# the Zed installer pinned to the SAME upstream release as the nixpkgs
+# zed-editor in the closure, the Zed theme files and the version-controlled
+# client templates (Zed settings, WezTerm config) that used to live only on
+# one laptop. Git stays text-only: the binaries are store artifacts fetched
+# by hash; the templates are plain files in nix/packages/windows/.
 #
 # Re-pin when nixpkgs bumps zed-editor (or a new WSL stable is wanted):
 # change the version in the URL, run
@@ -32,41 +33,93 @@ let
     hash = "sha256-WAuLmQBi9kfyxqAvsw/GrBA1DuXhRKVrqwPUGdWfN9Y=";
   };
 
-  # VS Code: the installer the team installs, and the Linux server tarball
-  # for the SAME release (its commit), which nix/hosts/wsl.nix pre-seeds into
-  # ~/.vscode-server -- Remote-SSH works on first connect with no Store and
-  # no network. Re-pin in lockstep when VS Code updates: bump the version,
-  # fetch both URLs, re-pin the hashes and the commit in wsl.nix.
-  vscodeVersion = "1.139.0";
-  vscodeCommit = "2242ebbb54efeeb0129e08e919e7e8d43033cd83";
-  vscodeInstaller = pkgs.fetchurl {
-    url = "https://update.code.visualstudio.com/${vscodeVersion}/win32-x64/stable";
-    hash = "sha256-+IXC5n1W8E26LVyp9Oc6fcsS3+p/1ByHNc9FHjIS5Tw=";
-  };
-  vscodeServerTar = pkgs.fetchurl {
-    url = "https://update.code.visualstudio.com/commit:${vscodeCommit}/server-linux-x64/stable";
-    hash = "sha256-PBn/HVMPX9GLJwj4A/Iz3gTIFI6tQeJbednkvQHRonw=";
+  # Theme files from the registry extensions the team uses (the /etc/nixos
+  # zed.nix list). Zed loads user themes from %APPDATA%\Zed\themes\ — no
+  # extension install, no registry access. Pinned to immutable commit SHAs;
+  # re-pin by updating the sha in the URL and the hash together.
+  themes = {
+    "tokyo-night.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/ssaunderss/zed-tokyo-night/6d731d0724a6fa487f9031cbb4f8db0b80769568/themes/tokyo-night.json";
+      hash = "sha256-J5LOOKhNcMPNHb49O8nfY4bpmmmJkhADi0dQdoDotXg=";
+    };
+    "catppuccin-mauve.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/catppuccin/zed/4314cb05c74d141b7962290a41d6087e8c0ad02f/themes/catppuccin-mauve.json";
+      hash = "sha256-uPE9yx6RT1WWZszww5+iLZ0IrruEYddfiOBaA7uewbE=";
+    };
+    "catppuccin-no-italics-mauve.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/catppuccin/zed/4314cb05c74d141b7962290a41d6087e8c0ad02f/themes/catppuccin-no-italics-mauve.json";
+      hash = "sha256-Ve+18ICLrfdj+v0jRbZ6lxe1GgrsHZ/du3K2cmpH1ac=";
+    };
+    "Kanagawa.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/ethangilmore/zed-kanagawa/e844633f3e64d208459d65f246190491ad0a61df/themes/Kanagawa.json";
+      hash = "sha256-+AXR9bB09zgZkadbQYwBxUWgWQpCzcm5jy0DXMouGTM=";
+    };
+    "Kanagawa-no-italics.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/ethangilmore/zed-kanagawa/e844633f3e64d208459d65f246190491ad0a61df/themes/Kanagawa-no-italics.json";
+      hash = "sha256-oC56j0FKcD4uHf3mIV21MIkt4Qtg/+uMngzPVDcg438=";
+    };
+    "rose-pine.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/rose-pine/zed/1446d31a2eec6bee627883d523ec63ef5c78ec9b/themes/rose-pine.json";
+      hash = "sha256-pO53YNt5NIRKFBa0PyhQf2lteh7PYWt1G+EcieuMH7w=";
+    };
+    "rose-pine-dawn.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/rose-pine/zed/1446d31a2eec6bee627883d523ec63ef5c78ec9b/themes/rose-pine-dawn.json";
+      hash = "sha256-+su2Ve+IX+eCh0SNsuZ3qRYeEoQFBkeuOzbXFVOlGio=";
+    };
+    "rose-pine-moon.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/rose-pine/zed/1446d31a2eec6bee627883d523ec63ef5c78ec9b/themes/rose-pine-moon.json";
+      hash = "sha256-97UMyOW3Dcjcru/Zvl7QfpKT+e0gT1gMllIMlYKRIEA=";
+    };
+    "nord.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/mikasius/zed-nord-theme/d0b459c49797aec598622bed992537e4a83688da/themes/nord.json";
+      hash = "sha256-CONvCRq35bQe0IQQyMWo9zKleYjqOAJcuovSqQbpuhE=";
+    };
+    "dracula.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/dracula/zed/c419d710e77f22ec4e4e8481324b93ef0916d368/themes/dracula.json";
+      hash = "sha256-auc7bcSnyxwiZMNv5yOMxj6ejl0qts7NZh8ohAC0n7A=";
+    };
+    "eldritch.json" = pkgs.fetchurl {
+      url = "https://raw.githubusercontent.com/edheltzel/eldritch-zed/e9a9633f15f191fba78dd20c220b6d720c887777/themes/eldritch.json";
+      hash = "sha256-o0c9Nxa/LX1ncy8CkpI9Z88if33mU0Iwp6SIGiTsFlo=";
+    };
   };
 
+  # One shell line per theme; Nix interpolates both the store path and the
+  # file name, the shell only does the copy.
+  themeInstalls = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (name: src: ''install -m 0644 ${src} "$out/themes/${name}"'') themes
+  );
+
   kit = pkgs.runCommand "windows-kit-${zedVersion}" { } ''
-    mkdir $out
+    mkdir -p $out/themes
     ln -s ${zedInstaller} $out/Zed-x86_64-${zedVersion}-setup.exe
     ln -s ${wslMsi} $out/wsl.2.9.12.0.x64.msi
-    ln -s ${vscodeInstaller} $out/VSCodeSetup-x64-${vscodeVersion}.exe
+    # Version-controlled client templates (repo files, not store paths).
+    install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
+    install -m 0644 ${./windows/wezterm.lua} $out/wezterm.lua
+    ${themeInstalls}
     cat > $out/README.txt <<'EOF'
     Windows-side artifacts for the airgap (build once on a connected machine,
     carry with the transfer). Nothing here runs on Linux.
 
       Zed-x86_64-*-setup.exe   Zed for Windows, pinned to the same upstream
                                release as the remote server in the pod/WSL
-                               closure. Install it, and in Zed settings set
-                               "auto_update": false -- the remote server in
-                               the images moves only when this pin moves.
+                               closure. Install it, then copy
+                               zed-client-settings.json to
+                               %APPDATA%\Zed\settings.json (merge into yours
+                               if one exists) -- it pins auto_update off,
+                               telemetry off, and the airgap extensions.
 
-      VSCodeSetup-x64-*.exe    VS Code for Windows, pinned to the release the
-                               WSL machine pre-seeds its vscode-server for
-                               (same version + commit). Set
-                               "update.mode": "none" in VS Code settings.
+      themes\*.json            Zed themes (Tokyo Night, Catppuccin, Kanagawa,
+                               Rose Pine, Nord, Dracula, Eldritch). Copy the
+                               whole themes\ folder into %APPDATA%\Zed\themes\
+                               and pick one in Zed; no extension install and
+                               no registry access needed. Gruvbox ships with
+                               Zed itself.
+
+      wezterm.lua              WezTerm config (Tokyo Night, kitty keyboard
+                               protocol on -- required for shift+enter in
+                               TUIs). Copy to %USERPROFILE%\.wezterm.lua.
 
       wsl.*.x64.msi            WSL2 itself, for Windows boxes with no Store
                                and no internet. Setup order: the two DISM
@@ -98,8 +151,6 @@ in
   inherit
     zedInstaller
     wslMsi
-    vscodeInstaller
-    vscodeServerTar
     kit
     kitTarball
     ;
