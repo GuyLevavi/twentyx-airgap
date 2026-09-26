@@ -98,7 +98,7 @@ import, rebuild:
 
 ```bash
 # connected machine:
-./scripts/nix-export.sh              # sharded, content-addressed, .sha256 sidecars
+./scripts/nix-export.sh              # sharded, content-addressed
 # transfer the chunks (any order — reassembly is by hash)
 # WSL:
 sudo ./scripts/nix-import.sh         # into /var/cache/nix-transfer, then:
@@ -118,12 +118,6 @@ the right one (it matches the cluster's server version).
 ```bash
 ./scripts/build-layers.sh            # dist/nix-layer.tar.gz[.nvim] + repo-layer.tar
 ./scripts/build-layers.sh plain      # first transfer: deliberately small (~847 MB)
-```
-
-Verify each artifact's `.sha256` sidecar — from any directory:
-
-```bash
-sha256sum -c dist/*.sha256
 ```
 
 ## 3. Cross the gap
@@ -166,8 +160,8 @@ never pulled or unpacked.
 ## 6. First session in a pod
 
 ```bash
-runai exec -it -- /opt/airgap/libexec/airgap-doctor   # paste this if anything is off
-runai exec -it -- /opt/airgap/libexec/airgap-opencode # the agent; preload handled
+runai exec -it -- /opt/twentyx/libexec/doctor   # paste this if anything is off
+runai exec -it -- /opt/twentyx/libexec/run-opencode # the agent; preload handled
 sudo <cmd>                                            # passwordless (gid 0)
 sudo podman images                                    # rootful podman, vfs prewritten
 ```
@@ -186,7 +180,7 @@ The `-nvim` flavor adds pure nvim + treesitter (~880 MB layer — LazyVim is gon
 
 ## 8. When something is wrong
 
-`airgap-doctor` first; it prints closure integrity, terminal env, sudo,
+`doctor` first; it prints closure integrity, terminal env, sudo,
 podman, injected env and the model endpoint, and never changes anything.
 Then: NOTES.md §8 for what is and is not simulated locally, and the
 `tests/test-container.sh` suite (16 checks) which reproduces the pod shape

@@ -14,7 +14,7 @@ Run everything from a `jensen` shell unless a line says root
 whoami                               # jensen
 stat -c '%a %U:%G' / /home /home/jensen   # 755 root:root, 755, 700 jensen:users
 systemctl --failed                   # expect: no failed units
-cat /var/log/airgap-bootlog.txt | head -40   # the automatic boot evidence
+cat /var/log/bootlog.txt | head -40   # the automatic boot evidence
 ```
 
 If `systemctl --failed` shows anything, that file already contains the
@@ -29,11 +29,11 @@ in `C:\twentyx` if the transfer shipped them).
 ```bash
 # as root (one-time; imports the eval inputs + stdenvNoCC into the store)
 wsl -d twentyx -u root -- bash -lc '
-  mkdir -p /root/airgap-repo /var/cache/nix-transfer
-  tar -xzf /mnt/c/twentyx/repo-src.tar.gz -C /root/airgap-repo
+  mkdir -p /root/twentyx /var/cache/nix-transfer
+  tar -xzf /mnt/c/twentyx/repo-src.tar.gz -C /root/twentyx
   tar -xzf /mnt/c/twentyx/wsl-rebuild.tar.gz -C /var/cache/nix-transfer --strip-components=1
   nix copy --from file:///var/cache/nix-transfer --all
-  nixos-rebuild switch --flake /root/airgap-repo#wsl
+  nixos-rebuild switch --flake /root/twentyx#wsl
 '
 ```
 
@@ -42,7 +42,7 @@ Verify it is genuinely offline: run the "no WWW" rehearsal
 `nix/modules/shell.nix`, then
 
 ```bash
-wsl -d twentyx -u root -- nixos-rebuild switch --flake /root/airgap-repo#wsl
+wsl -d twentyx -u root -- nixos-rebuild switch --flake /root/twentyx#wsl
 ```
 
 It must finish without any fetch. This is the property the whole Nix choice
@@ -179,7 +179,7 @@ itself), but the SSH path is the fallback and the one the pod side uses.
 ```bash
 nixos-version
 nix --version
-nixos-rebuild --flake /root/airgap-repo#wsl dry-activate   # eval-only sanity
+nixos-rebuild --flake /root/twentyx#wsl dry-activate   # eval-only sanity
 git config --global user.email you@work                    # once
 ```
 
@@ -189,6 +189,6 @@ substituter is the local cache. A hang means something tried the network.
 ## 11. What to report back
 
 If any step fails: the command, the output, and — for anything boot/session
-related — `cat /var/log/airgap-bootlog.txt`. Everything in this file is
+related — `cat /var/log/bootlog.txt`. Everything in this file is
 either already covered by the boot log or is a copy-pasteable command; a
 report that includes the command and its output is enough to act on.

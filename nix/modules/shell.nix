@@ -11,12 +11,12 @@
   ...
 }:
 let
-  cfg = config.airgap;
+  cfg = config.twentyx;
 
   # home-manager bakes home.homeDirectory into generated values at EVAL time --
   # STARSHIP_CONFIG and fish_complete_path today, and there is no guarantee the
   # list stays that short. In a pod $HOME is relocated onto the PVC by
-  # airgap-bootstrap, so every one of those paths points at a directory that
+  # bootstrap, so every one of those paths points at a directory that
   # does not exist, and each fails silently: starship falls back to defaults,
   # completions just never load.
   #
@@ -86,8 +86,8 @@ in
       # home-manager's config.fish, after this block: a rewrite running here
       # would miss the one value it is here to fix.
       if test "$HOME" != ${evalHome}
-        function __airgap_rehome --on-event fish_prompt
-          functions --erase __airgap_rehome
+        function __rehome --on-event fish_prompt
+          functions --erase __rehome
           set -g fish_complete_path (string replace -a -- ${evalHome} "$HOME" $fish_complete_path)
         end
       end

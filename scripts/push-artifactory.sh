@@ -26,20 +26,9 @@ upload() {
     local f="$1" name; name="$(basename "$f")"
     [ -f "$f" ] || { echo "no such file: $f" >&2; return 1; }
 
-    # Verify before trusting a blob that crossed a physical boundary. The
-    # sidecar is expected next to the file, because it travels WITH it.
-    if [ -f "$f.sha256" ]; then
-        echo "  verifying $name"
-        ( cd "$(dirname "$f")" && sha256sum -c "$name.sha256" >/dev/null ) \
-            || { echo "  CHECKSUM FAILED for $name -- retransfer" >&2; return 1; }
-    else
-        echo "  warn: no $name.sha256 alongside; cannot verify the transfer" >&2
-    fi
-
     echo "  uploading $name ($(du -h "$f" | cut -f1))"
     if command -v jf >/dev/null 2>&1; then
         jf rt upload --flat=true "$f" "$DEST_PATH"
-        [ -f "$f.sha256" ] && jf rt upload --flat=true "$f.sha256" "$DEST_PATH"
     else
         : "${ARTIFACTORY_TOKEN:?set ARTIFACTORY_TOKEN for the curl path}"
         curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \

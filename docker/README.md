@@ -54,14 +54,14 @@ Two settings look like they can be overwritten and cannot:
   import without them. There is no shell at image-config level to expand `$PATH`, so `assemble.sh`
   reads the base's own value with `crane config` and *prepends* to it.
 - **`ENTRYPOINT`.** On the `vscode-*` bases it launches code-server. Replacing it is how
-  `airgap-entrypoint` gets to run at all, so the original is recorded in `BASE_ENTRYPOINT`
+  `entrypoint` gets to run at all, so the original is recorded in `BASE_ENTRYPOINT`
   and handed over to when the container is started with no arguments.
 
 Both were being clobbered before; both are silent failures rather than build errors.
 
 ## Session variables are image ENV, not shell config
 
-`layer.nix` writes `/opt/airgap/session-env` and `assemble.sh` turns each line into `--env`.
+`layer.nix` writes `/opt/twentyx/session-env` and `assemble.sh` turns each line into `--env`.
 A shell rc only reaches processes that source it, which excludes exactly the ones that break most
 confusingly: `runai exec -- cmd`, code-server's task runner, anything the agent spawns. Those need
 `TERMINFO_DIRS` and `LOCALE_ARCHIVE` as much as an interactive shell does.
@@ -74,7 +74,7 @@ tmux handed that literal string would create a directory named `$(id`.
 
 Stage 2 (the crane-mutate step in assemble.sh) cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
 `LABEL`) via `crane mutate`. Anything requiring execution must happen at container startup in
-`airgap-entrypoint` (or, for the sudo setuid bit, in `mklayer.sh` — Nix strips setuid from build
+`entrypoint` (or, for the sudo setuid bit, in `mklayer.sh` — Nix strips setuid from build
 outputs, so the repo layer sets it on the copy it re-tars).
 
 This is a feature: it forces the toolchain to be relocatable and inspectable, which is exactly what

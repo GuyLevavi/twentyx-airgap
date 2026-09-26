@@ -25,7 +25,7 @@ let
   havePubkey = builtins.pathExists pubkeyFile;
 
   # The internal CA bundle, same file the pod gets via the env-injection
-  # mount. WSL does not run airgap-bootstrap, so without this nothing on the
+  # mount. WSL does not run bootstrap, so without this nothing on the
   # WSL side trusts the internal CA: push-artifactory.sh, the runai CLI and
   # uv all do TLS against Artifactory. Gitignored and optional — carry it with
   # the transfer (wsl/README.md), presence is detected like cache-pubkey.
@@ -113,7 +113,7 @@ in
   # flake. (hostName/timeZone live right above; do not lose them.)
   nix.channel.enable = false;
 
-  networking.hostName = "airgap-wsl";
+  networking.hostName = "twentyx-wsl";
   time.timeZone = "Asia/Jerusalem";
 
   # Headless by design: the editors run on Windows (Zed client, VS Code) or
@@ -294,7 +294,7 @@ in
   # appends the decisive evidence — journal head, failed units, and a real
   # non-root login-shell exec test — to a log the Windows side can read,
   # so a diagnosis costs one file read, not a support session.
-  systemd.services.airgap-bootlog = {
+  systemd.services.bootlog = {
     description = "Airgap: append boot evidence to the Windows-mounted log";
     wantedBy = [ "multi-user.target" ];
     after = [ "multi-user.target" ];
@@ -308,7 +308,7 @@ in
     serviceConfig.Type = "oneshot";
     script = ''
       mkdir -p /var/log 2>/dev/null || true
-      out="/var/log/airgap-bootlog.txt"
+      out="/var/log/bootlog.txt"
       {
         echo
         echo "════════ boot $(date -u '+%Y-%m-%dT%H:%M:%SZ') ════════"

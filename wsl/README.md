@@ -11,7 +11,6 @@ outside and imported by `wsl.exe`, which needs nothing installed on Windows.
 ```bash
 nix build .#wsl-tarball
 ./result/bin/nixos-wsl-tarball-builder          # -> nixos.wsl (no sudo; user-ns)
-sha256sum nixos.wsl > nixos.wsl.sha256
 ```
 
 `nixos.wsl` is assembled in-process inside a user namespace (`unshare -rm`, no
@@ -25,8 +24,8 @@ verify-everything checklist (what to run after any import or rebuild).
 **Carry `nixos.wsl` in. On Windows:**
 
 ```powershell
-wsl --import airgap C:\WSL\airgap nixos.wsl --version 2
-wsl -d airgap
+wsl --import twentyx C:\WSL\twentyx nixos.wsl --version 2
+wsl -d twentyx
 ```
 
 That gives you a working NixOS with the config already applied — the flake was
@@ -108,7 +107,7 @@ type $env:USERPROFILE\.ssh\id_ed25519.pub | wsl -d twentyx -- sh -c 'mkdir -p ~/
 
 Then connect — Zed: Remote Servers → New SSH Server → `gl@localhost`.
 The matching remote server is pre-seeded in `~/.zed_server/` (release-matched
-to the installer in the kit; see the `airgap.zed.remoteClientVersion` note and
+to the installer in the kit; see the `twentyx.zed.remoteClientVersion` note and
 the `cloud.zed.dev` preflight caveat there). VS Code: install **Remote - SSH**,
 F1 → "Connect to Host" → `gl@localhost`; the server is pre-seeded for the kit's
 VS Code build, so nothing downloads.
@@ -145,7 +144,7 @@ half-working config is worse than an unmanaged one.
   setup. The preload plugin is seeded as a packaged default; opencode's own
   config is yours, in `~/.config/opencode/`.
 - **Zed remote** into the pod or into WSL: the remote server is in the
-  closure under `~/.zed_server/`; set `airgap.zed.remoteClientVersion` to the
+  closure under `~/.zed_server/`; set `twentyx.zed.remoteClientVersion` to the
   Windows client's exact `zed --version` string. Watch for a client-side
   `cloud.zed.dev` preflight on first connect (see the option comment).
 - The official VS Code extension (`sst-dev.opencode`) ships as a raw `.vsix` at

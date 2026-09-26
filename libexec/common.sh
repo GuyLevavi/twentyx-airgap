@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers. Sourced, never executed.
 
-TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
 
 say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }
@@ -23,13 +23,13 @@ bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 # and its dash-blindness (first dash-component only) are accepted, documented
 # tradeoffs; the explicit override is the escape hatch.
 #
-# `airgap-doctor` prints which rule fired, so a surprising answer is visible
+# `doctor` prints which rule fired, so a surprising answer is visible
 # rather than silently misfiling your state.
 # Sets SESSION_USER_RESOLVED and SESSION_USER_SOURCE as a side effect, so
 # callers that want the provenance can invoke it WITHOUT a subshell:
-#     airgap_user >/dev/null; echo "$SESSION_USER_RESOLVED via $SESSION_USER_SOURCE"
+#     session_user >/dev/null; echo "$SESSION_USER_RESOLVED via $SESSION_USER_SOURCE"
 # shellcheck disable=SC2034  # SESSION_USER_SOURCE is read by callers, not here
-airgap_user() {
+session_user() {
     local u
     if [ -n "${SESSION_USER:-}" ]; then
         SESSION_USER_SOURCE="SESSION_USER"; SESSION_USER_RESOLVED="$SESSION_USER"
@@ -42,7 +42,7 @@ airgap_user() {
     #
     # It is wrong for any username containing a dash, and it changes if the
     # workspace is renamed. Both are why the explicit override exists above
-    # and why `airgap-doctor` prints which rule fired: a surprising answer
+    # and why `doctor` prints which rule fired: a surprising answer
     # should be visible, not silently misfile a session's history.
     u="$(hostname 2>/dev/null || true)"
     u="$(printf '%s' "$u" | sed -E 's/(-[0-9]+)+$//')"
@@ -79,7 +79,7 @@ airgap_user() {
 # reachable at their path, which is the extension point for the "stuff nobody
 # remembered to enumerate".
 # Emit TAB-separated KEY VALUE pairs for every known file that exists.
-airgap_injection_exports() {
+injection_exports() {
     local d v
     for d in /opt/airgap-env /data/.airgap-env; do
         [ -d "$d" ] || continue
@@ -109,12 +109,12 @@ airgap_injection_exports() {
 # Deliberately NOT durable: XDG_CACHE_HOME. The PVC is network-backed, and
 # nvim, the LSPs and pip on a network filesystem are painfully slow. Cache is
 # by definition reconstructible, so it stays on fast ephemeral local disk.
-airgap_home() {
+session_home() {
     if [ -n "${SESSION_HOME:-}" ]; then printf '%s' "$SESSION_HOME"; return; fi
     local base
     for base in /data /code; do
         if [ -d "$base" ] && [ -w "$base" ]; then
-            printf '%s/%s' "$base" "$(airgap_user)"; return
+            printf '%s/%s' "$base" "$(session_user)"; return
         fi
     done
     printf '%s' "$HOME"   # WSL / local: $HOME is already durable
@@ -123,10 +123,10 @@ airgap_home() {
 # True when the PVC is actually mounted. A workspace started without it should
 # degrade to an ephemeral session with a loud warning, not silently write a
 # session's worth of state into a directory that dies with the pod.
-airgap_home_is_durable() {
+session_home_is_durable() {
     # An explicit override is taken at its word: the caller knows where their
     # durable storage is mounted better than this heuristic does.
     [ -n "${SESSION_HOME:-}" ] && return 0
-    local h; h="$(airgap_home)"
+    local h; h="$(session_home)"
     case "$h" in /data/*|/code/*) [ -d "$(dirname "$h")" ] ;; *) return 1 ;; esac
 }

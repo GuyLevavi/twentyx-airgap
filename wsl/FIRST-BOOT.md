@@ -88,7 +88,7 @@ snippet; that is why it is now `|| true` (ownership is fixed at boot anyway).
 
 Every boot appends identity, `/` mode, home permissions, a real `su -l` exec
 test, failed units, dbus status, journal socket modes, mounts, and the journal
-head to `/var/log/airgap-bootlog.txt`, and copies it to `C:\twentyx`. Notes:
+head to `/var/log/bootlog.txt`, and copies it to `C:\twentyx`. Notes:
 
 - `/var/log` does not exist in the image; the script creates it.
 - `/mnt/c` can mount later than the service; the copy retries for ~30 s.
@@ -96,7 +96,7 @@ head to `/var/log/airgap-bootlog.txt`, and copies it to `C:\twentyx`. Notes:
   `shadow`, `systemd`) — the default unit environment has none of them.
 - In the last failing boot the service ran (30 s of retries) but could not
   see `/mnt/c`; the local copy is the source of truth:
-  `wsl -d <distro> -u root -- cat /var/log/airgap-bootlog.txt`.
+  `wsl -d <distro> -u root -- cat /var/log/bootlog.txt`.
 
 ## 5. What the shipped build contains
 
@@ -107,7 +107,7 @@ head to `/var/log/airgap-bootlog.txt`, and copies it to `C:\twentyx`. Notes:
 | `findutils`/`gnugrep` in `runtimeInputs` | builder | the pass and the assertion run in the unit's PATH | build completes |
 | tmpfiles `d`/`z /home/<user>` + `createHome = false` | `users.users`, `systemd.tmpfiles.rules` | §3 ownership class | rules in the built `etc/tmpfiles.d/00-nixos.conf` |
 | seed chown made non-fatal | activation snippet | stops a doomed build-time chown from aborting the activation | build no longer aborts |
-| boot logger incl. `/` mode check | `airgap-bootlog` | telemetry for an unreachable machine | unit + script verified in the built system |
+| boot logger incl. `/` mode check | `bootlog` | telemetry for an unreachable machine | unit + script verified in the built system |
 | declared internal users, static `mutableUsers`, `jensen` default | users block, flake default | missing passwd entries caused the (separate) NSS errors; one user per Windows user | passwd contains all six |
 
 Deliberately **not** in the build anymore:

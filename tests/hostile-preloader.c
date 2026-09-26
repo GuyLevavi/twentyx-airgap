@@ -9,7 +9,7 @@
  *
  * Build:  gcc -shared -fPIC -o hostile.so hostile-preloader.c
  * With LD_PRELOAD=hostile.so:
- *   - `/opt/airgap/profile/bin/opencode --version` dies (SIGABRT)
+ *   - `/opt/twentyx/profile/bin/opencode --version` dies (SIGABRT)
  *   - bash, python, other Nix binaries run normally
  * which is what tests/test-container.sh asserts.
  */

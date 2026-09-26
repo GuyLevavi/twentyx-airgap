@@ -17,12 +17,12 @@ NIX_LAYER="${LAYER_NIX:-dist/nix-layer.tar.gz}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-mkdir -p "$(dirname "$OUT")" "$STAGE/opt/airgap" "$STAGE/usr/local/bin"
+mkdir -p "$(dirname "$OUT")" "$STAGE/opt/twentyx" "$STAGE/usr/local/bin"
 
 for d in libexec agent; do
-    cp -a "$d" "$STAGE/opt/airgap/$d"
+    cp -a "$d" "$STAGE/opt/twentyx/$d"
 done
-cp -a VERSION "$STAGE/opt/airgap/VERSION"
+cp -a VERSION "$STAGE/opt/twentyx/VERSION"
 
 # ── sudo/root for the runtime user ────────────────────────────────────────
 # RunAI pods run as an arbitrary UID (observed: uid 10001) whose only
@@ -36,16 +36,16 @@ cp -a VERSION "$STAGE/opt/airgap/VERSION"
 mkdir -p "$STAGE/etc/sudoers.d"
 cat > "$STAGE/etc/sudoers" <<'EOF'
 Defaults env_reset
-Defaults secure_path=/opt/airgap/bin:/opt/airgap/profile/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Defaults secure_path=/opt/twentyx/bin:/opt/twentyx/profile/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 root ALL=(ALL:ALL) ALL
 %#0 ALL=(ALL) NOPASSWD: ALL
 @includedir /etc/sudoers.d
 EOF
-cat > "$STAGE/etc/sudoers.d/airgap" <<'EOF'
+cat > "$STAGE/etc/sudoers.d/twentyx" <<'EOF'
 # Managed by the airgap repo layer. RunAI runtime user has gid 0.
 %#0 ALL=(ALL) NOPASSWD: ALL
 EOF
-chmod 0440 "$STAGE/etc/sudoers" "$STAGE/etc/sudoers.d/airgap"
+chmod 0440 "$STAGE/etc/sudoers" "$STAGE/etc/sudoers.d/twentyx"
 
 # ── git: neutral settings, system scope ───────────────────────────────────
 # There is deliberately no packaged ~/.config/git/config in the Nix layer: it
@@ -80,20 +80,20 @@ EOF
 # copy is done here, outside Nix: pull it out of the Nix layer (its RPATH and
 # plugin paths are absolute store paths that exist at runtime) and set the bit
 # on the copy. The repo layer is appended after the Nix layer, so this wins.
-# Skipped when the Nix layer is not beside us; airgap-doctor catches a missing
+# Skipped when the Nix layer is not beside us; doctor catches a missing
 # or unusable sudo.
-mkdir -p "$STAGE/opt/airgap/bin"
+mkdir -p "$STAGE/opt/twentyx/bin"
 if [ -f "$NIX_LAYER" ]; then
-    tar -xzOf "$NIX_LAYER" --occurrence=1 opt/airgap/bin/sudo \
-        > "$STAGE/opt/airgap/bin/sudo" 2>/dev/null || true
-    if [ -s "$STAGE/opt/airgap/bin/sudo" ]; then
+    tar -xzOf "$NIX_LAYER" --occurrence=1 opt/twentyx/bin/sudo \
+        > "$STAGE/opt/twentyx/bin/sudo" 2>/dev/null || true
+    if [ -s "$STAGE/opt/twentyx/bin/sudo" ]; then
         # 4555, not 4755: the tar's --mode='g=u' copies user bits to group, and
         # a group-writable setuid binary would let any gid-0 process replace
         # it. With u=r-x there is nothing for g=u to escalate.
-        chmod 4555 "$STAGE/opt/airgap/bin/sudo"
+        chmod 4555 "$STAGE/opt/twentyx/bin/sudo"
     else
         echo "warn: no sudo in $NIX_LAYER -- is sudo in the closure?" >&2
-        rm -f "$STAGE/opt/airgap/bin/sudo"
+        rm -f "$STAGE/opt/twentyx/bin/sudo"
     fi
 else
     echo "warn: $NIX_LAYER absent -- building repo layer without the sudo copy" >&2
@@ -101,7 +101,7 @@ fi
 
 # One entry on PATH that exists before anything has been bootstrapped, so
 # the doctor is runnable in a pod where everything else went wrong.
-ln -s /opt/airgap/libexec/airgap-doctor "$STAGE/usr/local/bin/airgap-doctor"
+ln -s /opt/twentyx/libexec/doctor "$STAGE/usr/local/bin/doctor"
 
 # Deterministic: identical inputs must produce an identical blob, or every
 # rebuild uploads a new layer and invalidates the registry cache for no reason.

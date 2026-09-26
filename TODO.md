@@ -14,7 +14,7 @@ command or decision.
       gotcha are recorded in NOTES.md §9.
 
 - [ ] **[gpubox, OPTIONAL] GPU test rig** — not a gate for the first
-      transfer: the in-pod `airgap-doctor` two-sided torch check answers
+      transfer: the in-pod `doctor` two-sided torch check answers
       CUDA where it matters (see the transfer checklist). Build this local
       rig only if a pod ever misbehaves and a local repro is wanted
       (tests/test-gpu-cuda.sh header has the exact setup; gpubox is the
@@ -44,15 +44,14 @@ command or decision.
       run; skip `-nvim` if transfer size matters — `assemble.sh` copes):
 
       ```bash
-      ./scripts/build-layers.sh          # -> dist/nix-layer.tar.gz (+ .sha256)
+      ./scripts/build-layers.sh          # -> dist/nix-layer.tar.gz
       ```
 
       No signing key, by decision (2026-09): integrity is the content-addressed
-      store hash for the cache and the `.sha256` sidecars for the layer
-      tarballs; `nix/hosts/wsl.nix` already degrades to `require-sigs = false`
+      store hash; `nix/hosts/wsl.nix` already degrades to `require-sigs = false`
       when `cache-pubkey` is absent.
 
-- [ ] Carry `dist/nix-layer.tar.gz` (+ `.sha256`) across physically.
+- [ ] Carry `dist/nix-layer.tar.gz` across physically.
 - [ ] **[gap]** Push to Artifactory:
 
       ```bash
@@ -68,13 +67,13 @@ command or decision.
 
 Start a workspace, then:
 
-- [ ] `airgap-doctor` — paste the full output somewhere. Specifically:
+- [ ] `doctor` — paste the full output somewhere. Specifically:
   - [ ] **sudo line**: `ok "sudo: passwordless for gid 0"` ⇒ RunAI does NOT
         set `no-new-privileges`; `bad` ⇒ setuid sudo is dead and podman needs
         a rethink (privileged pod or a rootless plan) — NOTES.md §8.
   - [ ] env injection shows the ConfigMap (mount `/opt/airgap-env` with
         `pip.conf` + `ca-bundle.crt` via pod-template customization first).
-- [ ] `airgap-opencode --version` runs, and an agent bash command sees
+- [ ] `run-opencode --version` runs, and an agent bash command sees
       `torch.cuda.is_available() == True` while the pod is GPU-fractioned.
 - [ ] **nginx**: find out what RunAI's port-exposure expects from the
       workspace (a running nginx? a specific site config?). Config belongs in
@@ -101,11 +100,11 @@ no manual step (shims for both `<v>` and `<v>+stable` are generated).
       auto-update OFF in Zed settings.
 - [ ] On first connect, if the client still wants cloud.zed.dev first
       (upstream zed#53763), record it — the fix is the
-      `airgap.zed.remoteClientVersion` override in `nix/modules/home.nix`,
+      `twentyx.zed.remoteClientVersion` override in `nix/modules/home.nix`,
       set to that client's exact `zed --version` string.
 - [ ] When nixpkgs bumps zed-editor: re-pin the installer
       (`nix/packages/windows-kit.nix` — URL + `nix store prefetch-file`
-      hash) and rebuild; the shims move with `airgap.zed.remoteClientVersion`
+      hash) and rebuild; the shims move with `twentyx.zed.remoteClientVersion`
       (default = the nixpkgs version).
 
 ## 5. WSL (independent track, wsl/README.md)
@@ -114,10 +113,10 @@ no manual step (shims for both `<v>` and `<v>+stable` are generated).
 
       ```bash
       nix build .#wsl-tarball
-      sudo ./result/bin/nixos-wsl-tarball-builder     # -> nixos.wsl
+      ./result/bin/nixos-wsl-tarball-builder          # -> nixos.wsl (no sudo)
       ```
 
-- [ ] On Windows: `wsl --import airgap C:\WSL\airgap nixos.wsl --version 2`
+- [ ] On Windows: `wsl --import twentyx C:\WSL\twentyx nixos.wsl --version 2`
 - [ ] Inside, prove the offline loop:
 
       ```bash

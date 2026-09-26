@@ -6,10 +6,10 @@
 # Layout when done:
 #
 #   dist/
-#     nix-layer.tar.gz{,.sha256}        RunAI pod toolchain closure (plain)
-#     nix-layer-nvim.tar.gz{,.sha256}   same + nvim flavor
-#     repo-layer.tar{,.sha256}          this repo's text layer
-#     nixos-wsl.tar.gz{,.sha256}        the NixOS-WSL rootfs for wsl --import
+#     nix-layer.tar.gz                  RunAI pod toolchain closure (plain)
+#     nix-layer-nvim.tar.gz             same + nvim flavor
+#     repo-layer.tar                    this repo's text layer
+#     nixos-wsl.tar.gz                  the NixOS-WSL rootfs for wsl --import
 #     windows-kit/windows-kit-*.tar.gz  one archive: Zed + VS Code installers, WSL2 MSI
 #     docs/                             long docs (README/ARCHITECTURE/MANUAL/NOTES)
 #     START-HERE.txt                    the short page for other users
@@ -17,9 +17,6 @@
 # Nothing needs root anywhere in this script: the NixOS-WSL tarball builder
 # self-elevates via a user namespace and the output is owned by whoever runs
 # it.
-#
-# Every tarball gets a .sha256 sidecar. Verify from ANY directory:
-#   (cd <dir> && sha256sum -c ./*.sha256)
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -107,22 +104,7 @@ ARCHITECTURE.md = why it is built this way.
 EOF
 fi
 
-# ── 5. sidecars for everything that is not covered yet ───────────────────
-say "sha256 sidecars"
+# ── 5. the bundle at a glance ─────────────────────────────────────────────
 cd "$OUT"
-# Always refreshed — a stale sidecar must never vouch for a new tarball.
-[ -f nixos-wsl.tar.gz ] && sha256sum nixos-wsl.tar.gz > nixos-wsl.tar.gz.sha256
-# the kit archive gets its own sidecar, bare filename like the others
-(
-    cd windows-kit 2>/dev/null || exit 0
-    for kit in windows-kit-*.tar.gz; do
-        [ -f "$kit" ] || continue
-        sha256sum "$kit" > "$kit.sha256"
-    done
-)
-echo "verify any time, from any directory:"
-echo "  cd $OUT && sha256sum -c ./*.sha256"
-echo "  cd $OUT/windows-kit && sha256sum -c ./*.sha256"
-
 say "bundle contents:"
 du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz windows-kit 2>/dev/null | sort -k2

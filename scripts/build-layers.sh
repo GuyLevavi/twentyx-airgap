@@ -3,11 +3,10 @@
 #
 #   ./scripts/build-layers.sh [outdir]        default: dist
 #
-# Produces, with a .sha256 sidecar each so push-artifactory.sh can prove the
-# physical transfer did not corrupt them:
+# Produces:
 #
 #   nix-layer.tar.gz        the toolchain closure
-#   nix-layer-nvim.tar.gz   the same plus LazyVim
+#   nix-layer-nvim.tar.gz   the same plus nvim
 #   repo-layer.tar          libexec + agent helpers (also built by CI)
 #
 # There is no node layer: opencode comes from the Nix closure, so nothing
@@ -44,13 +43,6 @@ install -m 0644 "$PREFIX$NIX_PLAIN" "$OUT/nix-layer.tar.gz"
 install -m 0644 "$PREFIX$NIX_NVIM"  "$OUT/nix-layer-nvim.tar.gz"
 
 ./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
-
-say "checksums"
-( cd "$OUT" && for f in nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar; do
-    # Bare filename, not a path: the sidecar travels WITH the file and must
-    # verify from whatever directory it lands in on the other side.
-    sha256sum "$f" > "$f.sha256"
-done )
 
 say "done"
 for f in "$OUT"/nix-layer.tar.gz "$OUT"/nix-layer-nvim.tar.gz "$OUT"/repo-layer.tar; do

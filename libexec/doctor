@@ -7,15 +7,15 @@
 # endpoint.
 set -uo pipefail
 
-TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
-. "$TOOLCHAIN_ROOT/libexec/airgap-common.sh"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
+. "$TOOLCHAIN_ROOT/libexec/common.sh"
 
 # $HOME is only correct once bootstrap's shell drop-in has run. Anything
-# launched outside an interactive login -- `runai exec -- airgap-doctor`, a
+# launched outside an interactive login -- `runai exec -- doctor`, a
 # cron, code-server's task runner -- still sees the pod's original /home/jensen
 # and would report on a directory nobody uses. Resolve it the same way
 # bootstrap does, so all three agree by construction.
-HOME="$(airgap_home)"
+HOME="$(session_home)"
 export HOME
 
 fails=0
@@ -27,7 +27,7 @@ say "layers"
 kv "TOOLCHAIN_ROOT" "$TOOLCHAIN_ROOT"
 kv "HOME"        "$HOME"
 # No subshell, so the provenance variables set as a side effect survive.
-airgap_user >/dev/null
+session_user >/dev/null
 kv "user" "$SESSION_USER_RESOLVED (uid $(id -u), gid $(id -g))"
 kv "identity via" "$SESSION_USER_SOURCE"
 case "$SESSION_USER_SOURCE" in
@@ -39,7 +39,7 @@ case "$SESSION_USER_SOURCE" in
 esac
 kv "version" "$(cat "$TOOLCHAIN_ROOT/VERSION" 2>/dev/null || echo dev)"
 
-if airgap_home_is_durable; then
+if session_home_is_durable; then
     ok "HOME is on the PVC -- state survives a restart"
 else
     bad "HOME is EPHEMERAL: no writable /data or /code."
@@ -92,7 +92,7 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     kv "packaged" "$want"
     kv "linked into \$HOME" "$have"
     if [ "$want" -gt 0 ] && [ "$have" -eq 0 ]; then
-        bad "nothing was linked -- run: $TOOLCHAIN_ROOT/libexec/airgap-bootstrap"
+        bad "nothing was linked -- run: $TOOLCHAIN_ROOT/libexec/bootstrap"
         fails=$((fails+1))
     elif [ "$have" -lt "$((want / 2))" ]; then
         warn "fewer links than defaults; some may be overridden by real files (expected)"
@@ -107,7 +107,7 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     if [ "$stale" -gt 0 ]; then
         bad "$stale dangling link(s) into /nix/store -- stale from a previous image"
         find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | head -3 | sed 's/^/       /'
-        bad "fix with: $TOOLCHAIN_ROOT/libexec/airgap-bootstrap"
+        bad "fix with: $TOOLCHAIN_ROOT/libexec/bootstrap"
         fails=$((fails+1))
     else
         ok "no stale links from a previous image"
@@ -217,7 +217,7 @@ fi
 
 # ── environment-provided assets ───────────────────────────────────────────
 say "env injection"
-if INJ="$(airgap_injection_exports)"; then
+if INJ="$(injection_exports)"; then
     dir="$(printf '%s\n' "$INJ" | awk -F'\t' '$1=="ENV_INJECTION_DIR" {print $2}')"
     kv "source" "$dir"
     printf '%s\n' "$INJ" | awk -F'\t' '$1 != "ENV_INJECTION_DIR" {printf "  %-20s -> %s\n", $1, $2}'

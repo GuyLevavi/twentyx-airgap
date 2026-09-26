@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sourced by non-interactive bash (BASH_ENV, set by libexec/airgap-opencode).
+# Sourced by non-interactive bash (BASH_ENV, set by libexec/run-opencode).
 #
 # The opencode process runs with LD_PRELOAD neutralized (the RunAI GPU
 # interceptors crash it), but every command the agent executes needs the

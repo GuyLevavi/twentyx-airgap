@@ -32,8 +32,8 @@ need podman
 
 REG_PORT="${TEST_REGISTRY_PORT:-5597}"
 REG="127.0.0.1:$REG_PORT"
-REG_NAME="airgap-test-registry-$$"
-WORK="$(mktemp -d /tmp/airgap-test-XXXXXX)"
+REG_NAME="test-registry-$$"
+WORK="$(mktemp -d /tmp/test-XXXXXX)"
 # Persistent throwaway store: first run pays the build, reruns are fast.
 # Wipe it (rm -rf) if it ever looks wedged; it caches nothing but store paths.
 TEST_STORE="${TEST_STORE:-/tmp/airgap-test-store}"
@@ -122,7 +122,7 @@ run_ic() {
 say "pod simulation (uid 10001, gid 0)"
 expect_ok "runtime HOME=/ is overridden with the PVC home" \
     run_ic bash -c 'test "$HOME" = /data/jensen'
-DOCTOR_OUT="$(run_ic /opt/airgap/libexec/airgap-doctor 2>&1 || true)"
+DOCTOR_OUT="$(run_ic /opt/twentyx/libexec/doctor 2>&1 || true)"
 if grep -q "store paths present" <<<"$DOCTOR_OUT" && ! grep -q "absent:" <<<"$DOCTOR_OUT"; then
     ok "closure intact after crane append"
 else
@@ -138,7 +138,7 @@ say "LD_PRELOAD split (hostile preloader)"
 # The agent binary's own signal handlers may turn SIGABRT into SIGSEGV; any
 # signal death (>= 128, and not podman's own 125) is a faithful repro.
 repro_rc=0
-run_ic bash -c 'LD_PRELOAD=/tmp/hostile.so /opt/airgap/profile/bin/opencode --version' >/dev/null 2>&1 || repro_rc=$?
+run_ic bash -c 'LD_PRELOAD=/tmp/hostile.so /opt/twentyx/profile/bin/opencode --version' >/dev/null 2>&1 || repro_rc=$?
 if [ "$repro_rc" -ge 128 ] && [ "$repro_rc" -ne 125 ]; then
     ok "repro: hostile preloader kills the agent binary (exit $repro_rc)"
 else
@@ -146,13 +146,13 @@ else
 fi
 expect_grep "launcher: opencode survives the hostile preloader" "[0-9]*\.[0-9]*" \
     run_ic -e LD_PRELOAD=/tmp/hostile.so -e PRELOAD_PATTERN=hostile \
-        bash -c '/opt/airgap/libexec/airgap-opencode --version'
+        bash -c '/opt/twentyx/libexec/run-opencode --version'
 expect_ok "children: BASH_ENV restores the original preload" \
-    run_ic bash -c 'PRELOAD_ORIGINAL=/tmp/hostile.so BASH_ENV=/opt/airgap/agent/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
+    run_ic bash -c 'PRELOAD_ORIGINAL=/tmp/hostile.so BASH_ENV=/opt/twentyx/agent/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
 
 say "packaged defaults + env injection"
 expect_ok "opencode preload plugin seeded" \
-    run_ic bash -c 'test -f /data/jensen/.config/opencode/plugins/airgap-preload.ts'
+    run_ic bash -c 'test -f /data/jensen/.config/opencode/plugins/preload.ts'
 expect_ok "zed agent_servers default seeded" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
 expect_ok "zed remote server shipped as a packaged default" \
@@ -173,7 +173,7 @@ say "root for the runtime user"
 expect_ok "sudoers grants gid 0 passwordless sudo" \
     run_ic bash -c 'grep -q "%#0" /etc/sudoers'
 expect_ok "setuid sudo binary present (4555)" \
-    run_ic bash -c 'test "$(stat -c %a /opt/airgap/bin/sudo)" = 4555'
+    run_ic bash -c 'test "$(stat -c %a /opt/twentyx/bin/sudo)" = 4555'
 expect_ok "nginx present in the closure" \
     run_ic bash -c 'command -v nginx'
 

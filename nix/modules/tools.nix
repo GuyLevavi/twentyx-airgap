@@ -7,7 +7,7 @@
   ...
 }:
 let
-  cfg = config.airgap;
+  cfg = config.twentyx;
   wsl = cfg.target == "wsl";
 in
 {
@@ -48,7 +48,7 @@ in
       # ── terminal ───────────────────────────────────────────────────────
       # infocmp MUST be on PATH in the pod: fish clamps every unknown TERM to
       # xterm-256color when it cannot probe, silently defeating the shipped
-      # wezterm/tmux-256color terminfo, and airgap-doctor counts it as a
+      # wezterm/tmux-256color terminfo, and doctor counts it as a
       # failure. ncurses is already in the closure via TERMINFO_DIRS — this
       # only puts its bin/ on PATH. Zero closure growth.
       ncurses
@@ -140,16 +140,16 @@ in
       # WSL gets these from the system (NixOS), a pod has to carry them.
       #
       # podman works both sides of the gap: on WSL via virtualisation.podman,
-      # in a pod via the storage.conf that airgap-bootstrap writes into the
+      # in a pod via the storage.conf that bootstrap writes into the
       # ephemeral cache (vfs driver -- no mount(2), no CAP_SYS_ADMIN needed).
       podman
       # RunAI's port-exposure machinery expects an nginx in the workspace; the
       # pytorch bases ship one, slim-based assemblies get it from here so
       # presence does not depend on the base. Its site config, when the exact
       # RunAI contract is pinned down, belongs in the env-injection mount (see
-      # airgap_injection_exports in libexec/airgap-common.sh).
+      # injection_exports in libexec/common.sh).
       nginx
-      # sshd for the sshd -i bridge (libexec/airgap-sshd-inetd): Zed/SSH into
+      # sshd for the sshd -i bridge (libexec/sshd-inetd): Zed/SSH into
       # a pod with no exposed SSH port. On WSL this comes from the system.
       openssh
       # The pod's IDE, in the closure rather than borrowed from the base:
@@ -230,7 +230,7 @@ in
       # remote server still ships via home.nix, both targets.
     ]
     ++ lib.optionals cfg.python.enable [
-      # WSL only. See airgap.python.enable — on the *-pytorch bases the system
+      # WSL only. See twentyx.python.enable — on the *-pytorch bases the system
       # interpreter owns torch and CUDA, and a Nix python there would shadow it
       # while being unable to see any of it.
       #

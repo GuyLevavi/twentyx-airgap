@@ -2,7 +2,7 @@
 # Container entrypoint -- materialize $HOME, register the runtime user, exec
 # the payload.
 #
-# $HOME is relocated onto the PVC by airgap-bootstrap, so what survives a
+# $HOME is relocated onto the PVC by bootstrap, so what survives a
 # restart is everything rather than a hand-maintained list. Two layers:
 #
 #   $TOOLCHAIN_ROOT/home-defaults   packaged defaults, symlinks into /nix/store
@@ -12,17 +12,17 @@
 # never touches the latter.
 set -euo pipefail
 
-TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
-. "$TOOLCHAIN_ROOT/libexec/airgap-common.sh"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
+. "$TOOLCHAIN_ROOT/libexec/common.sh"
 
-"$TOOLCHAIN_ROOT/libexec/airgap-bootstrap" || warn "bootstrap incomplete, continuing"
+"$TOOLCHAIN_ROOT/libexec/bootstrap" || warn "bootstrap incomplete, continuing"
 
 # Bootstrap runs as a CHILD, so its exports die with it -- and for an arbitrary
 # UID with no passwd entry the runtime itself sets HOME=/ (observed). Resolve
 # here, in this process, so everything exec'd below -- the base entrypoint,
 # code-server, `runai exec` payloads -- inherits the relocated $HOME. This is
 # the same resolution doctor does; the two must agree by construction.
-HOME="$(airgap_home)"
+HOME="$(session_home)"
 export HOME
 mkdir -p "$HOME" 2>/dev/null || true
 
@@ -30,7 +30,7 @@ mkdir -p "$HOME" 2>/dev/null || true
 # below -- code-server and friends never source a shell rc, and this is the
 # last point where pod-wide env can be set. (`runai exec` payloads are a CRI
 # exec: they get image ENV only, which is why the launcher re-resolves too.)
-if INJ="$(airgap_injection_exports)"; then
+if INJ="$(injection_exports)"; then
     while IFS=$'\t' read -r k v; do
         export "$k=$v"
     done <<EOF

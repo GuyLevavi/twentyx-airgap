@@ -71,7 +71,7 @@ session_env_args() {
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         printf -- '--env\n%s\n' "$line"
-    done < <(tar -xzOf "$layer" --occurrence=1 opt/airgap/session-env 2>/dev/null || true)
+    done < <(tar -xzOf "$layer" --occurrence=1 opt/twentyx/session-env 2>/dev/null || true)
 }
 
 echo "layers:"
@@ -90,10 +90,10 @@ for variant in $VARIANTS; do
         echo "  warn: $base declares no PATH; using a conservative default" >&2
         BASEPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     fi
-    NEWPATH="/opt/airgap/libexec:/opt/airgap/bin:/opt/airgap/profile/bin:${BASEPATH}"
+    NEWPATH="/opt/twentyx/libexec:/opt/twentyx/bin:/opt/twentyx/profile/bin:${BASEPATH}"
 
     # Same reasoning for the entrypoint: the vscode-* bases launch code-server
-    # from theirs. airgap-entrypoint bootstraps and then hands over, so record
+    # from theirs. entrypoint bootstraps and then hands over, so record
     # what it should hand over TO instead of discarding it.
     BASE_ENTRY="$(crane config "$base" 2>/dev/null \
         | jq -r '((.config.Entrypoint // []) + (.config.Cmd // [])) | join(" ")')"
@@ -118,13 +118,13 @@ for variant in $VARIANTS; do
         # Image config only; no layer traffic.
         crane mutate "$dest" -t "$dest" \
             "${ENVARGS[@]}" \
-            --env TOOLCHAIN_ROOT=/opt/airgap \
+            --env TOOLCHAIN_ROOT=/opt/twentyx \
             --env "PATH=${NEWPATH}" \
             --env "BASE_ENTRYPOINT=${BASE_ENTRY}" \
-            --entrypoint /opt/airgap/libexec/airgap-entrypoint \
+            --entrypoint /opt/twentyx/libexec/entrypoint \
             --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
-            --label "airgap.variant=${variant}" \
-            --label "airgap.flavor=${flavor}" >/dev/null
+            --label "twentyx.variant=${variant}" \
+            --label "twentyx.flavor=${flavor}" >/dev/null
 
         echo "    -> ${dest}"
     done

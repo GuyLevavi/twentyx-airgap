@@ -13,7 +13,7 @@ The working antidote does **not** unset `LD_PRELOAD`; it *replaces* it with libc
 
     LD_PRELOAD="${LIBC:-/lib/x86_64-linux-gnu/libc.so.6}"   # LIBC via ldd + awk
 
-That is better than unsetting, and `libexec/airgap-opencode` now matches it exactly -- with one
+That is better than unsetting, and `libexec/run-opencode` now matches it exactly -- with one
 refinement the pi-era version got wrong: **the libc must come from the same glibc as the binary
 being preloaded**. opencode is Nix-built (glibc 2.4x); preloading the base image's *system* libc
 into it is a `GLIBC_PRIVATE` symbol-lookup error, not a no-op. The launcher resolves the libc with
@@ -35,7 +35,7 @@ the launcher and opencode never starts. Fixed with `|| true` -- the same pattern
 
 Still worth confirming in-pod: nothing beyond the TUI is affected once the split is in place --
 the TUI gets the matching-libc no-op preload, and every bash child gets the original back via
-`agent/plugins/airgap-preload.ts` (opencode `shell.env` hook) plus `agent/restore-preload.sh`
+`agent/plugins/preload.ts` (opencode `shell.env` hook) plus `agent/restore-preload.sh`
 (`BASH_ENV`). Set `PRELOAD_RESTORE_AGENT_BASH=0` to disable the restore half.
 
 ## 2. Identity on the shared PVC  [RESOLVED -- implemented, team-shaped]
@@ -45,7 +45,7 @@ Probe output confirmed: every runtime user is `jensen`, uid 10001, gid 0, and th
 The OS knows nothing about who you are; the workspace name is the per-user signal the platform
 gives.
 
-Resolution chain in `airgap_user()`, first hit wins:
+Resolution chain in `session_user()`, first hit wins:
 
 1. `$SESSION_USER` (explicit override -- the dash-in-username escape hatch)
 2. hostname, stripped of the `-<n>-<n>` suffix, leading component -- **the
@@ -94,17 +94,18 @@ Two independent flows, which used to be one:
   opencode is built from source by nixpkgs and rides in the closure.
 
 **No signing keys, by decision (2026-09).** The two-checksum scheme is covered by Nix's
-per-store-path hashing and the layers' `.sha256` sidecars; adding an ed25519 trust chain on top
-was declined as ceremony. `nix/hosts/wsl.nix` keys `require-sigs` off `cache-pubkey`'s existence,
+per-store-path hashing; adding an ed25519 trust chain on top was declined as ceremony.
+`nix/hosts/wsl.nix` keys `require-sigs` off `cache-pubkey`'s existence,
 so the unsigned path needs no edit and prints that it is unverified.
 
 **What replaced the two-checksum scheme.** `manifest.toml` hashed upstream archives (*did I
 download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
 transfer corrupt anything?*). Nix covers both, better: the flake lock pins inputs by hash, and the
 binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
-the path it damaged, not on "the transfer". The layer tarballs keep a plain
-`.sha256` sidecar, because CI fetches them over HTTP and has no Nix to ask. (Signing was the
-old plan for tamper-evidence; declined 2026-09 -- see above.)
+the path it damaged, not on "the transfer". The tarballs carry no checksum sidecars either: a
+corrupt layer surfaces as missing store paths in the pod (`doctor` checks exactly that),
+which is the failure that matters. (Signing was the old plan for tamper-evidence; declined
+2026-09 -- see above.)
 
 ## 4. Base images  [you own a derived base; names for you to fill in]
 
@@ -120,7 +121,7 @@ There is no container build left in OUR pipeline -- no Stage 1, no node layer, o
 You build images on top of the vendor base yourself (that predates this project), so a thin
 **derived base** is available whenever the vendor base needs a fix we cannot append (§6) --
 and it can bake registry/cert/pip/npm defaults for pip-and-npm-via-Artifactory. Those baked
-values stay *defaults*: the env-injection contract (§3 of airgap-common, `/opt/airgap-env`)
+values stay *defaults*: the env-injection contract (§3 of common, `/opt/airgap-env`)
 overrides them per cluster, so a base rebuilt for a new registry does not strand old pods.
 Whether to supersede the vendor base wholesale or keep a 5-line derived Dockerfile is a
 deliberate tradeoff to make when the first transfer is planned.
@@ -154,11 +155,11 @@ rather than in our append-only flow.
 
 Mitigated meanwhile (works today, no base change needed):
 
-- `airgap-bootstrap` sets `USER`, `LOGNAME` and `HOME` in the generated fish and bash drop-ins,
+- `bootstrap` sets `USER`, `LOGNAME` and `HOME` in the generated fish and bash drop-ins,
   which most tools consult before attempting a passwd lookup.
-- `airgap-entrypoint` registers the UID and names the groups **if** `/etc/passwd` and
+- `entrypoint` registers the UID and names the groups **if** `/etc/passwd` and
   `/etc/group` happen to be writable, and stays quiet if not.
-- `airgap-doctor` reports whether self-registration is possible and which groups are unnamed.
+- `doctor` reports whether self-registration is possible and which groups are unnamed.
 
 Until the derived base exists the warning is noise, not breakage.
 
@@ -175,7 +176,7 @@ mechanism instead of whatever the base bundled.
 
 What stays from the deferral, because it costs nothing:
 
-- `assemble.sh` records the base's ENTRYPOINT in `BASE_ENTRYPOINT` and `airgap-entrypoint`
+- `assemble.sh` records the base's ENTRYPOINT in `BASE_ENTRYPOINT` and `entrypoint`
   hands over to it. Without that, replacing ENTRYPOINT to run bootstrap would give you a
   `vscode-*` workspace whose IDE never starts.
 - Session variables are image ENV, so code-server's task runner -- not a login shell -- still gets
@@ -204,11 +205,11 @@ under the problematic pod shape and assert the behaviors that each broke once:
 - **The pod UID is emulated for real**: `podman run --user 10001:0` -- an
   arbitrary UID with no passwd entry, gid 0. This is what caught the runtime
   setting `HOME=/` (no passwd entry -> the runtime guesses), which is why the
-  entrypoint and launcher re-resolve via `airgap_home()`.
+  entrypoint and launcher re-resolve via `session_home()`.
 - **The preloader crash is reproduced** with `tests/hostile-preloader.c`, a
   synthetic .so that aborts only the agent binary -- the same shape as the
   real fractioning libs (opencode dies, system binaries are fine). Asserted:
-  bare opencode dies, `airgap-opencode` survives, children get the original
+  bare opencode dies, `run-opencode` survives, children get the original
   preload back via `BASH_ENV`.
 - Also asserted: closure integrity after `crane append`, defaults seeding
   (opencode plugin, Zed settings), the env-injection contract, sudoers +
@@ -219,7 +220,7 @@ podman is a userns artifact (setuid-root maps to the host user, which cannot
 read /etc/shadow; in a real pod setuid-root is real root), and the repro exits
 139 or 134 depending on the agent binary's own signal handlers. **Unverified
 in the gap: whether RunAI sets `no-new-privileges`**, which would block the
-setuid bit entirely -- `airgap-doctor`'s sudo line answers it on a real pod.
+setuid bit entirely -- `doctor`'s sudo line answers it on a real pod.
 
 GPU: `tests/test-gpu-cuda.sh` verifies passthrough + `torch.cuda` on a host
 with the nvidia CDI setup (one-time, root) -- which means gpubox only: the
@@ -335,14 +336,14 @@ it is not relitigated:
   after its own version string and only checks `<file> version` exits 0 --
   so `.#windows-kit` ships a Windows installer pinned to the SAME upstream
   release as the closure's zed-editor, and shims for both `<v>` and `<v>+stable`
-  spellings are generated from `airgap.zed.remoteClientVersion` (default =
+  spellings are generated from `twentyx.zed.remoteClientVersion` (default =
   the nixpkgs version). Nothing downloads, ever; the only manual act left is
   re-pinning the installer when nixpkgs bumps (nix/packages/windows-kit.nix).
   Known edge: the client
   resolves `.zed_server` relative to the SSH session's `$HOME`, which is why
   the entrypoint/sshd-inetd self-registration must point at the PVC home --
   it does. The `opencode acp` integration needs none of this: it runs
-  locally. The `sshd -i` bridge (`libexec/airgap-sshd-inetd` +
+  locally. The `sshd -i` bridge (`libexec/sshd-inetd` +
   `scripts/ssh-bridge.sh`) is implemented but only exercised against a real
   `runai exec` -- the privsep-user and passwd self-registration inside the
   pod are best-effort until then.

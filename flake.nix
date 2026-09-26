@@ -53,7 +53,7 @@
       # files from the source tree, so there the default is what ships —
       # which is why the owner default is jensen, matching the pod side).
       # The pod side never sees this: in a RunAI pod the identity is
-      # resolved at runtime from the workspace name (see airgap_user).
+      # resolved at runtime from the workspace name (see session_user).
       username =
         let
           f = ./wsl-username;
@@ -73,10 +73,10 @@
           modules = [
             ./nix/modules/home.nix
             {
-              airgap.target = "runai";
-              airgap.nvim.enable = nvim;
+              twentyx.target = "runai";
+              twentyx.nvim.enable = nvim;
               home.username = "jensen";
-              # Replaced at runtime by airgap-bootstrap once the workspace name
+              # Replaced at runtime by bootstrap once the workspace name
               # resolves; at eval time it only has to be *a* path.
               home.homeDirectory = "/home/jensen";
             }
@@ -101,7 +101,7 @@
               extraSpecialArgs = { inherit inputs username; };
               users.${username} = {
                 imports = [ ./nix/modules/home.nix ];
-                airgap.target = "wsl";
+                twentyx.target = "wsl";
               };
             };
           }
@@ -140,14 +140,14 @@
         # bind mounts, so the wrapper re-execs it inside a user namespace
         # (`unshare -rm`, this uid mapped to namespace-root). Nothing it
         # produces is owned by root — nixos.wsl lands owned by the invoking
-        # user, unlike the sudo run. Set AIRGAP_NO_UNSHARE=1 to skip the
+        # user, unlike the sudo run. Set NO_UNSHARE=1 to skip the
         # namespace if a caller genuinely is root (or cannot use userns).
         wsl-tarball =
           let
             inner = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
           in
           pkgs.writeShellScriptBin "nixos-wsl-tarball-builder" ''
-            if [ "$(id -u)" = 0 ] || [ -n "''${AIRGAP_NO_UNSHARE:-}" ]; then
+            if [ "$(id -u)" = 0 ] || [ -n "''${NO_UNSHARE:-}" ]; then
               exec ${inner}/bin/nixos-wsl-tarball-builder "$@"
             fi
             exec ${pkgs.util-linux}/bin/unshare -rm ${inner}/bin/nixos-wsl-tarball-builder "$@"

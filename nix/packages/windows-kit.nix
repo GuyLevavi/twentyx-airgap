@@ -84,7 +84,7 @@ let
     mkdir bundle
     ln -s ${kit} bundle/windows-kit
     # -h dereferences the store symlinks into real bytes; sort+fixed
-    # mtime+owner keep the bytes reproducible for the sha256 sidecar.
+    # mtime+owner keep the bytes reproducible.
     tar -C bundle \
       -c -h --sort=name --mtime='@1' --owner=0 --group=0 \
       windows-kit \

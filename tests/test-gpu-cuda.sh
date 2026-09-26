@@ -50,7 +50,7 @@ check "a CUDA tensor actually computes on device" \
 if [ -n "$TEST_ASSEMBLED_IMAGE" ]; then
     say "assembled image: doctor's two-sided torch check"
     check "doctor reports torch.cuda true in both envs" \
-        "run_gpu /opt/airgap/libexec/airgap-doctor 2>&1 | grep 'torch.cuda' | grep -c True | grep -q 2"
+        "run_gpu /opt/twentyx/libexec/doctor 2>&1 | grep 'torch.cuda' | grep -c True | grep -q 2"
 fi
 
 exit "$(summary && echo 0 || echo 1)"

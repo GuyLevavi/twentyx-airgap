@@ -26,7 +26,7 @@ lint:
   stage: lint
   image: koalaman/shellcheck-alpine:stable
   script:
-    - shellcheck -S warning libexec/airgap-* agent/*.sh tests/*.sh scripts/*.sh docker/*.sh
+    - shellcheck -S warning libexec/* agent/*.sh tests/*.sh scripts/*.sh docker/*.sh
   rules:
     - changes: [libexec/**/*, agent/**/*, tests/**/*, scripts/**/*, docker/**/*]
 

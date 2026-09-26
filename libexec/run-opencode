@@ -16,21 +16,21 @@
 # children:
 #
 #   here                       neutralize LD_PRELOAD, stash the original
-#   agent/plugins/airgap-*.ts  shell.env hook restores it for shell execution
+#   agent/plugins/preload.ts   shell.env hook restores it for shell execution
 #   agent/restore-preload.sh   BASH_ENV restores it for non-interactive bash
 #
 # opencode runs clean. Children run exactly as an interactive shell does.
 set -euo pipefail
 
-TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/airgap}"
-. "$TOOLCHAIN_ROOT/libexec/airgap-common.sh"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
+. "$TOOLCHAIN_ROOT/libexec/common.sh"
 
 # HOME is only correct once a login shell has sourced the drop-ins. A payload
-# reached via `runai exec -- airgap-opencode` or a code-server task starts with
+# reached via `runai exec -- run-opencode` or a code-server task starts with
 # whatever the runtime set -- for an arbitrary UID that is HOME=/ -- and
 # opencode would then scatter its state into / instead of the PVC. Same
-# resolution as airgap-doctor; the two must agree by construction.
-RESOLVED_HOME="$(airgap_home)"
+# resolution as doctor; the two must agree by construction.
+RESOLVED_HOME="$(session_home)"
 if [ "$HOME" != "$RESOLVED_HOME" ]; then
     mkdir -p "$RESOLVED_HOME" 2>/dev/null || true
     export HOME="$RESOLVED_HOME"
@@ -39,7 +39,7 @@ fi
 # Environment-provided assets (internal CA, pip.conf) -- same set bootstrap
 # writes into the shell drop-ins, so the agent's process tree trusts what an
 # interactive shell trusts.
-if INJ="$(airgap_injection_exports)"; then
+if INJ="$(injection_exports)"; then
     while IFS=$'\t' read -r k v; do
         export "$k=$v"
     done <<EOF

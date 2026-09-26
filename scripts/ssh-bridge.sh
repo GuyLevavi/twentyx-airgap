@@ -2,7 +2,7 @@
 # Client side (WSL): bridge Zed/SSH to a RunAI workload that exposes no SSH
 # port. A local socat listener forwards each TCP connection into
 # `runai exec -i`, whose stdin/stdout IS the SSH protocol (sshd -i, server
-# side: libexec/airgap-sshd-inetd). Every connection gets its own exec.
+# side: libexec/sshd-inetd). Every connection gets its own exec.
 #
 #   ./scripts/ssh-bridge.sh <runai-workload> [port]        port default 2222
 #
@@ -24,7 +24,7 @@
 # Zed remote: "Connect to Remote Server" -> ssh://runai-workspace (or the
 # localhost:port form). The remote server ships in the closure as a packaged
 # default under ~/.zed_server -- nothing downloads. The only knob is
-# airgap.zed.remoteClientVersion in nix/modules/home.nix, which must carry the
+# twentyx.zed.remoteClientVersion in nix/modules/home.nix, which must carry the
 # Windows client's exact `zed --version` string. The OpenCode integration
 # needs none of that: it runs `opencode acp` locally (see the packaged Zed
 # settings default).
@@ -45,4 +45,4 @@ say "connect with: ssh -p $PORT jensen@127.0.0.1"
 # fork: one runai exec per connection. No pty anywhere on this path -- a pty
 # would corrupt the binary SSH protocol with echo/CRLF translation.
 exec socat "TCP-LISTEN:$PORT,bind=127.0.0.1,reuseaddr,fork" \
-    "EXEC:runai exec -i $WORKLOAD -- sudo /opt/airgap/libexec/airgap-sshd-inetd"
+    "EXEC:runai exec -i $WORKLOAD -- sudo /opt/twentyx/libexec/sshd-inetd"

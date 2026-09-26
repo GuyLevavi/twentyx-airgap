@@ -15,7 +15,7 @@
   ...
 }:
 let
-  cfg = config.airgap;
+  cfg = config.twentyx;
 
   # The server set nvim enables: canonical nvim config name -> the argv that
   # makes the binary speak LSP. The names are what `vim.lsp.enable` takes (not

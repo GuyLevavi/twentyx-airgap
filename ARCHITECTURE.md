@@ -52,8 +52,8 @@ Three artifact classes, three mechanisms:
 | The WSL root tarball | `nix build .#wsl-tarball` | `wsl --import` on Windows |
 
 Chunks are content-addressed, so they transfer in any order and reassemble by
-hash; each has a `.sha256` sidecar. There is deliberately no signing: Nix
-verifies per store path, which is stronger than a tarball signature anyway.
+hash. There is deliberately no signing and no checksum sidecars: Nix verifies
+per store path, which is stronger than a tarball signature anyway.
 
 ## How the pod image is assembled (and why not Dockerfile)
 
@@ -84,19 +84,19 @@ The runtime user is arbitrary (uid 10001, gid 0, no passwd entry), `$HOME` is
 a wiped tmpfs, and RunAI preloads GPU-fractioning `.so` files that crash the
 agent binary. The boot chain:
 
-1. `libexec/airgap-entrypoint` — runs first; calls bootstrap, re-resolves
+1. `libexec/entrypoint` — runs first; calls bootstrap, re-resolves
    `$HOME` onto the PVC (the runtime sets `HOME=/` when there is no passwd
    entry), then execs the base's stashed ENTRYPOINT.
-2. `libexec/airgap-bootstrap` — relocates `$HOME` to `/data/<user>` (durable),
+2. `libexec/bootstrap` — relocates `$HOME` to `/data/<user>` (durable),
    links the **packaged defaults** into it, writes the shell drop-ins with the
    session env (`TERMINFO_DIRS`, `LOCALE_ARCHIVE`, …) and the injected
    variables, and prewrites podman's `storage.conf` (vfs — no mounts needed).
-3. `libexec/airgap-opencode` — the agent launcher: replaces the hostile
+3. `libexec/run-opencode` — the agent launcher: replaces the hostile
    `LD_PRELOAD` with the libc *matching opencode's own glibc* (via `ldd`),
    stashes the original in `PRELOAD_ORIGINAL`, and points `BASH_ENV` at a
    restore script so every command the agent runs gets CUDA back.
-4. `libexec/airgap-doctor` — read-only diagnosis of all of the above.
-5. `libexec/airgap-sshd-inetd` — an sshd driven over `runai exec` stdio, so
+4. `libexec/doctor` — read-only diagnosis of all of the above.
+5. `libexec/sshd-inetd` — an sshd driven over `runai exec` stdio, so
    Zed/SSH can reach a pod with no exposed port (`scripts/ssh-bridge.sh` on
    the WSL side).
 
@@ -108,7 +108,7 @@ fleet-wide config change without a transfer.
 
 Cluster-specific files (internal CA, pip.conf) are never baked in: they arrive
 at `/opt/airgap-env` (ConfigMap mount) or `/data/.airgap-env` (PVC), and
-`airgap_injection_exports()` in `libexec/airgap-common.sh` wires known file
+`injection_exports()` in `libexec/common.sh` wires known file
 names to the standard env vars.
 
 ## The WSL side
@@ -131,9 +131,9 @@ economic model: cheap text pushes, rare fat transfers.
 | 5 | `nix/hosts/wsl.nix` | the WSL system: substituters, nix-ld, sshd, podman, CA |
 | 6 | `nix/runai/layer.nix` | closure → OCI layer tarball, session-env via image ENV |
 | 7 | `docker/assemble.sh` + `mklayer.sh` | the append-not-FROM build, PATH/ENTRYPOINT rules, setuid sudo |
-| 8 | `libexec/airgap-common.sh` | identity chain, HOME resolution, env-injection contract |
-| 9 | `libexec/airgap-entrypoint` → `bootstrap` → `opencode` → `doctor` | the pod boot chain, in that order |
-| 10 | `agent/plugins/airgap-preload.ts` + `agent/restore-preload.sh` | the child-restore half of the preload split |
+| 8 | `libexec/common.sh` | identity chain, HOME resolution, env-injection contract |
+| 9 | `libexec/entrypoint` → `bootstrap` → `run-opencode` → `doctor` | the pod boot chain, in that order |
+| 10 | `agent/plugins/preload.ts` + `agent/restore-preload.sh` | the child-restore half of the preload split |
 | 11 | `scripts/` (build-layers, nix-export, nix-import, push-artifactory, ssh-bridge) | the transfer flows |
 | 12 | `tests/test-container.sh` | the problematic pod, reproduced locally |
 | 13 | `NOTES.md` | why things are the way they are — the failures behind the comments |

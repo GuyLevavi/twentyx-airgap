@@ -12,7 +12,7 @@
   ...
 }:
 let
-  cfg = config.airgap;
+  cfg = config.twentyx;
 
   # Full glibcLocales is 222 MB of closure for locales nobody uses; trimmed to
   # the two we actually need it is 3 MB. Measured, not guessed.
@@ -64,14 +64,14 @@ let
 in
 {
   imports = [
-    # Always imported; nvim.nix gates it on airgap.nvim.enable, because
+    # Always imported; nvim.nix gates it on twentyx.nvim.enable, because
     # `imports` cannot depend on config without infinite recursion.
     ./shell.nix
     ./tools.nix
     ./nvim.nix
   ];
 
-  options.airgap = {
+  options.twentyx = {
     target = lib.mkOption {
       type = lib.types.enum [
         "wsl"
@@ -199,8 +199,8 @@ in
     # pager, delta) ship as /etc/gitconfig instead — from the repo layer in a
     # pod, from environment.etc on WSL — and every user owns
     # ~/.config/git/config as a real, durable, editable file. Identity in a
-    # pod comes from the workspace-name convention (airgap_user in
-    # airgap-common.sh), never from a baked email: this closure is
+    # pod comes from the workspace-name convention (session_user in
+    # common.sh), never from a baked email: this closure is
     # distributed to a team.
     home.packages = [ pkgs.gitMinimal ];
 
@@ -213,7 +213,7 @@ in
       # means bootstrap keeps it fresh across images unless the user
       # deliberately overrides it with a real file.
       {
-        ".config/opencode/plugins/airgap-preload.ts".source = ../../agent/plugins/airgap-preload.ts;
+        ".config/opencode/plugins/preload.ts".source = ../../agent/plugins/preload.ts;
       }
 
       # Editor integration. code-server (the pod's IDE) scans this dir, so a

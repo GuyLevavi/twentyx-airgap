@@ -18,7 +18,7 @@ actually references, and nothing else.
 | How it arrives | binary cache, `scripts/nix-import.sh` | `crane append`, `docker/assemble.sh` |
 | Python | Nix (3.11 + 3.12, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
 | Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
-| Agent | opencode + herdr | opencode (via `airgap-opencode`) + herdr |
+| Agent | opencode + herdr | opencode (via `run-opencode`) + herdr |
 | Editor | zed (GUI), VS Code desktop over Remote-SSH | code-server (closure) + zed remote server |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
@@ -61,8 +61,8 @@ nvim, the LSPs and pip on a network filesystem are painfully slow. A cache is
 reconstructible by definition.
 
 ```
-airgap-doctor        layers, closure, terminal, sudo, podman, env, endpoint
-airgap-opencode      launch opencode with the RunAI preload handled
+doctor               layers, closure, terminal, sudo, podman, env, endpoint
+run-opencode         launch opencode with the RunAI preload handled
 code-server          the pod IDE — in the closure, ahead of the base's copy
 sudo <cmd>           the runtime user (gid 0) has passwordless root
 podman ...           rootful via sudo; storage.conf prewritten (vfs)
@@ -86,7 +86,7 @@ CRI exec, which only sees image ENV): `pip.conf` → `PIP_CONFIG_FILE`,
 `ca-bundle.crt` → `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`,
 `GIT_SSL_CAINFO`, `NIX_SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`. Unknown file
 names are simply present at their path — that is the extension point for the
-next "thing that needs to be there". `airgap-doctor` reports what was found.
+next "thing that needs to be there". `doctor` reports what was found.
 The system trust store is also updated best-effort via sudo (Debian bases).
 
 Two related, operator-supplied values are plain env, not files:
@@ -117,7 +117,7 @@ Packaged defaults live in `$TOOLCHAIN_ROOT/home-defaults` as a directory of
 per-file symlinks into the store — and overlayfs **merges directories across
 layers**. So the repo layer, which CI re-tars per commit, can override any
 individual packaged default by shipping a real file at the same path
-(`opt/airgap/home-defaults/.config/starship.toml`, say): seconds, no closure
+(`opt/twentyx/home-defaults/.config/starship.toml`, say): seconds, no closure
 rebuild, no physical transfer. A user's real file in `$HOME` still wins over
 both — that precedence is enforced by bootstrap, not by the filesystem.
 
@@ -148,15 +148,15 @@ RunAI injects GPU-fractioning `.so` files via `LD_PRELOAD`. They crash opencode,
 but stripping them everywhere breaks CUDA in everything the agent runs. Both are
 true at once, so treat the process and its children separately:
 
-- `libexec/airgap-opencode` replaces `LD_PRELOAD` with the libc **matching the
+- `libexec/run-opencode` replaces `LD_PRELOAD` with the libc **matching the
   binary's own glibc** (resolved with `ldd` — a system libc preloaded into a
   Nix-built binary is a `GLIBC_PRIVATE` error, not a no-op), stashing the
   original in `PRELOAD_ORIGINAL`
-- `agent/plugins/airgap-preload.ts` restores the stash via opencode's
+- `agent/plugins/preload.ts` restores the stash via opencode's
   `shell.env` hook; `agent/restore-preload.sh` does the same via `BASH_ENV` for
   any non-interactive bash the hook does not cover
 
-`airgap-doctor` prints `torch.cuda.is_available()` under both.
+`doctor` prints `torch.cuda.is_available()` under both.
 
 ## Headless nvim over RunAI
 
@@ -180,7 +180,7 @@ flake.nix                     both targets, pinned inputs
 nix/modules/                  the shared config: home, shell, tools, nvim
 nix/hosts/wsl.nix             NixOS-WSL: offline substituters, nix-ld, sshd, podman
 nix/runai/layer.nix           the closure -> an OCI layer tarball
-libexec/airgap-*              bootstrap, doctor, entrypoint, opencode, sshd-inetd
+libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
@@ -225,10 +225,9 @@ user rather than by Nix (this toolchain is distributed to a team, and a baked
 email would file everyone's state into the owner's directory).
 
 No signing key, by decision: integrity is the content-addressed store hash for
-the binary cache (a damaged chunk fails on the path it damaged) and the
-`.sha256` sidecars for the layer tarballs. `nix/hosts/wsl.nix` keys
-`require-sigs` off `cache-pubkey`'s existence, so the unsigned path needs no
-edit and says so when it runs.
+the binary cache (a damaged chunk fails on the path it damaged). `nix/hosts/wsl.nix`
+keys `require-sigs` off `cache-pubkey`'s existence, so the unsigned path needs
+no edit and says so when it runs.
 
 ## Zed remote, declared
 
@@ -248,7 +247,7 @@ into a pod.
 ## Status
 
 The Nix side is built and tested; the layers below were produced and unpacked,
-`airgap-bootstrap`/`airgap-doctor` were run against the real tree, and the
+`bootstrap`/`doctor` were run against the real tree, and the
 chunked transfer was verified by reassembling in reverse order and diffing.
 The opencode/LD_PRELOAD split and the sudoers+setuid root path were exercised
 end-to-end against a mock base in a local registry (see NOTES.md §8).
