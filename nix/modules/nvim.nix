@@ -17,18 +17,44 @@
 let
   cfg = config.airgap;
 
-  # The server NAME strings nvim must know about. They match the executables
-  # on PATH shipped by tools.nix's LSP group -- keep the two lists in sync
-  # when a server is added there.
-  lspServers = [
-    "basedpyright"
-    "ruff"
-    "nixd"
-    "bash-language-server"
-    "yaml-language-server"
-    "taplo"
-    "package-version-server"
-  ];
+  # The server set nvim enables: canonical nvim config name -> the argv that
+  # makes the binary speak LSP. The names are what `vim.lsp.enable` takes (not
+  # always the binary name: `bashls`, `yamlls`), and argv is load-bearing --
+  # measured failures with a bare command: `ruff` and `taplo` print help and
+  # exit, yaml-language-server dies with "Connection input stream is not set".
+  # Keep in sync with tools.nix's LSP group; `package-version-server` is
+  # absent on purpose: it is Zed's TOML hover helper, not an nvim server.
+  lspServers = {
+    basedpyright = [
+      "basedpyright-langserver"
+      "--stdio"
+    ];
+    ruff = [
+      "ruff"
+      "server"
+    ];
+    nixd = [ "nixd" ];
+    bashls = [
+      "bash-language-server"
+      "start"
+    ];
+    yamlls = [
+      "yaml-language-server"
+      "--stdio"
+    ];
+    taplo = [
+      "taplo"
+      "lsp"
+      "stdio"
+    ];
+  };
+
+  lspSetup = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (
+      name: argv:
+      ''  vim.lsp.config["${name}"] = { cmd = { ${lib.concatMapStringsSep ", " (a: ''"${a}"'') argv} } }''
+    ) lspServers
+  );
 
   # withAllGrammars is ~1 GB. This curated set is ~40 MB and covers every
   # language in this repo and the ones you actually work in.
@@ -72,14 +98,27 @@ let
     vim.opt.updatetime = 250
 
     -- ── LSP: everything comes from PATH, nothing is downloaded ───────────
-    for _, name in ipairs({ ${lib.concatMapStringsSep ", " (s: ''"${s}"'') lspServers} }) do
-      vim.lsp.config[name] = { cmd = { name } }
-      vim.lsp.enable(name)
-    end
-    vim.lsp.completion.enable(true, nil, nil)
+    -- The cmd arrays carry the arguments each binary needs; the config names
+    -- are nvim's runtime names. See nix/modules/nvim.nix for the measured
+    -- failure modes a bare command produces.
+${lspSetup}
 
+    -- nixd needs a settings object, otherwise the workspace/configuration
+    -- reply is not an object and nixd logs a parse error; nixfmt is shipped.
+    vim.lsp.config.nixd.settings = { nixd = { formatting = { command = { "nixfmt" } } } }
+
+    vim.lsp.enable({ ${lib.concatMapStringsSep ", " (n: ''"${n}"'') (lib.attrNames lspServers)} })
+
+    -- Completion is enabled per attaching client. The previous global call
+    -- (vim.lsp.completion.enable(true, nil, nil)) throws "invalid client ID"
+    -- before any client exists.
     vim.api.nvim_create_autocmd("LspAttach", {
       callback = function(args)
+        local client = vim.lsp.get_client_by_id(args.data.client_id)
+        if client and client:supports_method("textDocument/completion") then
+          vim.lsp.completion.enable(true, client.id, args.buf, { autotrigger = true })
+        end
+
         local map = function(lhs, rhs, desc)
           vim.keymap.set("n", lhs, rhs, { buffer = args.buf })
         end

@@ -265,6 +265,21 @@ in
                       "args": ["acp"]
                     }
                   },
+                  // Pin every language server to its closure path. Without
+                  // this Zed falls back to downloading a server when the PATH
+                  // lookup misses (measured in the WSL remote session), which
+                  // is exactly the runtime fetch an airgap cannot afford.
+                  "lsp": {
+                    "nixd": {
+                      "binary": { "path": "${pkgs.nixd}/bin/nixd" }
+                    },
+                    "basedpyright": {
+                      "binary": { "path": "${pkgs.basedpyright}/bin/basedpyright-langserver" }
+                    },
+                    "ruff": {
+                      "binary": { "path": "${pkgs.ruff}/bin/ruff" }
+                    }
+                  },
                   "languages": {
                     "Nix": {
                       "language_servers": ["nixd", "!nil"]
@@ -274,6 +289,7 @@ in
                       "formatter": { "language_server": { "name": "ruff" } }
                     }
                   },
+                  "auto_update": false,
                   "telemetry": {
                     "metrics": false,
                     "diagnostics": false
@@ -282,6 +298,18 @@ in
               '';
         }
       )
+
+      # btop: a themed default instead of the stock black. The theme file
+      # ships inside the closure's btop package (share/btop/themes);
+      # theme_background = false keeps the terminal's own background, which is
+      # the "inherit from the terminal" behavior. Replace with a real file to
+      # customise -- packaged defaults never win over the user's own.
+      {
+        ".config/btop/btop.conf".text = ''
+          color_theme = "tokyo-night"
+          theme_background = false
+        '';
+      }
 
       # Zed remote development, fully declared. The server binary ships
       # under its nixpkgs name; shims with the filenames a client looks for
