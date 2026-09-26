@@ -48,7 +48,10 @@
       # their own Windows user. It is a cheap config line, not a closure
       # decision: put the username (one word) in a gitignored file next to
       # the flake and it takes precedence -- `echo alice > wsl-username`,
-      # then `nix build .#wsl-tarball`. No file means the owner's default.
+      # then `nix build .#wsl-tarball`. The file mechanism only bites in a
+      # PLAIN-DIRECTORY copy of the flake (a git checkout excludes ignored
+      # files from the source tree, so there the default is what ships —
+      # which is why the owner default is jensen, matching the pod side).
       # The pod side never sees this: in a RunAI pod the identity is
       # resolved at runtime from the workspace name (see airgap_user).
       username =
@@ -57,7 +60,7 @@
         in
         if builtins.pathExists f
         then builtins.replaceStrings [ "\n" "\r" ] [ "" "" ] (builtins.readFile f)
-        else "gl";
+        else "jensen";
 
       mkRunai =
         { nvim }:

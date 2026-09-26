@@ -171,7 +171,11 @@ in
         # failed with 127, then bare -z failed with "gzip: Cannot exec").
         ${pkgs.gzip}/bin/gzip -dc "${windowsKit.vscodeServerTar}" \
             | ${pkgs.gnutar}/bin/tar -x -C "$seed" --strip-components=1
-        chown -R ${username}:users "$home/.vscode-server"
+        # || true: at build time the target uid is not mapped in the build's
+        # user namespace, so this chown returns EINVAL. It used to abort the
+        # whole activation snippet here; ownership is fixed at boot by the
+        # tmpfiles rule above, and tar --owner=0 stamps the archive anyway.
+        chown -R ${username}:users "$home/.vscode-server" || true
     fi
   '';
 
@@ -183,12 +187,63 @@ in
 
   users.users.${username} = {
     isNormalUser = true;
+    # WSL relay and SSH keys never ask for a password; "*" just locks
+    # password logins outright.
+    hashedPassword = "*";
     shell = pkgs.bash; # login shell stays bash; fish is exec'd interactively
     extraGroups = [
       "wheel"
       "podman"
     ];
+    # Ownership cannot be set inside the build's user namespace (only uid 0
+    # is mapped, so every chown to a real user returns EINVAL). A home dir
+    # created by the in-chroot activation therefore ships root:root 0700 —
+    # measured: `su - jensen` could not cd into it and home-manager-jensen
+    # failed. tmpfiles (below) creates/re-owns it on first boot, where root
+    # really is root.
+    createHome = false;
   };
+
+  # /home/<user> has to be owned by the user with mode 0700. tmpfiles runs
+  # as real root at boot: `d` creates it, `z` fixes ownership recursively
+  # (the vscode-server seed against the empty path has no writable parent
+  # at build time, so it lands root-owned too).
+  systemd.tmpfiles.rules = [
+    "d /home/${username} 0700 ${username} users -"
+    "z /home/${username} - ${username} users -"
+  ];
+
+  # ── Static identity: the closure ships a complete /etc/passwd ──────────
+  # The first boot of the imported distro died in dbus-broker ("Invalid
+  # user-name ... user=systemd-oom", then launcher_open_journal EACCES,
+  # exit -107): systemd's own D-Bus policy files reference internal users
+  # that no module had declared in this image, and the launcher treats an
+  # unknown user in a policy as fatal. Declaring them here — regardless of
+  # whether the matching services run, because the policies ship with the
+  # systemd package either way — makes the activation write a complete
+  # passwd. With mutableUsers=false that write is a deterministic
+  # regeneration from these declarations, not a useradd that can half-fail
+  # inside the build's user namespace and still ship (the old "|| true").
+  # mutableUsers=false + locked passwords is deliberate: the WSL relay never
+  # authenticates and inbound SSH is key-only (keys are added post-import,
+  # wsl/README.md). This flag acknowledges "no password anywhere" by design.
+  users.allowNoPasswordLogin = true;
+  users.mutableUsers = false;
+  users.users.systemd-oom = {
+    isSystemUser = true;
+    group = "systemd-oom";
+  };
+  users.groups.systemd-oom = { };
+  users.users.systemd-timesync = {
+    isSystemUser = true;
+    group = "systemd-timesync";
+  };
+  users.groups.systemd-timesync = { };
+
+  # D-Bus is deliberately left at the NixOS default (dbus-broker). Its
+  # launcher's EACCES on journald's socket, which once looked like the root
+  # cause, was a symptom of the 0700-/ invariant violation fixed in the
+  # builder below — not a reason to deviate. See wsl/FIRST-BOOT.md.
 
   # ── SSH, both directions ────────────────────────────────────────────────
   # Inbound: Zed/VS Code from Windows connect over plain SSH to this machine
@@ -234,6 +289,58 @@ in
     socat # client side of the sshd -i bridge into RunAI pods
   ];
 
+  # ── Boot evidence for the airgapped machine ────────────────────────────
+  # The machine we cannot debug is the one that boots badly. Every boot, this
+  # appends the decisive evidence — journal head, failed units, and a real
+  # non-root login-shell exec test — to a log the Windows side can read,
+  # so a diagnosis costs one file read, not a support session.
+  systemd.services.airgap-bootlog = {
+    description = "Airgap: append boot evidence to the Windows-mounted log";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "multi-user.target" ];
+    # Explicit PATH: the default ExecStart environment has no coreutils/shadow.
+    path = with pkgs; [
+      coreutils
+      util-linux
+      shadow
+      systemd
+    ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      mkdir -p /var/log 2>/dev/null || true
+      out="/var/log/airgap-bootlog.txt"
+      {
+        echo
+        echo "════════ boot $(date -u '+%Y-%m-%dT%H:%M:%SZ') ════════"
+        echo "── identity ${username}:"
+        id ${username} 2>&1 || true
+        echo "── root directory (must be 755 root:root):"
+        stat -c '%a %U:%G /' / 2>&1 || true
+        ls -ld /home /home/${username} 2>&1 || true
+        echo "── non-root login-shell exec test:"
+        timeout 20 su -l ${username} -c 'id; echo EXEC_OK' 2>&1 || true
+        echo "── failed units:"
+        systemctl --failed --no-pager 2>&1 || true
+        echo "── dbus unit:"
+        systemctl status dbus --no-pager -n 6 2>&1 || true
+        echo "── /run permissions:"
+        ls -ld /run/systemd/journal /run/systemd/journal/socket 2>&1 || true
+        echo "── mounts:"
+        mount | grep -E ' on / | on /run ' 2>&1 || true
+        echo "── journal head:"
+        journalctl -b --no-pager 2>&1 | head -120 || true
+      } >> "$out" 2>&1 || true
+      # The shared Windows partition appears only once the WSL automount is
+      # up; retry rather than guess the ordering.
+      for _ in 1 2 3 4 5 6; do
+        if [ -d /mnt/c/twentyx ]; then
+          cp "$out" /mnt/c/twentyx/bootlog.txt 2>/dev/null && break
+        fi
+        sleep 5
+      done
+    '';
+  };
+
   # ── the WSL rootfs tarball, built without root ─────────────────────────
   # Replaces the upstream tarballBuilder: its nixos-install path cannot run
   # in a user namespace — the trusted daemon copies the closure into the
@@ -251,6 +358,8 @@ in
     name = "nixos-wsl-tarball-builder";
     runtimeInputs = with pkgs; [
       coreutils
+      findutils
+      gnugrep
       gnutar
       pigz
       config.nix.package
@@ -358,7 +467,27 @@ in
       echo "[NixOS-WSL] Adding default config..."
       install -Dm644 ${defaultNixosConfig} "$root/etc/nixos/configuration.nix"
 
-      echo "[NixOS-WSL] Compressing..."
+      echo "[NixOS-WSL] Normalizing directory permissions..."
+      # Directory traversal invariant, enforced for the WHOLE tree instead of
+      # path by path. The build root comes from `mktemp -d` (mode 0700) and
+      # the user-namespace activation cannot chown, so restrictive directory
+      # modes can survive into the archive; tar records them and extractors
+      # (GNU tar, measured; WSL's import too) apply them to the distro. A
+      # 0700 / then makes every non-root process fail EACCES on every
+      # absolute path: user shells cannot exec, messagebus cannot reach
+      # journald, login cannot chdir, the WSL relay cannot start a session.
+      # Root bypasses via DAC_OVERRIDE, so it presents as "root works,
+      # nothing user-level does" — every failure in wsl/FIRST-BOOT.md traces
+      # back to this. Files are deliberately NOT widened: the store already
+      # carries correct exec bits, and sshd refuses to start if host keys
+      # are anything but 0600. The bind-mounted trees are pruned: they are
+      # host state, excluded from the tar anyway, and cannot be chmodded.
+      prune=( -path "$root/dev" -o -path "$root/sys" -o -path "$root/proc" )
+      find "$root" \( "''${prune[@]}" \) -prune -o -type d -exec chmod a+rx {} +
+      if find "$root" \( "''${prune[@]}" \) -prune -o -type d ! -perm -o+x -print -quit | grep -q .; then
+        echo "[NixOS-WSL] FATAL: a directory in the image is not traversable" >&2
+        exit 1
+      fi
       # /dev /sys /proc are bind-mounted host trees during the activation
       # step — runtime mounts, not distro content (WSL mounts its own /dev
       # and /proc at import). Excluding keeps live sysfs state (which tar
