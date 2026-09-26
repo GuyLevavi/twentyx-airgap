@@ -120,15 +120,23 @@ echo "$TERM $TERM_PROGRAM"               # terminal identity, see §5
 
 ## 5. Terminal / WezTerm
 
-```bash
-echo $TERM_PROGRAM $TERM                 # what the session is actually in
-ls /mnt/c/Users/*/.wezterm.lua 2>/dev/null   # your config on the Windows side
+You already run WezTerm with `default_domain = "WSL:twentyx"` and Tokyo Night
+(`C:\Users\guyle\.wezterm.lua`; a dotfiles copy lives under
+`Projects/dotfiles-wsl-main/wezterm/`). The one missing setting was the kitty
+keyboard protocol; it has been added to both:
+
+```lua
+config.enable_kitty_keyboard = true
 ```
 
-WezTerm on Windows is *not* part of `windows-kit` (that ships WSL2 MSI, Zed,
-VS Code). If you want kitty-protocol keys (shift+enter in TUIs), install
-WezTerm on Windows and launch `wsl -d twentyx` from it; no Linux-side change
-is needed.
+Restart WezTerm, then re-test shift+enter in opencode — and the nvim warning
+about modes 2026/2027/2031/2048 should disappear. The theme chain now matches
+end to end: WezTerm Tokyo Night → btop `tokyo-night` → opencode
+`"theme": "tokyonight"`.
+
+```bash
+echo $TERM_PROGRAM $TERM                 # confirm which terminal the session is in
+```
 
 ## 6. btop
 
