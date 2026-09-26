@@ -22,8 +22,9 @@ let
   # always the binary name: `bashls`, `yamlls`), and argv is load-bearing --
   # measured failures with a bare command: `ruff` and `taplo` print help and
   # exit, yaml-language-server dies with "Connection input stream is not set".
-  # Keep in sync with tools.nix's LSP group; `package-version-server` is
-  # absent on purpose: it is Zed's TOML hover helper, not an nvim server.
+  # The packages come from nix/modules/lsp.nix (the shared declaration);
+  # `package-version-server` is absent on purpose: it is Zed's TOML hover
+  # helper, not an nvim server.
   lspServers = {
     basedpyright = [
       "basedpyright-langserver"

@@ -9,6 +9,24 @@
 let
   cfg = config.twentyx;
   wsl = cfg.target == "wsl";
+
+  # One declaration for every editor — see nix/modules/lsp.nix.
+  lspPackages = import ./lsp.nix { inherit pkgs; };
+
+  # opencode ships only ripgrep on its PATH (nixpkgs opencode/package.nix),
+  # so its `lsp` config would fall back to runtime downloads — a hang in the
+  # gap. Re-wrap the existing binary with the shared servers on PATH; the
+  # symlinkJoin avoids an overrideAttrs source rebuild. Same shape as
+  # /etc/nixos home/programs.nix.
+  opencodeWithLsp = pkgs.symlinkJoin {
+    name = "opencode-${pkgs.opencode.version}";
+    paths = [ pkgs.opencode ];
+    nativeBuildInputs = [ pkgs.makeWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/opencode \
+        --prefix PATH : ${pkgs.lib.makeBinPath lspPackages}
+    '';
+  };
 in
 {
   programs.bat.enable = true;
@@ -89,7 +107,8 @@ in
       # from here: the compiled binary targets x86-64-v3 (AVX2) and will SIGILL
       # on pre-Haswell cluster nodes -- if a node ever dies this way, the fix
       # is a local overlay building the --baseline variant, not a downgrade.
-      opencode
+      # Shipped wrapped so its LSPs spawn the shared closure binaries by name.
+      opencodeWithLsp
       # Terminal multiplexer for agent sessions; sessions outlive their SSH
       # exec, state per pane.
       herdr
@@ -97,22 +116,6 @@ in
       # ── data ───────────────────────────────────────────────────────────
       sqlite # atuin's own store, plus general use
       jless
-
-      # ── language servers: declared, not downloaded ─────────────────────
-      # One LSP set, consumed by BOTH editors: nvim natively (vim.lsp.config
-      # from PATH, nix/modules/nvim.nix) and Zed via PATH discovery — the
-      # same shape the /etc/nixos zed.nix extraPackages block uses. In the
-      # airgap this is the difference between editors that work and editors
-      # that hang trying to download a server at runtime. Keep this list in
-      # sync with nvim.nix's lspServers.
-      basedpyright
-      ruff
-      nixd
-      nixfmt
-      bash-language-server
-      yaml-language-server
-      taplo # pyproject.toml, and anything else TOML you touch
-      package-version-server # TOML package-version hover
 
       # ── archives / transfer ────────────────────────────────────────────
       rsync
@@ -131,6 +134,11 @@ in
       glab # you are on GitLab and had vendored gh
       moreutils # sponge, ts
     ]
+    # ── language servers: declared, not downloaded ──────────────────────
+    # One list for every consumer (fish PATH, nvim, the Zed server, and the
+    # opencode PATH wrap above). The list and its rationale live in
+    # nix/modules/lsp.nix — add a server there, not here.
+    ++ (import ./lsp.nix { inherit pkgs; })
     ++ lib.optionals (!cfg.nvim.enable) [
       # The plain flavor has no nvim; see EDITOR in home.nix.
       nano

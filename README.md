@@ -233,16 +233,16 @@ no edit and says so when it runs.
 
 The remote-development server is built by the same `zed-editor` derivation and
 ships in the closure as packaged defaults under `~/.zed_server/`. Zed's client
-looks for a file named after its **own** version string and only checks that
-it runs — so the version match must come from the artifact, not a manual step:
-`.#windows-kit` ships a **Windows Zed installer pinned to the same upstream
-release** as the closure's zed-editor. Use the shipped installer and the
-versions match by construction; shims for both spellings a stable client
-reports (`1.17.2`, `1.17.2+stable`) are generated automatically. Keep Zed's
-auto-update OFF on Windows (the closure's server moves only when the pin in
-`nix/packages/windows-kit.nix` moves). The client reaches the host over plain
-SSH on WSL, or over `scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`)
-into a pod.
+looks for a file named after its **own full version string** — build metadata
+included (`1.17.2+stable.349.c8e44cf…`) — and only checks that it runs, so the
+name must match the artifact, not a guess: `.#windows-kit` ships a **Windows
+Zed installer**, `nix/zed-client-version.nix` records that installer's exact
+client version string, and the shim is generated from it. Use the shipped
+installer and the match is by construction. Keep Zed's auto-update OFF on
+Windows (the closure's server moves only when the pins in
+`nix/packages/windows-kit.nix` + `nix/zed-client-version.nix` move together).
+The client reaches the host over plain SSH on WSL, or over
+`scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`) into a pod.
 
 ## Status
 

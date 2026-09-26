@@ -77,28 +77,55 @@ lua_ls shipped) — type `pri` in a Python file and expect a completion menu.
 
 ## 3. Zed (from Windows)
 
-Client settings live in `%APPDATA%\Zed\settings.json` on Windows — set:
+Client settings live in `%APPDATA%\Zed\settings.json` on Windows. Three keys
+matter for the airgap and have been added there (2026-09-26):
 
 ```jsonc
-{ "auto_update": false, "telemetry": { "metrics": false, "diagnostics": false } }
+{
+  "auto_update": false,                 // freeze at the kit's pinned version
+  "telemetry": { "metrics": false, "diagnostics": false },
+  "auto_install_extensions": { "nix": true, "basedpyright": true, "ruff": true }
+}
 ```
 
-The WSL side ships `~/.config/zed/settings.json` (packaged default) with the
-LSP binaries pinned to closure paths, so the remote server never downloads a
-language server. Check that:
+Extensions install on the CLIENT and are propagated to the remote server on
+connect — the WSL side needs nothing extra.
+
+**The remote-server lookup is exact-match on the client's full version
+string** (`zed-remote-server-stable-<1.17.2+stable.349.c8e44cf...>`, build
+metadata included; zed `crates/remote/src/transport/wsl.rs`). The file is
+"present" iff running it with `version` exits 0 — the closure ships a shim at
+that exact name, pinned in `nix/zed-client-version.nix`. Verify:
 
 ```bash
-ls -l ~/.config/zed/settings.json        # symlink into /nix/store
+ls -la ~/.zed_server/                    # the full-version name must be there
+ls -l ~/.config/zed/settings.json        # symlink into /nix/store = our default
 grep -o '"path": "[^"]*"' ~/.config/zed/settings.json | head
-ls -la ~/.zed_server/                    # server + shims, mtimes OLD
-ls -la ~/.local/share/zed/logs/ 2>/dev/null   # remote logs, if any
-grep -ri 'download' ~/.local/share/zed/logs/ 2>/dev/null | head
 ```
 
+A REAL settings.json (not a symlink) wins over the packaged default — by
+design, it is the user's file. If yours is real, merge the `lsp` + `languages`
+blocks from the packaged default into it, or the pins do not apply.
+
+Pass signals (this is what the pins buy):
+
+```bash
+ls ~/.local/share/zed/node 2>/dev/null          # absent = no Node download
+ls ~/.local/share/zed/languages 2>/dev/null     # absent = no npm/GitHub LSPs
+grep -ri 'downloading\|uploading remote server' ~/.local/share/zed/logs/ 2>/dev/null
+```
+
+Measured on the connected laptop (2026-09-26): with the default shadowed, Zed
+downloaded Node.js, the basedpyright npm package and the ruff release tarball
+— exactly the runtime fetches the gap forbids. If you see any of those again,
+the log line names the thing that was missing; report it verbatim.
+
 Connect a Zed WSL project; opening a Python file must attach
-`basedpyright-langserver` (see §2 ps) and nothing should spawn a download.
-If Zed still tries to fetch something, note *what* and its log line — that
-tells us which setting is missing.
+`basedpyright-langserver` from `/nix/store` (see §2 ps) and nothing may
+download. The full-version shim, not the pins, is what stops the
+first-connect server upload — if the client's log shows
+`uploading remote server to WSL "..."`, the name in that line is the version
+string to re-pin in `nix/zed-client-version.nix`.
 
 ## 4. opencode
 
@@ -111,11 +138,11 @@ echo "$TERM $TERM_PROGRAM"               # terminal identity, see §5
   config (`~/.config/opencode/opencode.json` → `"theme": "<name>"`). The
   packaged default is opencode's own; the repo deliberately does not ship
   your config.
-- **shift+enter**: only reaches the TUI if the terminal reports the kitty
-  keyboard protocol. The nvim warning "modes 2026/2027/2031/2048 unavailable"
-  in your log says the terminal you used does not. Run it under WezTerm
-  (supports it) or Windows Terminal ≥ 1.18; `echo $TERM_PROGRAM` tells you
-  which you are in.
+- **shift+enter**: reaches the TUI only if the terminal reports the kitty
+  keyboard protocol. Your WezTerm now enables it (`config.enable_kitty_keyboard
+  = true`, see §5) — restart WezTerm and re-test; the nvim warning "modes
+  2026/2027/2031/2048 unavailable" should disappear. `echo $TERM_PROGRAM`
+  tells you which terminal you are in.
 - **ACP into Zed**: Zed → agent OpenCode (§3) must start without network.
 
 ## 5. Terminal / WezTerm

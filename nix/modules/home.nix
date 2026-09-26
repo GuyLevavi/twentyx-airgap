@@ -53,12 +53,19 @@ let
     pkgs.zed-editor.remoteServerExecutableName
       or "zed-remote-server-stable-${pkgs.zed-editor.version}+stable";
 
-  # The nixpkgs-named server binary already covers one spelling; ship the
-  # other spellings as shims only when they differ from it.
+  # The nixpkgs-named server binary already covers one spelling; the client
+  # looks the server up under its OWN full version string — build metadata
+  # included (zed crates/remote/src/transport/wsl.rs builds
+  # `zed-remote-server-stable-<version.to_string()>`) — and treats the file as
+  # present iff `<file> version` exits 0. The full-version shim is therefore
+  # the one that actually prevents the first-connect download; the bare
+  # `<nixpkgs-version>+stable` spelling stays as a fallback for clients that
+  # report without build metadata. (The `.gz` name seen in client logs is a
+  # PID-suffixed temporary upload, not the lookup name.)
   zedClientShims = builtins.filter (n: n != zedRemoteExecName) (
     lib.unique [
       "zed-remote-server-stable-${cfg.zed.remoteClientVersion}"
-      "zed-remote-server-stable-${cfg.zed.remoteClientVersion}+stable"
+      "zed-remote-server-stable-${pkgs.zed-editor.version}+stable"
     ]
   );
 in
@@ -123,19 +130,18 @@ in
 
     zed.remoteClientVersion = lib.mkOption {
       type = lib.types.str;
-      default = pkgs.zed-editor.version;
+      default = import ../zed-client-version.nix;
       description = ''
         The EXACT version string of the Zed client that will connect to this
-        host remotely. DEFAULT = the nixpkgs zed-editor version, because the
-        Windows installer shipped in `.#windows-kit` is pinned to the same
-        upstream release — use the shipped installer and this matches by
-        construction, no manual step. Shims are generated for both spellings
-        a stable client reports (`<v>` and `<v>+stable`); override only if
-        someone brings a differently-built client. Bump in lockstep with the
-        installer pin (nix/packages/zed-windows.nix) whenever nixpkgs moves.
-        Caveat: some client versions phone cloud.zed.dev for a metadata check
-        before looking at ~/.zed_server (upstream zed#53763); verify against
-        your client version on first connect.
+        host remotely, INCLUDING upstream build metadata (build number + git
+        sha). DEFAULT = the version of the client shipped as the pinned
+        installer in .#windows-kit, from nix/zed-client-version.nix — install
+        the shipped installer and this matches by construction, no manual
+        step. Re-pin in lockstep whenever the kit's Zed moves: take the string
+        verbatim from the client log line `starting zed version ...` on first
+        connect. The lookup is exact-match on this string (the remote-server
+        download path in zed), so a bare semver like `1.17.2` misses and the
+        client downloads its own server instead.
       '';
     };
   };
@@ -227,12 +233,18 @@ in
 
       # Zed: agent integration through opencode's ACP mode, plus the
       # language-server wiring that keeps the airgap honest: without the
-      # per-language overrides Zed tries to download its own LSP binaries at
-      # runtime, which hangs forever behind the gap. The PATH-resolved
-      # servers ship in the closure (tools.nix LSP group), exactly as in the
-      # /etc/nixos zed.nix. bootstrap never clobbers a real settings.json on
-      # the PVC -- merge this block into yours by hand if you already have
-      # Zed configured.
+      # per-language overrides Zed falls back to fetching its own servers at
+      # runtime. Measured on the connected laptop (Zed.log, 2026-09-26): with
+      # the pins shadowed, Zed downloaded Node.js from nodejs.org, the
+      # basedpyright npm package and the ruff release tarball from GitHub;
+      # with the pins in effect nothing appears under
+      # ~/.local/share/zed/{node,languages} and the nix binaries serve.
+      # The servers themselves come from nix/modules/lsp.nix (the same list
+      # fish, nvim and the opencode PATH see); bootstrap never clobbers a real
+      # settings.json on the PVC — merge the lsp/languages blocks into yours
+      # by hand if you already configured Zed (check with
+      # `ls -l ~/.config/zed/settings.json`: a symlink is ours, a real file is
+      # yours and wins).
       #
       # PER-MACHINE personal config: a gitignored `zed-settings.json` next to
       # the flake (same pattern as wsl-username / ca-bundle.crt) replaces

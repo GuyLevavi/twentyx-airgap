@@ -91,21 +91,20 @@ Start a workspace, then:
 
 ## 4. Zed remote — matched by construction, verify once
 
-The remote server ships in the closure (`zed-editor.remote_server`) and the
-Windows installer pinned to the SAME upstream release ships in
-`.#windows-kit` — install the shipped installer and the versions match with
-no manual step (shims for both `<v>` and `<v>+stable` are generated).
+The remote server ships in the closure (`zed-editor.remote_server`); the
+lookup is exact-match on the client's full version string (build metadata
+included), so `nix/zed-client-version.nix` records the kit installer's exact
+client version and the shim is generated from it — install the shipped
+installer and the match is by construction.
 
 - [ ] On Windows, install the kit's `Zed-x86_64-*-setup.exe` and turn
       auto-update OFF in Zed settings.
-- [ ] On first connect, if the client still wants cloud.zed.dev first
-      (upstream zed#53763), record it — the fix is the
-      `twentyx.zed.remoteClientVersion` override in `nix/modules/home.nix`,
-      set to that client's exact `zed --version` string.
+- [ ] On first connect, if the client still uploads its own server, the log
+      line `uploading remote server to WSL "..."` names the exact string to
+      re-pin in `nix/zed-client-version.nix`; the shim then matches.
 - [ ] When nixpkgs bumps zed-editor: re-pin the installer
       (`nix/packages/windows-kit.nix` — URL + `nix store prefetch-file`
-      hash) and rebuild; the shims move with `twentyx.zed.remoteClientVersion`
-      (default = the nixpkgs version).
+      hash) AND `nix/zed-client-version.nix` in the same commit; rebuild.
 
 ## 5. WSL (independent track, wsl/README.md)
 

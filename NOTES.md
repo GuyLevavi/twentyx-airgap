@@ -332,14 +332,21 @@ it is not relitigated:
   the closure.
 - **Zed remote development [RESOLVED -- in the closure]**: `zed-editor` builds
   the remote server as a second output (`remote_server`), shipped as a
-  packaged default under `~/.zed_server/`. The client looks for a file named
-  after its own version string and only checks `<file> version` exits 0 --
-  so `.#windows-kit` ships a Windows installer pinned to the SAME upstream
-  release as the closure's zed-editor, and shims for both `<v>` and `<v>+stable`
-  spellings are generated from `twentyx.zed.remoteClientVersion` (default =
-  the nixpkgs version). Nothing downloads, ever; the only manual act left is
-  re-pinning the installer when nixpkgs bumps (nix/packages/windows-kit.nix).
-  Known edge: the client
+  packaged default under `~/.zed_server/`. The lookup is EXACT-MATCH on the
+  client's full version string, build metadata included:
+  `zed-remote-server-stable-<1.17.2+stable.349.c8e44cf...>` (zed
+  `crates/remote/src/transport/wsl.rs`: `format!("zed-remote-server-{}-{}",
+  dev_name, version.to_string())`), and "present" means running `<file>
+  version` exits 0. The `.gz` name that shows up in client logs is a
+  PID-suffixed temporary upload (`{dst}.{pid}.gz`) -- not the lookup name.
+  So `.#windows-kit` pins the installer, `nix/zed-client-version.nix` carries
+  that installer's exact client version string (single source for the shim),
+  and `home.nix` generates the shim from it. Measured 2026-09-26: with only
+  bare `<v>`/`<v>+stable` shims the client silently downloaded its own server;
+  with the packaged settings default shadowed by a real `settings.json` it
+  also downloaded Node.js, the basedpyright npm package and the ruff release
+  tarball. Both fixed; re-pin the two files in lockstep when nixpkgs bumps
+  zed. Known edge: the client
   resolves `.zed_server` relative to the SSH session's `$HOME`, which is why
   the entrypoint/sshd-inetd self-registration must point at the PVC home --
   it does. The `opencode acp` integration needs none of this: it runs

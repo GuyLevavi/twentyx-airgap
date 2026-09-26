@@ -37,7 +37,9 @@ fi
 if [ ! -f "$OUT/nixos-wsl.tar.gz" ] || ! tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/dev/null | grep -m1 -q '^\./bin/init$'; then
     rm -f "$OUT/nixos-wsl.tar.gz"
     say "building the NixOS-WSL tarball"
-    nix build .#wsl-tarball --no-link --print-out-paths >/dev/null
+    # No --no-link here: the builder is invoked THROUGH ./result below, and a
+    # stale result/ from an earlier build would ship the wrong system.
+    nix build .#wsl-tarball
     # The builder self-elevates via a user namespace — no sudo, and the
     # output file is owned by the invoking user. -f in case the target
     # exists (stale or root-owned from older runs).

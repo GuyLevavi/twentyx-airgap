@@ -10,7 +10,10 @@
 # Re-pin when nixpkgs bumps zed-editor (or a new WSL stable is wanted):
 # change the version in the URL, run
 #     nix store prefetch-file --json <url>
-# and paste the reported hash. One commit.
+# and paste the reported hash. One commit. Also update
+# nix/zed-client-version.nix in the SAME commit — the remote-server lookup is
+# keyed on the client's full version string, so a kit bump without it makes
+# the first offline Zed connect download its server.
 {
   lib,
   pkgs,
