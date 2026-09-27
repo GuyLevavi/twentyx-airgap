@@ -125,14 +125,12 @@ in
       pv
 
       # ── shell hygiene ──────────────────────────────────────────────────
-      shellcheck # .gitlab-ci.yml already lints with this
+      # shellcheck is deliberately absent: CI lints in its own image and the
+      # connected machine reaches it via `nix shell nixpkgs#shellcheck`.
+      # just/hyperfine/watchexec/git-lfs/moreutils went the same way -- no
+      # script in this repo referenced them.
       shfmt
-      just
-      hyperfine
-      watchexec
-      git-lfs
       glab # you are on GitLab and had vendored gh
-      moreutils # sponge, ts
     ]
     # ── language servers: declared, not downloaded ──────────────────────
     # One list for every consumer (fish PATH, nvim, the Zed server, and the
@@ -208,11 +206,11 @@ in
       # ── GUI editor: REMOVED (2026-09, measured) ────────────────────────
       # zed-editor used to be here for WSLg. But the airgap WSL machine is
       # edited from the Windows Zed client (remote_server, shipped in
-      # home.nix for BOTH targets), from VS Code Remote-SSH and from nvim —
-      # the local GUI only ever added zed's own binary (~410 MB), mesa
-      # (~272 MB) and livekit-webrtc (~198 MB) to the SYSTEM closure, which
-      # is what pushed the WSL tarball over the transfer cap. Re-adding is a
-      # deliberate closure decision, not a tweak.
+      # home.nix for BOTH targets) and from nvim — the local GUI only ever
+      # added zed's own binary (~410 MB), mesa (~272 MB) and livekit-webrtc
+      # (~198 MB) to the SYSTEM closure, which is what pushed the WSL
+      # tarball over the transfer cap. Re-adding is a deliberate closure
+      # decision, not a tweak.
 
       # ── Nix development, now that the config is Nix ────────────────────
       # Pointless in a pod: there is no Nix there to inspect.

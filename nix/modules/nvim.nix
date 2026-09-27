@@ -173,6 +173,14 @@ in
       enable = true;
       plugins = [ treesitter ];
       initLua = initLua;
+      # Headless editor: no ruby/python plugin hosts are ever used (the
+      # servers are external binaries from the closure), and the Wayland
+      # clipboard is unreachable in a pod. Dropping all three removes the
+      # ruby env (~98 MB) and wl-clipboard (~206 MB) from the nvim flavor
+      # and from WSL.
+      withRuby = false;
+      withPython3 = false;
+      waylandSupport = false;
     };
   };
 }

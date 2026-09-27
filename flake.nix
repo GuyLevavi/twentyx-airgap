@@ -100,8 +100,9 @@
       # ── RunAI: evaluated HERE, never inside. Nothing below ever runs Nix
       # in a pod; we extract the built tree and ship it as an OCI layer.
       #
-      # Two flavors, because nvim roughly doubles the layer and not every
-      # workspace wants an editor in it.
+      # Two flavors, because not every workspace wants an editor in it.
+      # Measured 2026-09-27: nvim adds ~48 MiB of profile closure (~17 MB
+      # compressed) -- an editor, not a second layer.
       homeConfigurations = {
         runai = mkRunai { nvim = false; };
         runai-nvim = mkRunai { nvim = true; };

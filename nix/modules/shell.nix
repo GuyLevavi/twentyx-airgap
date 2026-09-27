@@ -48,13 +48,20 @@ in
 
       if [[ $- == *i* && -z "''${BASH_EXECS_FISH:-}" && -z "''${IN_NIX_SHELL:-}" ]]; then
         export BASH_EXECS_FISH=1
-        exec ${pkgs.fish}/bin/fish
+        # config.programs.fish.package, not pkgs.fish: the override that drops
+        # the fish_config python UI must be the binary this exec lands on, or
+        # the full interpreter stays in the closure through this line.
+        exec ${config.programs.fish.package}/bin/fish
       fi
     '';
   };
 
   programs.fish = {
     enable = true;
+    # fish's only use of python is the `fish_config` web UI. In the gap that
+    # UI can never be reached, and the interpreter is 209 MB of closure; the
+    # shell itself is unaffected.
+    package = pkgs.fish.override { usePython = false; };
 
     # Runs in EVERY fish, interactive or not, and lands immediately after
     # home-manager's session-variable block in config.fish -- which is the only
