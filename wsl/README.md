@@ -131,7 +131,7 @@ half-working config is worse than an unmanaged one.
 
 ## Agent and containers on WSL
 
-- **opencode** and **herdr** are in the closure, same as the pod — no extra
+- **opencode** and **workmux** are in the closure, same as the pod — no extra
   setup. The preload plugin is seeded as a packaged default; opencode's own
   config is yours, in `~/.config/opencode/`.
 - **Zed remote** into the pod or into WSL: the remote server is in the

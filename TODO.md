@@ -11,17 +11,18 @@ command or decision.
   (nvim ruby/python/wayland off, fish python off, idle tools out), fixes in
   (injection-export dedup, the transfer-bundle SIGPIPE probe, CI `mkdir`),
   docs lean. Layers re-measured: plain ~840 MiB, `-nvim` ~857 MiB.
-- Sync round (2026-09-27): the WSL side now mirrors the connected machine —
-  workmux (pinned flake input) with its tmux integration and opencode status
-  plugin, the full tmux config on a static Tokyo Night theme (extended-keys
-  included, so Ctrl-hjkl survives the kit's WezTerm), vendored opencode
-  skills (matt-skills, same pinned revision as /etc/nixos),
-  yazi/lazydocker/podman-compose/gcc/nodejs/bubblewrap, and `rb` for the
-  one-command offline rebuild (wheel sudo now needs no password — the
-  account's password is locked anyway). Windows kit ships
-  `zed-client-settings.personal-example.json` next to the neutral file.
-  Re-measured: WSL tarball ~1.3 GB, cache ~107 MB, kit ~433 MiB; layers
-  unchanged at ~840/~857 MiB (skills add ~1 MiB).
+- Sync round (2026-09-27): the WSL side and the pod now mirror the connected
+  machine — workmux (pinned flake input) with its tmux integration and
+  opencode status plugin on BOTH targets (herdr removed), the full tmux config
+  on a static Tokyo Night theme (extended-keys included, so Ctrl-hjkl survives
+  the kit's WezTerm), vendored opencode skills (matt-skills, same pinned
+  revision as /etc/nixos), yazi/lazydocker/podman-compose/gcc/nodejs/bubblewrap
+  in both closures, and `rb` for the WSL one-command offline rebuild (wheel
+  sudo now needs no password — the account's password is locked anyway).
+  Windows kit ships `zed-client-settings.personal-example.json` next to the
+  neutral file. Re-measured: WSL tarball ~1.3 GB, cache ~107 MB, kit ~433 MiB;
+  layers grew to ~1070/~1087 MiB — parity moved gcc (370 MB unpacked),
+  nodejs (254), yazi (523) and podman-compose (211) into the pod closure.
 - WSL first boot is proven on the real machine; the distro lives at
   `C:\WSL\nixos\ext4.vhdx`. `C:\twentyx` was re-seeded from `dist/` and holds
   every artifact plus the two one-shot scripts (`UNPACK.ps1` on Windows,

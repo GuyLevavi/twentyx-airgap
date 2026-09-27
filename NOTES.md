@@ -102,8 +102,8 @@ only, and the Artifactory path derives from `VERSION`.
 
 ## 5. First transfer should be deliberately small
 
-Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~840 MB)
-and skip `-nvim` (~857 MB). `assemble.sh` detects the missing nvim tarball and builds one
+Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~1070 MB)
+and skip `-nvim` (~1087 MB). `assemble.sh` detects the missing nvim tarball and builds one
 flavor.
 
 That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things
@@ -196,9 +196,9 @@ mounts; the prewritten `storage.conf` defaults to `vfs`, which needs no
 mounts. Rootless podman (no sudo) needs unprivileged userns + subuids, which
 OpenShift usually denies -- hence the sudo path.
 
-Also in the closure: `herdr` (0.8.2 in the pinned snapshot), `zed-editor` (remote server),
-`code-server` (the pod IDE, §7), `openssh`, `nginx`, and `sst-dev.opencode` 0.0.13
-(the official extension, seeded for code-server).
+Also in the closure: `workmux` (worktrees + tmux for parallel agents, both targets),
+`zed-editor` (remote server), `code-server` (the pod IDE, §7), `openssh`, `nginx`, and
+`sst-dev.opencode` 0.0.13 (the official extension, seeded for code-server).
 
 ## 9. The local store was missing the layer's build plan  [RESOLVED -- healed 2026-09]
 
@@ -310,12 +310,13 @@ it is not relitigated:
   syntax-only since 1.0.3; taplo remains nvim's). Prettier auto-install is off
   (`"prettier": {"allowed": false}`). The agent integration is Terminal
   Threads + `"agent": {"terminal_init_command": "opencode"}`, not tasks.json.
-- **workmux / skills / daily drivers [added 2026-09-27, WSL-only]**: workmux
+- **workmux / skills / daily drivers [added 2026-09-27, both targets]**: workmux
   (pinned flake input) ships with its tmux integration and the opencode status
   plugin from the same revision; opencode skills are vendored from the
-  matt-skills input (same revision as /etc/nixos). Both are WSL-only by
-  decision -- the pod's multiplexer is herdr and its layer stays lean; promote
-  either by removing the `cfg.target == "wsl"` guard.
+  matt-skills input (same revision as /etc/nixos). Both targets by decision --
+  the pod gets the same worktree+tmux agent workflow as WSL (herdr is gone),
+  and yazi/lazydocker/podman-compose/gcc/nodejs/bubblewrap ride in both
+  closures for parity.
 - **opencode slowness [open]**: reported slow in the WSL distro; the log
   directory has not been read yet -- the VHDX cannot be inspected from Linux
   (`qemu-img` hangs on this image's VHDX parser; 7-Zip reads the VHDX

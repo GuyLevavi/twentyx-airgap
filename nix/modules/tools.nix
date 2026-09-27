@@ -109,9 +109,21 @@ in
       # is a local overlay building the --baseline variant, not a downgrade.
       # Shipped wrapped so its LSPs spawn the shared closure binaries by name.
       opencodeWithLsp
-      # Terminal multiplexer for agent sessions; sessions outlive their SSH
-      # exec, state per pane.
-      herdr
+
+      # ── daily drivers (both targets, synced from /etc/nixos) ───────────
+      # yazi: file manager; pairs with tmux passthrough for inline images.
+      yazi
+      # Container workflows: podman is the container path on both targets
+      # (the NixOS system on WSL, the vfs storage.conf in a pod).
+      lazydocker
+      podman-compose
+      # A compiler and node: source builds and JS tooling. The *-pytorch
+      # bases ship their own compiler; this one lands ahead of it on PATH.
+      gcc
+      nodejs
+      # Zed's agent sandboxes terminal commands with bwrap, and in remote dev
+      # those terminals run HERE (WSL or pod), so both sides carry it.
+      bubblewrap
 
       # ── data ───────────────────────────────────────────────────────────
       sqlite # atuin's own store, plus general use
@@ -224,22 +236,6 @@ in
       # the vault. Zed's extension resolves the binary from PATH first, so
       # this nix build is what actually runs. Vault lives on the laptop.
       markdown-oxide
-
-      # ── daily drivers, synced from /etc/nixos (2026-09-27) ─────────────
-      # yazi: file manager; pairs with tmux passthrough for inline images.
-      yazi
-      # Container workflows: podman is virtualisation.podman on WSL; these
-      # are the two things the desktop always had next to it.
-      lazydocker
-      podman-compose
-      # A compiler and node: the internal pip serves wheels, but a source
-      # build is the difference between a working sdist and a failed one,
-      # and JS tooling is otherwise absent from the closure.
-      gcc
-      nodejs
-      # Zed's agent sandboxes terminal commands with bwrap; in remote dev
-      # those terminals run HERE, so the WSL side has to carry it.
-      bubblewrap
 
       # rb: the muscle memory from /etc/nixos (home/scripts.nix). Stage
       # everything first -- the flake reads the GIT TREE, so untracked files

@@ -18,7 +18,7 @@ actually references, and nothing else.
 | How it arrives | git bundle + cache tarball, `scripts/setup-wsl.sh` | `crane append`, `docker/assemble.sh` |
 | Python | Nix (3.12 only, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
 | Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
-| Agent | opencode + herdr | opencode (via `run-opencode`) + herdr |
+| Agent | opencode + workmux (tmux) | opencode (via `run-opencode`) + workmux (tmux) |
 | Editor | zed (Windows client + remote server), nvim | code-server (closure) + zed remote server |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
@@ -29,8 +29,8 @@ tells you what that costs before you carry it anywhere.
 | | |
 |---|---|
 | WSL bootstrap, one file | **~1.3 GB** (`nixos-wsl.tar.gz`, gzip) |
-| `nix-layer.tar.gz` | ~840 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
-| `nix-layer-nvim.tar.gz` | ~857 MB (+ pure nvim and treesitter) |
+| `nix-layer.tar.gz` | ~1070 MB (code-server + zed remote server + podman/sudo/nginx/openssh + workmux/gcc/nodejs) |
+| `nix-layer-nvim.tar.gz` | ~1087 MB (+ pure nvim and treesitter) |
 | `repo-layer.tar` | ~380 KB |
 | `windows-kit-*.tar.gz` | ~435 MB (Zed installer + WSL2 MSI + themes + client templates) |
 

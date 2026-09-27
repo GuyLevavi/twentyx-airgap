@@ -149,7 +149,7 @@ for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq opencod
     fi
 done
 # Optional by flavor: absence is a fact, not a failure.
-for t in nvim nvtop herdr code-server; do
+for t in nvim nvtop workmux code-server; do
     if command -v "$t" >/dev/null 2>&1; then ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
     else warn "$t not in this image flavor"; fi
 done

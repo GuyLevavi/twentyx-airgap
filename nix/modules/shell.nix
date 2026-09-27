@@ -230,10 +230,8 @@ in
       setw -g window-status-separator ""
       set -g pane-border-lines heavy
       set -g pane-border-indicators colour
-      ${lib.optionalString (cfg.target == "wsl") ''
-        setw -g window-status-format ' #I:#W#{?@workmux_status, #{@workmux_status},}#{?window_flags,#{window_flags}, } '
-        setw -g window-status-current-format ' #I:#W#{?@workmux_status, #{@workmux_status},}#{?window_flags,#{window_flags}, } '
-      ''}
+      setw -g window-status-format ' #I:#W#{?@workmux_status, #{@workmux_status},}#{?window_flags,#{window_flags}, } '
+      setw -g window-status-current-format ' #I:#W#{?@workmux_status, #{@workmux_status},}#{?window_flags,#{window_flags}, } '
       set -g status-style "bg=#1a1b26,fg=#a9b1d6"
       set -g status-left "#[bg=#7aa2f7,fg=#1a1b26,bold] #S #[bg=#1a1b26,fg=#7aa2f7,nobold]"
       set -g status-right "#[fg=#565f89]#h #[fg=#7aa2f7]%H:%M "
@@ -246,26 +244,25 @@ in
       set -g pane-active-border-style "fg=#7aa2f7"
       set -g popup-style "bg=#1a1b26,fg=#a9b1d6"
       set -g popup-border-style "fg=#414868"
-      ${lib.optionalString (cfg.target == "wsl") ''
-        # workmux: status_format is off in its config.yaml, so this format
-        # owns the bar; @workmux_status is the per-window agent icon it sets.
-        bind C-s display-popup -E -h 80% -w 90% "workmux dashboard"
-        bind Tab run-shell "workmux last-agent"
-        bind w run-shell "workmux last-done"
-      ''}
+
+      # workmux: status_format is off in its config.yaml, so this format
+      # owns the bar; @workmux_status is the per-window agent icon it sets.
+      bind C-s display-popup -E -h 80% -w 90% "workmux dashboard"
+      bind Tab run-shell "workmux last-agent"
+      bind w run-shell "workmux last-done"
     '';
   };
 
   # ── workmux: parallel agents in worktrees + tmux windows ───────────────
-  # WSL only: the pod's multiplexer is herdr and its layer stays lean. The
-  # package, its global config and the opencode status plugin all come from
-  # ONE pinned revision (flake input), so the plugin cannot skew from the
-  # binary.
-  home.packages = lib.optionals (cfg.target == "wsl") [
+  # Both targets, same as /etc/nixos: a pod session gets the same
+  # worktree+tmux workflow as WSL. The package, its global config and the
+  # opencode status plugin all come from ONE pinned revision (flake input),
+  # so the plugin cannot skew from the binary.
+  home.packages = [
     inputs.workmux.packages.${pkgs.stdenv.hostPlatform.system}.default
   ];
 
-  xdg.configFile = lib.mkIf (cfg.target == "wsl") {
+  xdg.configFile = {
     "workmux/config.yaml".text = ''
       nerdfont: true
       merge_strategy: rebase
