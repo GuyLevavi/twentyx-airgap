@@ -71,6 +71,9 @@ cp README.md ARCHITECTURE.md MANUAL.md NOTES.md TODO.md "$OUT/docs/"
 cp wsl/README.md "$OUT/docs/wsl-README.md"
 cp wsl/FIRST-BOOT.md "$OUT/docs/wsl-FIRST-BOOT.md"
 cp wsl/SMOKE-TEST.md "$OUT/docs/wsl-SMOKE-TEST.md"
+# The pod image pipeline docs travel with the layers they describe.
+mkdir -p "$OUT/docs/docker"
+cp docker/README.md docker/BASE-IMAGES.md "$OUT/docs/docker/"
 
 if [ ! -f "$OUT/START-HERE.txt" ]; then
 cat > "$OUT/START-HERE.txt" <<'EOF'
