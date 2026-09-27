@@ -5,12 +5,17 @@ machine; steps marked **[gap]** can only happen inside the airgapped
 environment. Nothing here is optional hand-waving — each item is the exact
 command or decision.
 
-## State (2026-09-27, after `be7b667`)
+## State (2026-09-27, after `791a598` — the debloat merge)
 
+- The debloat branch is merged (rebased, fast-forward): closures trimmed
+  (nvim ruby/python/wayland off, fish python off, idle tools out), fixes in
+  (injection-export dedup, the transfer-bundle SIGPIPE probe, CI `mkdir`),
+  docs lean. Layers re-measured: plain ~840 MiB, `-nvim` ~857 MiB.
 - WSL first boot is proven on the real machine; the distro lives at
   `C:\WSL\nixos\ext4.vhdx`. `C:\twentyx` was re-seeded from `dist/` and holds
   every artifact plus the two one-shot scripts (`UNPACK.ps1` on Windows,
-  `setup-wsl.sh` as root inside the distro).
+  `setup-wsl.sh` as root inside the distro). `docs/` ships user-facing files
+  only — NOTES.md/TODO.md no longer cross the gap.
 - Container test: 19/19, including the two new bootstrap assertions (the fish
   drop-in parses; podman `storage.conf` exists) — see NOTES.md §11.
 - Open: the opencode slowness diagnosis (NOTES.md §11) — the WSL VHDX cannot
