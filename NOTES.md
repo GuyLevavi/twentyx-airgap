@@ -365,6 +365,29 @@ it is not relitigated:
 - **shell.env hook**: verified against the shipped opencode version's
   documented behavior; upstream has a TODO about honoring `shell.env` in the
   v2 bash tool -- the `BASH_ENV` path is the belt to that suspenders.
+- **bootstrap drop-ins and the nested heredoc [fixed 2026-09-27]**: the podman
+  `storage.conf` writer sat *inside* the fish drop-in heredoc in
+  `libexec/bootstrap`, so fish refused to parse the whole generated
+  `00-env.fish` ("Expected a string, but found a redirection") -- no PATH, no
+  env in every interactive pod shell -- and `storage.conf` was never written.
+  It predates `ebaeef7`. Fixed by generating the fish text and the bash-side
+  `storage.conf` in separate steps; `tests/test-container.sh` now asserts the
+  drop-in parses (`fish -n`) and that `storage.conf` exists and says `vfs`.
+  Lesson: one heredoc per language, and a generated file needs a parse check,
+  not just a grep for a substring.
+- **Zed LSP pins [resolved 2026-09-27]**: every server the packaged settings
+  declare is pinned by store path -- `bash-language-server`,
+  `yaml-language-server` (with `schemaStore.enable=false`: otherwise it
+  fetches schemastore.org per YAML file), and `tombi` (the `toml` extension is
+  syntax-only since 1.0.3; taplo remains nvim's). Prettier auto-install is off
+  (`"prettier": {"allowed": false}`). The agent integration is Terminal
+  Threads + `"agent": {"terminal_init_command": "opencode"}`, not tasks.json.
+- **opencode slowness [open]**: reported slow in the WSL distro; the log
+  directory has not been read yet -- the VHDX cannot be inspected from Linux
+  (`qemu-img` hangs on this image's VHDX parser; 7-Zip reads the VHDX
+  container but not the ext4 inside; the `debugfs` route is untested). Waiting
+  on a dump from inside the distro:
+  `wsl -d twentyx -- bash -lc 'cd ~; { cat .config/opencode/opencode.json; ls -la .local/share/opencode/log/; tail -150 "$(ls -t .local/share/opencode/log/*.log | head -1)"; } > /mnt/c/twentyx/diag.txt 2>&1'`.
 - **WSL first boot [root cause found 2026-09-26]**: the imported distro's `/`
   shipped mode 0700 — the build root came from `mktemp -d` and tar recorded
   that mode on the `./` entry, which extractors apply to the distro root. Every

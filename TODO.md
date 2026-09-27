@@ -5,6 +5,20 @@ machine; steps marked **[gap]** can only happen inside the airgapped
 environment. Nothing here is optional hand-waving — each item is the exact
 command or decision.
 
+## State (2026-09-27, after `be7b667`)
+
+- WSL first boot is proven on the real machine; the distro lives at
+  `C:\WSL\nixos\ext4.vhdx`. `C:\twentyx` was re-seeded from `dist/` and holds
+  every artifact plus the two one-shot scripts (`UNPACK.ps1` on Windows,
+  `setup-wsl.sh` as root inside the distro).
+- Container test: 19/19, including the two new bootstrap assertions (the fish
+  drop-in parses; podman `storage.conf` exists) — see NOTES.md §11.
+- Open: the opencode slowness diagnosis (NOTES.md §11) — the WSL VHDX cannot
+  be read from Linux, so it waits on a diag dump from inside the distro.
+- Zed client: installed (kit 1.17.2), auto-update off, live settings merged
+  (all LSPs pinned, prettier off, Terminal Threads → opencode). The remaining
+  Zed item is a real-pod connect (below).
+
 ## 0. This machine, before anything builds again
 
 - [x] **[root] Repair the local Nix store** — done 2026-09, both layer flavors
@@ -40,8 +54,15 @@ command or decision.
 
 ## 2. First transfer (NOTES.md §5 — deliberately small)
 
-- [ ] **Outside**, build the layers (plain flavor only is fine for the first
-      run; skip `-nvim` if transfer size matters — `assemble.sh` copes):
+- [ ] **Outside**, assemble everything in one shot (both tracks — layers, WSL
+      tarball, git bundle, kit, docs, scripts):
+
+      ```bash
+      ./scripts/transfer-bundle.sh       # -> dist/, then carry dist/ to C:\twentyx
+      ```
+
+      Layers only (plain flavor is fine for the first run; skip `-nvim` if
+      transfer size matters — `assemble.sh` copes):
 
       ```bash
       ./scripts/build-layers.sh          # -> dist/nix-layer.tar.gz
@@ -97,6 +118,11 @@ included), so `nix/zed-client-version.nix` records the kit installer's exact
 client version and the shim is generated from it — install the shipped
 installer and the match is by construction.
 
+State 2026-09-27: the Windows client is installed (kit 1.17.2), auto-update
+is off, and the live settings carry the merged kit template (LSPs pinned,
+prettier off, Terminal Threads → opencode). The remaining verification is the
+first connect to a real pod.
+
 - [ ] On Windows, install the kit's `Zed-x86_64-*-setup.exe` and turn
       auto-update OFF in Zed settings.
 - [ ] On first connect, if the client still uploads its own server, the log
@@ -108,26 +134,37 @@ installer and the match is by construction.
 
 ## 5. WSL (independent track, wsl/README.md)
 
-- [ ] **Outside**, build the first artifact:
+- [x] First artifact built and imported on the real machine (2026-09-26):
+      `C:\WSL\nixos\ext4.vhdx`, first boot fixed (NOTES.md §11). Everything
+      needed for a fresh machine ships in `C:\twentyx`.
+- [ ] Fresh import on a new machine (skip if keeping the current distro):
 
-      ```bash
-      nix build .#wsl-tarball
-      ./result/bin/nixos-wsl-tarball-builder          # -> nixos.wsl (no sudo)
+      ```powershell
+      powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1   # Windows: kit, themes, templates
+      wsl --import twentyx C:\WSL\nixos C:\twentyx\nixos-wsl.tar.gz --version 2
       ```
 
-- [ ] On Windows: `wsl --import twentyx C:\WSL\twentyx nixos.wsl --version 2`
-- [ ] Inside, prove the offline loop:
+      then inside, as root:
 
       ```bash
-      ./scripts/nix-export.sh              # outside
-      sudo ./scripts/nix-import.sh /path/to/nix-transfer   # inside
-      sudo nixos-rebuild switch --flake /etc/nixos#wsl     # network down
+      wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh
+      ```
+
+- [ ] Prove the offline loop (now scripted; `setup-wsl.sh` runs steps 2–3):
+
+      ```bash
+      ./scripts/export-rebuild-cache.sh    # outside -> dist/wsl-rebuild.tar.gz
+      # carry it to C:\twentyx, then inside the distro (as root):
+      #   tar -xzf /mnt/c/twentyx/wsl-rebuild.tar.gz -C /var/cache/nix-transfer --strip-components=1
+      #   nix copy --from file:///var/cache/nix-transfer --all
+      #   nixos-rebuild switch --flake /home/jensen/twentyx-airgap#wsl   # network down
       ```
 
 - [ ] Copy the kit's themes into `%APPDATA%\Zed\themes\` and
-      zed-client-settings.json into `%APPDATA%\Zed\settings.json`, keeping
-      Zed auto-update off (the closure's server moves only when the kit
-      installer + nix/zed-client-version.nix move together).
+      zed-client-settings.json into `%APPDATA%\Zed\settings.json` (UNPACK.ps1
+      does both; a real settings file wins and gets a `.example` beside it),
+      keeping Zed auto-update off (the closure's server moves only when the
+      kit installer + nix/zed-client-version.nix move together).
 - [ ] Install the runai CLI for the bridge client side. Preferred: the exact
       Linux executable the RunAI UI offers (it matches your cluster's server
       version). Make it a pinned, declared derivation instead of a stray
@@ -141,8 +178,6 @@ installer and the match is by construction.
       `runai-cli` to `environment.systemPackages` in `nix/hosts/wsl.nix`.
       Fallback if the UI offers nothing: `uv tool install runai` (resolves
       internal Artifactory).
-- [ ] `code --install-extension` the shipped vsix on Windows:
-      `~/.local/share/vsix/sst-dev.opencode-0.0.13.vsix` (copied over).
 
 ## 6. After the first transfer
 
