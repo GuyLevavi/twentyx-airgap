@@ -267,8 +267,12 @@ cp scripts/windows/UNPACK.ps1 scripts/setup-wsl.sh "$OUT/"
 # The WSL side clones this (`git clone /mnt/c/twentyx/twentyx-airgap.bundle`)
 # and has the real history -- commits, diffs, bisect -- not a tar of the
 # working tree. Committed state only, text only, a few hundred KB.
+#
+# --branches --tags, NOT --all: --all also walks refs/remotes and the
+# per-worktree refs under .git/worktrees (a scratch worktree's detached HEAD
+# shipped in the bundle that way), and neither belongs in a transfer.
 say "bundling the repo"
-git bundle create "$OUT/twentyx-airgap.bundle" --all >/dev/null
+git bundle create "$OUT/twentyx-airgap.bundle" --branches --tags >/dev/null
 
 # ── 7. the bundle at a glance ─────────────────────────────────────────────
 cd "$OUT"
