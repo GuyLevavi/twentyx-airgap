@@ -132,6 +132,13 @@ first-connect server upload — if the client's log shows
 `uploading remote server to WSL "..."`, the name in that line is the version
 string to re-pin in `nix/zed-client-version.nix`.
 
+All declared servers are pinned by store path: nixd, basedpyright, ruff,
+json-language-server, bash-language-server, yaml-language-server (schema
+store disabled — opening a `.yaml` must not fetch schemastore.org), tombi
+(TOML; the `toml` extension is syntax-only since 1.0.3, Tombi is the server).
+Terminal Threads: agent panel → New Thread → Terminal must start opencode by
+itself (`agent.terminal_init_command` in the packaged settings).
+
 ## 4. opencode
 
 ```bash

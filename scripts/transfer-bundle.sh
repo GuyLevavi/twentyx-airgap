@@ -14,6 +14,8 @@
 #                                       client templates (Zed settings, WezTerm)
 #     twentyx-airgap.bundle             the repo as a git bundle: the WSL side
 #                                       clones it and has the real history
+#     UNPACK.ps1 / setup-wsl.sh         one-shot, idempotent setup: Windows
+#                                       side / inside the distro as root
 #     docs/                             long docs (README/ARCHITECTURE/MANUAL/NOTES)
 #     START-HERE.txt                    the short page for other users
 #
@@ -111,14 +113,21 @@ ARCHITECTURE.md = why it is built this way.
 EOF
 fi
 
-# ── 5. the repo itself, as a git bundle ───────────────────────────────────
+# ── 5. the one-shot setup scripts ─────────────────────────────────────────
+# Both are idempotent and non-destructive: UNPACK.ps1 runs on Windows (extract
+# the kit, install themes/templates), setup-wsl.sh runs inside the distro as
+# root (clone the bundle, import the cache, rebuild). See MANUAL.md.
+say "carrying the setup scripts"
+cp scripts/windows/UNPACK.ps1 scripts/setup-wsl.sh "$OUT/"
+
+# ── 6. the repo itself, as a git bundle ───────────────────────────────────
 # The WSL side clones this (`git clone /mnt/c/twentyx/twentyx-airgap.bundle`)
 # and has the real history -- commits, diffs, bisect -- not a tar of the
 # working tree. Committed state only, text only, a few hundred KB.
 say "bundling the repo"
 git bundle create "$OUT/twentyx-airgap.bundle" --all >/dev/null
 
-# ── 6. the bundle at a glance ─────────────────────────────────────────────
+# ── 7. the bundle at a glance ─────────────────────────────────────────────
 cd "$OUT"
 say "bundle contents:"
 du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz twentyx-airgap.bundle windows-kit 2>/dev/null | sort -k2

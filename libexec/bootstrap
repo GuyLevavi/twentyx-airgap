@@ -107,8 +107,16 @@ set -gx PIP_CACHE_DIR "$CACHE/pip"
 # Model weights are enormous and must never land on ephemeral disk.
 set -gx TORCH_HOME "$DHOME/.local/share/torch"
 set -gx HF_HOME "$DHOME/.local/share/huggingface"
+set -gx CONTAINERS_STORAGE_CONF "$CACHE/containers/storage.conf"
+fish_add_path --global --prepend "$PROFILE/bin"
+EOF
+
 # Rootless-capable containers without touching /etc. vfs works everywhere a
 # pod does (no mount(2) needed); switch to overlay when the pod is privileged.
+# Written HERE, from bash: the drop-in above is a FISH file, and fish has no
+# heredoc. An earlier revision had this block inside that heredoc, which made
+# fish refuse to parse the whole drop-in (no PATH, no env vars) and never
+# created the storage.conf at all -- caught only when a real shell sourced it.
 mkdir -p "$CACHE/containers"
 cat > "$CACHE/containers/storage.conf" <<OC
 [storage]
@@ -116,9 +124,6 @@ driver = "vfs"
 runroot = "$CACHE/containers/runroot"
 graphroot = "$CACHE/containers/graph"
 OC
-set -gx CONTAINERS_STORAGE_CONF "$CACHE/containers/storage.conf"
-fish_add_path --global --prepend "$PROFILE/bin"
-EOF
 
 # home-manager bakes its eval-time home into some generated values. The rewrite
 # that fixes them lives in nix/modules/shell.nix, NOT here: fish sources

@@ -83,26 +83,42 @@ wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
 # WSL2 itself: on an internet-less Windows, install the MSI from the kit
 # (windows-kit result). On a connected one, `wsl --update` does the same.
 msiexec /i wsl.2.9.12.0.x64.msi
-wsl --import twentyx D:\wsl\nixos C:\path\to\nixos-wsl.tar.gz --version 2
+wsl --import twentyx C:\wsl\nixos C:\twentyx\nixos-wsl.tar.gz --version 2
 wsl -d twentyx                   # you are now inside the NixOS machine
 ```
 
-Put `D:\wsl\nixos` on a drive with tens of GB free — the VM disk lives there
+Put `C:\wsl\nixos` on a drive with tens of GB free — the VM disk lives there
 and grows. `wsl --import` registers the tarball as a distro named `twentyx`;
-the name is what every `wsl -d` command refers to. WSL details that matter
-(vscode-server pre-seeding, auto-update pins, first-boot gotchas): see
-[`wsl/README.md`](wsl/README.md).
+the name is what every `wsl -d` command refers to. Then, from `C:\twentyx`:
 
-**Every later change** — build the closure on the connected machine, transfer,
-import, rebuild:
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1   # Windows side
+wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh       # Linux side
+```
+
+`UNPACK.ps1` extracts the kit and installs the themes/templates (never
+overwriting a personal file); `setup-wsl.sh` clones the repo bundle, imports
+the offline rebuild cache and runs the first `nixos-rebuild`. Both are
+idempotent. WSL details that matter (first-boot gotchas, the no-WWW
+rehearsal): see [`wsl/README.md`](wsl/README.md).
+
+### Packed vs extracted (the one table)
+
+| Artifact | Travels as | Becomes |
+|---|---|---|
+| `nixos-wsl.tar.gz` | stays packed | consumed by `wsl --import` — never extracted by hand |
+| `windows-kit-*.tar.gz` | stays packed | extracted by `UNPACK.ps1`; themes/templates installed |
+| `wsl-rebuild.tar.gz` | packed until inside | extracted to `/var/cache/nix-transfer` by `setup-wsl.sh` |
+| `twentyx-airgap.bundle` | stays packed | `git clone`d — a bundle is a git remote, not an archive |
+| `nix-layer*.tar.gz`, `repo-layer.tar` | stay packed | consumed by `crane append` / CI — never opened by hand |
+| `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly |
+
+**Every later change** — edit in the WSL-side repo, commit, rebuild:
 
 ```bash
-# connected machine:
-./scripts/nix-export.sh              # sharded, content-addressed
-# transfer the chunks (any order — reassembly is by hash)
-# WSL:
-sudo ./scripts/nix-import.sh         # into /var/cache/nix-transfer, then:
-sudo nixos-rebuild switch --flake /etc/nixos#... # or wherever the flake lives
+# inside the distro (the repo lives on the durable home; the flake reads the
+# GIT TREE, so `git add` new files before rebuilding)
+wsl -d twentyx -u root -- nixos-rebuild switch --flake /home/jensen/twentyx-airgap#wsl
 ```
 
 A config *edit* (not a new package) rebuilds offline in seconds — `writeText`
@@ -122,18 +138,22 @@ the right one (it matches the cluster's server version).
 
 ## 3. Cross the gap
 
-Carry, in one go:
+`./scripts/transfer-bundle.sh` assembles all of `dist/` in one shot. What it
+carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/nix-layer.tar.gz` (+`-nvim` optional) | ~847 / ~880 MB | Artifactory → CI `crane append` |
-| `dist/repo-layer.tar` | ~80 KB | CI re-tars it per commit anyway |
-| `nix-export.sh` chunks | ~1 GB | WSL binary cache |
-| `nixos-wsl.tar.gz` (first time only) | ~4.3 GB | `wsl --import` |
-| `.#windows-kit` result | ~435 MB | Windows machines: one tar.gz — Zed installer (release-matched with the closure), theme files, Zed/WezTerm client templates, WSL2 MSI. Ships as a single archive so no bare `.exe`/`.msi` crosses the gap; Windows extracts it with its built-in `tar.exe` |
+| `dist/nix-layer.tar.gz` (+`-nvim`) | ~846 / ~880 MB | Artifactory → CI `crane append` |
+| `dist/repo-layer.tar` | ~380 KB | CI re-tars it per commit anyway |
+| `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.1 GB | `wsl --import` |
+| `dist/windows-kit-*.tar.gz` | ~435 MB | Windows: `UNPACK.ps1` (Zed, themes, templates, WSL2 MSI) |
+| `dist/wsl-rebuild.tar.gz` | ~90 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
+| `dist/twentyx-airgap.bundle` | ~250 KB | `git clone` inside the distro (real history) |
+| `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly — see §1 |
 
-The WSL bootstrap is one ~4.3 GB file; the binary-cache exporter shards by
-default if the cache chunks ever exceed a per-file cap.
+The bases themselves never cross the gap (they are in the airgap registry and
+`crane` cross-mounts them) — see [`docker/BASE-IMAGES.md`](docker/BASE-IMAGES.md)
+for base-image choices and the first-transfer checklist.
 
 ## 4. Registry side (inside the gap)
 

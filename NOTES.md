@@ -107,10 +107,12 @@ corrupt layer surfaces as missing store paths in the pod (`doctor` checks exactl
 which is the failure that matters. (Signing was the old plan for tamper-evidence; declined
 2026-09 -- see above.)
 
-## 4. Base images  [you own a derived base; names for you to fill in]
+## 4. Base images  [resolved 2026-09-27 -- see docker/BASE-IMAGES.md]
 
 Internal flavors: `base-slim`, `base-pytorch`, `vscode-slim`, `vscode-pytorch`. Preconfigured
 with registries and CA certs, so CI runs on an internal slim base, never a public image.
+The vendor bases are **already present in the airgap registry**: `crane append` cross-mounts
+them, so they never cross the gap and their size does not touch the build pod. Rely on them.
 
 Editor is **code-server**, now shipped in the closure (see §7) rather than borrowed from the
 base, so an editor exists on every base including the slim ones.
@@ -118,13 +120,14 @@ base, so an editor exists on every base including the slim ones.
 There is no container build left in OUR pipeline -- no Stage 1, no node layer, only
 `tar` + `crane`. CI's assemble stage still runs on `base-slim`.
 
-You build images on top of the vendor base yourself (that predates this project), so a thin
-**derived base** is available whenever the vendor base needs a fix we cannot append (§6) --
-and it can bake registry/cert/pip/npm defaults for pip-and-npm-via-Artifactory. Those baked
-values stay *defaults*: the env-injection contract (§3 of common, `/opt/airgap-env`)
-overrides them per cluster, so a base rebuilt for a new registry does not strand old pods.
-Whether to supersede the vendor base wholesale or keep a 5-line derived Dockerfile is a
-deliberate tradeoff to make when the first transfer is planned.
+A **derived tag** on top of the vendor base is the escape hatch for what layers cannot do
+(registry/CA/pip/npm defaults as overridable defaults; the uid-10001 passwd line, §6). The
+derived-base workflow is in use; keep it to exactly that, and let everything else come from
+the layers -- the imperative "install CLI tools into the base" habit is how a base drifts
+from the closure. The full decision matrix (vendor as-is / thin derived / custom minimal),
+what does NOT belong in a derived base, and the first-transfer checklist live in
+`docker/BASE-IMAGES.md`. The historical `Dockerfile.airgap` (generic public base + user +
+stow + packages) is obsolete for this toolchain.
 
 Fill in yourself: registry hostname, repo paths, tag convention
 (`BASE_REGISTRY` / `BASE_TAG` in `.gitlab-ci.yml`).

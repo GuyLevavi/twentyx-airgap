@@ -169,6 +169,16 @@ else
     bad "env injection: doctor reports the source"
 fi
 
+say "bootstrap drop-ins"
+# The fish drop-in must PARSE. An earlier revision embedded a bash heredoc
+# inside it: fish refused the whole file (so no PATH, no env vars reached the
+# interactive shell) and podman's storage.conf was never written. The test
+# suite never sourced fish, which is why it took a human shell to catch it.
+expect_ok "fish drop-in parses (fish -n)" \
+    run_ic bash -c 'fish -n /data/jensen/.config/fish/conf.d/00-env.fish'
+expect_grep "podman storage.conf written (vfs)" 'driver = "vfs"' \
+    run_ic bash -c 'cat /tmp/twentyx-cache-$(id -u)/containers/storage.conf'
+
 say "root for the runtime user"
 expect_ok "sudoers grants gid 0 passwordless sudo" \
     run_ic bash -c 'grep -q "%#0" /etc/sudoers'

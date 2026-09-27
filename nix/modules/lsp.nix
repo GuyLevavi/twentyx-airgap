@@ -27,4 +27,7 @@ with pkgs;
   # "npm info ... vscode-langservers-extracted" in the remote log). The nix
   # build serves jsonls for nvim and the Zed pin; no node, no npm.
   vscode-langservers-extracted
+  # TOML for Zed: the toml extension is syntax-only since 1.0.3; Tombi is its
+  # TOML server now (taplo stays for nvim, whose argv names it explicitly).
+  tombi
 ]

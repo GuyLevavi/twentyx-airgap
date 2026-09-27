@@ -296,6 +296,31 @@ in
                     // closure build of the same server.
                     "json-language-server": {
                       "binary": { "path": "${pkgs.vscode-langservers-extracted}/bin/vscode-json-language-server" }
+                    },
+                    "bash-language-server": {
+                      "binary": {
+                        "path": "${pkgs.bash-language-server}/bin/bash-language-server",
+                        "arguments": ["start"]
+                      }
+                    },
+                    "yaml-language-server": {
+                      "binary": {
+                        "path": "${pkgs.yaml-language-server}/bin/yaml-language-server",
+                        "arguments": ["--stdio"]
+                      },
+                      // yaml-language-server fetches schemas from
+                      // schemastore.org for every YAML file by default -- a
+                      // hang per file behind the gap. Validation still works
+                      // from inlined $schema and the settings below.
+                      "settings": { "yaml": { "schemaStore": { "enable": false } } }
+                    },
+                    // TOML: the toml extension is syntax-only now; Tombi is
+                    // Zed's TOML server (taplo remains nvim's).
+                    "tombi": {
+                      "binary": {
+                        "path": "${pkgs.tombi}/bin/tombi",
+                        "arguments": ["lsp"]
+                      }
                     }
                   },
                   // Prettier is downloaded through node when a language that
@@ -313,6 +338,10 @@ in
                       "formatter": { "language_server": { "name": "ruff" } }
                     }
                   },
+                  // Terminal Threads (agent panel -> New Thread -> Terminal):
+                  // the TUI, not ACP -- starts opencode in the shell the
+                  // thread creates. The ACP entry above stays for the panel.
+                  "agent": { "terminal_init_command": "opencode" },
                   "auto_update": false,
                   "telemetry": {
                     "metrics": false,
@@ -322,23 +351,6 @@ in
               '';
         }
       )
-
-      # Zed tasks: a terminal opencode next to the ACP agent. The ACP entry
-      # above stays the default; this is the fallback for a session where the
-      # agent panel is not wanted. Packaged default: a real tasks.json wins.
-      {
-        ".config/zed/tasks.json".text = ''
-          // Run opencode in a Zed terminal (task: spawn, or the task picker).
-          [
-            {
-              "label": "opencode (terminal)",
-              "command": "opencode",
-              "use_new_terminal": true,
-              "allow_concurrent_runs": true
-            }
-          ]
-        '';
-      }
 
       # btop: a themed default instead of the stock black. The theme file
       # ships inside the closure's btop package (share/btop/themes);
