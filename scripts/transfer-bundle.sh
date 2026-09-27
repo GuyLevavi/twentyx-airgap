@@ -72,6 +72,9 @@ cp -f "$KIT" "$OUT/windows-kit/${KITNAME#*-}"
 # User-facing only: NOTES.md/TODO.md are machine-specific internals (store
 # repair, cluster placeholders, next steps) and do not cross the gap.
 say "carrying the documentation"
+# Wiped first: a shipped copy from an older run must never survive (NOTES.md/
+# TODO.md used to be in here), the same always-regenerate rule as START-HERE.
+rm -rf "$OUT/docs"
 mkdir -p "$OUT/docs"
 cp README.md ARCHITECTURE.md MANUAL.md "$OUT/docs/"
 # The wsl/ tree is part of the WSL story; the pod tree gets its own.
