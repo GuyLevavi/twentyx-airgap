@@ -146,9 +146,9 @@ carries, and what each thing becomes:
 |---|---|---|
 | `dist/nix-layer.tar.gz` (+`-nvim`) | ~840 / ~857 MB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
-| `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.1 GB | `wsl --import` |
+| `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.3 GB | `wsl --import` |
 | `dist/windows-kit-*.tar.gz` | ~435 MB | Windows: `UNPACK.ps1` (Zed, themes, templates, WSL2 MSI) |
-| `dist/wsl-rebuild.tar.gz` | ~97 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
+| `dist/wsl-rebuild.tar.gz` | ~107 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
 | `dist/twentyx-airgap.bundle` | ~276 KB | `git clone` inside the distro (real history) |
 | `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly — see §1 |
 

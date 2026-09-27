@@ -95,8 +95,10 @@ what does NOT belong in a derived base, and the first-transfer checklist live in
 `docker/BASE-IMAGES.md`. The historical `Dockerfile.airgap` (generic public base + user +
 stow + packages) is obsolete for this toolchain.
 
-Fill in yourself: registry hostname, repo paths, tag convention
-(`BASE_REGISTRY` / `BASE_TAG` in `.gitlab-ci.yml`).
+Cluster facts are CI variables set in the airgap's GitLab (project/group
+variables beat `.gitlab-ci.yml`) -- decision 2026-09-27, so nothing is
+"filled in" from the connected side. The file carries readable defaults
+only, and the Artifactory path derives from `VERSION`.
 
 ## 5. First transfer should be deliberately small
 
@@ -308,6 +310,12 @@ it is not relitigated:
   syntax-only since 1.0.3; taplo remains nvim's). Prettier auto-install is off
   (`"prettier": {"allowed": false}`). The agent integration is Terminal
   Threads + `"agent": {"terminal_init_command": "opencode"}`, not tasks.json.
+- **workmux / skills / daily drivers [added 2026-09-27, WSL-only]**: workmux
+  (pinned flake input) ships with its tmux integration and the opencode status
+  plugin from the same revision; opencode skills are vendored from the
+  matt-skills input (same revision as /etc/nixos). Both are WSL-only by
+  decision -- the pod's multiplexer is herdr and its layer stays lean; promote
+  either by removing the `cfg.target == "wsl"` guard.
 - **opencode slowness [open]**: reported slow in the WSL distro; the log
   directory has not been read yet -- the VHDX cannot be inspected from Linux
   (`qemu-img` hangs on this image's VHDX parser; 7-Zip reads the VHDX

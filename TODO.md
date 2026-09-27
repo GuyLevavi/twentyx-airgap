@@ -11,6 +11,17 @@ command or decision.
   (nvim ruby/python/wayland off, fish python off, idle tools out), fixes in
   (injection-export dedup, the transfer-bundle SIGPIPE probe, CI `mkdir`),
   docs lean. Layers re-measured: plain ~840 MiB, `-nvim` ~857 MiB.
+- Sync round (2026-09-27): the WSL side now mirrors the connected machine —
+  workmux (pinned flake input) with its tmux integration and opencode status
+  plugin, the full tmux config on a static Tokyo Night theme (extended-keys
+  included, so Ctrl-hjkl survives the kit's WezTerm), vendored opencode
+  skills (matt-skills, same pinned revision as /etc/nixos),
+  yazi/lazydocker/podman-compose/gcc/nodejs/bubblewrap, and `rb` for the
+  one-command offline rebuild (wheel sudo now needs no password — the
+  account's password is locked anyway). Windows kit ships
+  `zed-client-settings.personal-example.json` next to the neutral file.
+  Re-measured: WSL tarball ~1.3 GB, cache ~107 MB, kit ~433 MiB; layers
+  unchanged at ~840/~857 MiB (skills add ~1 MiB).
 - WSL first boot is proven on the real machine; the distro lives at
   `C:\WSL\nixos\ext4.vhdx`. `C:\twentyx` was re-seeded from `dist/` and holds
   every artifact plus the two one-shot scripts (`UNPACK.ps1` on Windows,
@@ -44,18 +55,20 @@ command or decision.
       TEST_TORCH_IMAGE=pytorch/pytorch:latest ./tests/test-gpu-cuda.sh
       ```
 
-## 1. Fill in the cluster facts only you know (NOTES.md §4)
+## 1. Cluster facts — set in the airgap, not here
 
-- [ ] `.gitlab-ci.yml`: replace `BASE_REGISTRY = "quay.internal/ai"`
-      with the real base registry/repo path, and set the base tag convention.
-      Pin `BASE_TAG` to something immutable per transfer (digest or
-      date-stamped tag) — `latest` can silently drift between transfers.
-- [ ] Decide the Artifactory version path: `LAYER_BASE_URL` pins
-      `.../airgap/0.1.0` while `push-artifactory.sh` derives the path from
-      `VERSION` — bumping `VERSION` without updating CI fetches stale layers.
-      Keep them mirrored or drop the version prefix.
-- [ ] Pin the CI lint image (`koalaman/shellcheck-alpine:stable` → digest)
-      when it goes through the internal mirror.
+By decision (2026-09-27): every cluster fact is a CI variable set on the
+airgap's GitLab (project/group variables beat `.gitlab-ci.yml`). The file
+only carries readable defaults, and the Artifactory path now derives from
+`VERSION` — it can no longer skew from `push-artifactory.sh`. Artifactory
+stays as the in-gap layer transport for now.
+
+- [ ] **[gap]** Set the real values in the airgap GitLab: `BASE_REGISTRY`,
+      `BASE_TAG` (pin per transfer — digest or date-stamped tag; `latest`
+      can silently drift), `ARTIFACTORY_URL`, `ARTIFACTORY_GENERIC_REPO`,
+      `ARTIFACTORY_TOKEN`.
+- [ ] **[gap]** Pin the CI lint image (`koalaman/shellcheck-alpine:stable`
+      → digest) when it goes through the internal mirror.
 
 ## 2. First transfer (NOTES.md §5 — deliberately small)
 

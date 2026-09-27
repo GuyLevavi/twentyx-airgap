@@ -44,7 +44,7 @@ fi
 # The `{ ... || true; }` group is load-bearing, the same SIGPIPE trap as
 # libexec/run-opencode: `grep -m1 -q` exits on first match, tar dies of
 # SIGPIPE (141), and pipefail turns a healthy probe into "stale" — which
-# rebuilt the 1.1 GB tarball on every run. The guard absorbs the producer's
+# rebuilt the 1.3 GB tarball on every run. The guard absorbs the producer's
 # 141; the decision stays with grep's own status.
 if [ ! -f "$OUT/nixos-wsl.tar.gz" ] || ! { tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/dev/null || true; } | grep -m1 -q '^\./bin/init$'; then
     rm -f "$OUT/nixos-wsl.tar.gz"
@@ -126,6 +126,10 @@ Windows-side installs (windows-kit\windows-kit\, if UNPACK.ps1 did not):
   Zed-x86_64-*-setup.exe     pinned to the closure's remote server
   themes\*.json              copy into %APPDATA%\Zed\themes\
   zed-client-settings.json   copy/merge into %APPDATA%\Zed\settings.json
+  zed-client-settings.personal-example.json
+                             a fuller client config (vim mode, which-key,
+                             Catppuccin, right-docked panels) to copy
+                             INSTEAD if you want that exact setup
   wezterm.lua                copy to %USERPROFILE%\.wezterm.lua
   wsl.*.x64.msi              only if WSL2 is missing (DISM lines + reboot)
   (VS Code is NOT in the kit any more — Zed's WSL remote covers editing;
@@ -134,7 +138,12 @@ Windows-side installs (windows-kit\windows-kit\, if UNPACK.ps1 did not):
 EVERYDAY LOOP (after the one-time steps):
 
   # edit/commit in ~/twentyx-airgap — the flake reads the GIT TREE, so
-  # `git add` new files before rebuilding
+  # `git add` new files before rebuilding. `rb` does exactly that (stage
+  # everything, then switch the system); it is the same command as on the
+  # connected machine:
+  rb
+
+  # the explicit form of the same thing:
   wsl -d twentyx -u root -- nixos-rebuild switch --flake /home/jensen/twentyx-airgap#wsl
 
 No re-import, no transfer — confirm the offline promise once with the
@@ -142,7 +151,7 @@ no-WWW rehearsal in docs\wsl-README.md.
 
 IF THE REBUILD FAILS
   It names a missing store path. Send that exact path: it gets added to
-  wsl-rebuild.tar.gz (a 90 MB cache), never a 1.1 GB re-import.
+  wsl-rebuild.tar.gz (a 107 MB cache), never a 1.3 GB re-import.
 
 TEST EVERYTHING
   docs\wsl-SMOKE-TEST.md is the checklist. For anything that fails, send
@@ -234,6 +243,16 @@ THIS ROUND — LSPs declared once (nix/modules/lsp.nix) and routed to
 everything, opencode wrapped with them on PATH, JSON LSP added; VS Code
 removed (kit + image); Windows templates + themes in the kit; repo now
 ships as a git bundle.
+
+SYNC ROUND (2026-09-27) — the WSL side now mirrors the connected machine's
+daily setup: workmux (worktrees + tmux for parallel agents) with its
+opencode status plugin, the full tmux config on a static Tokyo Night theme
+(including extended-keys, so Ctrl-hjkl works with the kit's WezTerm),
+opencode skills vendored from the pinned matt-skills input, yazi /
+lazydocker / podman-compose / gcc / nodejs / bubblewrap, and `rb` for the
+one-command offline rebuild. Passwordless sudo for wheel (the password is
+locked anyway). Cluster facts in .gitlab-ci.yml are now clearly CI-variable
+defaults, with the Artifactory path derived from VERSION.
 ────────────────────────────────────────────────────────────────────
 EOF
 

@@ -28,13 +28,13 @@ tells you what that costs before you carry it anywhere.
 
 | | |
 |---|---|
-| WSL bootstrap, one file | **~1.1 GB** (`nixos-wsl.tar.gz`, gzip) |
+| WSL bootstrap, one file | **~1.3 GB** (`nixos-wsl.tar.gz`, gzip) |
 | `nix-layer.tar.gz` | ~840 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
 | `nix-layer-nvim.tar.gz` | ~857 MB (+ pure nvim and treesitter) |
 | `repo-layer.tar` | ~380 KB |
 | `windows-kit-*.tar.gz` | ~435 MB (Zed installer + WSL2 MSI + themes + client templates) |
 
-The WSL bootstrap is a single ~1.1 GB gzip'd tarball (`nixos-wsl.tar.gz` —
+The WSL bootstrap is a single ~1.3 GB gzip'd tarball (`nixos-wsl.tar.gz` —
 the builder's own default name is `nixos.wsl`, but `wsl --import` takes the
 same bytes under any name). The binary-cache exporter shards by default;
 reassembly is order-independent because the cache is content-addressed. If
