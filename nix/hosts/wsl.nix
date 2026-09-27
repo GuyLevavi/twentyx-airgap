@@ -34,9 +34,9 @@ let
 
   # ── Windows-side assets ─────────────────────────────────────────────────
   # The kit (Zed installer, themes, client settings templates, WSL2 MSI) is
-  # built by .#windows-kit; the WSL side itself needs nothing from it since
-  # the VS Code server pre-seed was dropped (Zed's WSL remote covers editing
-  # from Windows, and its server ships in this closure).
+  # built by .#windows-kit; the WSL side itself needs nothing from it: Zed's
+  # WSL remote covers editing from Windows, and its server ships in this
+  # closure.
 
   # WSL-registry files the upstream tarballBuilder installs into the tarball.
   # wsl-distribution.conf is what makes `wsl --import` register the distro
@@ -70,7 +70,7 @@ in
     enable = true;
     defaultUser = username;
     startMenuLaunchers = true;
-    # Windows interop stays on: it is how VS Code, the browser and the Windows
+    # Windows interop stays on: it is how the browser and the Windows
     # clipboard are reachable, and how `wsl.exe`-side scripts are invoked.
     interop.register = true;
   };
@@ -111,11 +111,10 @@ in
   networking.hostName = "twentyx-wsl";
   time.timeZone = "Asia/Jerusalem";
 
-  # Headless by design: the editors run on Windows (Zed client, VS Code) or
-  # in a terminal (nvim). `hardware.graphics.enable` defaults to true on this
+  # Headless by design: the editors run on Windows (Zed client) or in a
+  # terminal (nvim). `hardware.graphics.enable` defaults to true on this
   # NixOS and drags mesa (~272 MB) plus llvm-lib (~540 MB) into the closure
   # via /etc/tmpfiles.d/graphics-driver.conf — measured dead weight here.
-  # If a GUI app is ever wanted natively on WSLg, re-enable deliberately.
   # If a GUI app is ever wanted natively on WSLg, re-enable deliberately.
   # mkForce: the NixOS-WSL module sets it true for graphics support.
   hardware.graphics.enable = lib.mkForce false;
@@ -218,7 +217,7 @@ in
   # builder below — not a reason to deviate. See wsl/FIRST-BOOT.md.
 
   # ── SSH, both directions ────────────────────────────────────────────────
-  # Inbound: Zed/VS Code from Windows connect over plain SSH to this machine
+  # Inbound: the Zed client on Windows connects over plain SSH to this machine
   # (WSL2 forwards localhost, so Windows clients just use localhost).
   # Outbound: the runai CLI (uv tool install runai) drives `runai exec`, which
   # is what scripts/ssh-bridge.sh tunnels sshd -i through.
@@ -386,31 +385,21 @@ in
       # Run the system activation against the tarball root — the step the
       # upstream builder got for free from nixos-install. This populates
       # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
-      # shim) and users. Without it the
-      # imported distro fails with "getpwuid(0) failed" and "execvpe
-      # (/bin/sh) failed" — measured. nixos-enter mounts only /dev /sys
-      # /proc and uses the chroot's own store; it self-namespaces so no
-      # bind leaks into the tar.
-      echo "[NixOS-WSL] Running the system activation..."
-      ln -sfn /proc/mounts "$root/etc/mtab"
-      # Run the system activation against the tarball root — the step the
-      # upstream builder got for free from nixos-install. This populates
-      # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
-      # shim) and users. Without it the
-      # imported distro fails with "getpwuid(0) failed" and "execvpe
-      # (/bin/sh) failed" — measured. The bind mounts cover the specialfs
-      # snippet, whose own mounts fail in a user namespace (devpts gid,
-      # sysfs type) and are non-fatal: the activation continues and
-      # everything that matters lands in the root. The
-      # /nix/users-chown-to-unmapped-gid failures (specialfs, /etc/shadow)
-      # are corrected by tar --owner=0 at packaging time.
+      # shim) and users. Without it the imported distro fails with
+      # "getpwuid(0) failed" and "execvpe (/bin/sh) failed" — measured.
+      # The bind mounts cover the specialfs snippet, whose own mounts fail
+      # in a user namespace (devpts gid, sysfs type) and are non-fatal:
+      # the activation continues and everything that matters lands in the
+      # root. The /nix/users-chown-to-unmapped-gid failures (specialfs,
+      # /etc/shadow) are corrected by tar --owner=0 at packaging time.
       # switch-to-configuration was tried first — it is an ELF binary now
       # and defers all work to actual boot; the direct activate script is
-      # what populates the tree.
+      # what populates the tree. nixos-enter mounts only /dev /sys /proc
+      # and self-namespaces so no bind leaks into the tar; the explicit
+      # steps below are its behaviour, reproduced in our mount namespace
+      # (its own nested re-exec cannot mount /proc here).
       echo "[NixOS-WSL] Running the system activation..."
       ln -sfn /proc/mounts "$root/etc/mtab"
-      # These are the steps nixos-enter performs, in our existing mount
-      # namespace (its own nested re-exec cannot mount /proc here).
       mount --make-rprivate /
       mkdir -p "$root/dev" "$root/sys" "$root/proc"
       mount --rbind /dev "$root/dev"

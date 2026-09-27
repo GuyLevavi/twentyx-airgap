@@ -56,7 +56,6 @@ if [ ! -f "$OUT/nixos-wsl.tar.gz" ] || ! { tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/d
     # output file is owned by the invoking user. -f in case the target
     # exists (stale or root-owned from older runs).
     ./result/bin/nixos-wsl-tarball-builder "$OUT/nixos-wsl.tar.gz"
-    rm -f result
 fi
 
 # ── 3. the Windows kit ────────────────────────────────────────────────────

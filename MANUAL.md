@@ -58,8 +58,8 @@ gitignored one-liner, not a closure value):
 
 ```bash
 echo <your-name> > wsl-username                 # only if you are not the default
-nix build .#wsl-tarball                         # ~1.4 GB, one file
-./result/bin/nixos-wsl-tarball-builder dist/nixos-wsl.tar.gz   # no sudo
+nix build .#wsl-tarball                         # builds the tarball builder
+./result/bin/nixos-wsl-tarball-builder dist/nixos-wsl.tar.gz   # no sudo; ~1.1 GB
 ```
 
 **One-time setup on Windows — from absolute zero, no WSL installed.**
@@ -132,8 +132,9 @@ the right one (it matches the cluster's server version).
 ## 2. Build the pod layers (connected machine)
 
 ```bash
-./scripts/build-layers.sh            # dist/nix-layer.tar.gz[.nvim] + repo-layer.tar
-./scripts/build-layers.sh plain      # first transfer: deliberately small (~847 MB)
+# The arg is an OUTPUT DIRECTORY, not a flavor: both flavors are always built.
+./scripts/build-layers.sh            # dist/nix-layer.tar.gz + nix-layer-nvim.tar.gz + repo-layer.tar
+./scripts/build-layers.sh /tmp/out   # same three files, elsewhere
 ```
 
 ## 3. Cross the gap
@@ -143,12 +144,12 @@ carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/nix-layer.tar.gz` (+`-nvim`) | ~846 / ~880 MB | Artifactory → CI `crane append` |
-| `dist/repo-layer.tar` | ~380 KB | CI re-tars it per commit anyway |
+| `dist/nix-layer.tar.gz` (+`-nvim`) | ~830 / ~847 MB | Artifactory → CI `crane append` |
+| `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
 | `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.1 GB | `wsl --import` |
 | `dist/windows-kit-*.tar.gz` | ~435 MB | Windows: `UNPACK.ps1` (Zed, themes, templates, WSL2 MSI) |
-| `dist/wsl-rebuild.tar.gz` | ~90 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
-| `dist/twentyx-airgap.bundle` | ~250 KB | `git clone` inside the distro (real history) |
+| `dist/wsl-rebuild.tar.gz` | ~97 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
+| `dist/twentyx-airgap.bundle` | ~260 KB | `git clone` inside the distro (real history) |
 | `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly — see §1 |
 
 The bases themselves never cross the gap (they are in the airgap registry and
@@ -189,7 +190,9 @@ sudo podman images                                    # rootful podman, vfs prew
 Editors: `code-server` is in the closure and wins over the base's copy;
 a `vscode-*` workspace starts it via the base ENTRYPOINT. Zed remote connects
 through `scripts/ssh-bridge.sh` (WSL side) — see README "Zed remote, declared".
-The `-nvim` flavor adds pure nvim + treesitter (~880 MB layer — LazyVim is gone; its LSPs moved to the shared Nix-declared set that Zed also reads); plain ships `nano` as `EDITOR`.
+The `-nvim` flavor adds pure nvim + treesitter (~847 MB layer; its LSPs come
+from the shared Nix-declared set that Zed also reads); plain ships `nano` as
+`EDITOR`.
 
 ## 7. Updating later
 
@@ -203,5 +206,5 @@ The `-nvim` flavor adds pure nvim + treesitter (~880 MB layer — LazyVim is gon
 `doctor` first; it prints closure integrity, terminal env, sudo,
 podman, injected env and the model endpoint, and never changes anything.
 Then: NOTES.md §8 for what is and is not simulated locally, and the
-`tests/test-container.sh` suite (16 checks) which reproduces the pod shape
+`tests/test-container.sh` suite (19 checks) which reproduces the pod shape
 without a cluster.

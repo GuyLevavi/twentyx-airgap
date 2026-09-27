@@ -61,11 +61,12 @@ command or decision.
       ./scripts/transfer-bundle.sh       # -> dist/, then carry dist/ to C:\twentyx
       ```
 
-      Layers only (plain flavor is fine for the first run; skip `-nvim` if
-      transfer size matters — `assemble.sh` copes):
+      Layers only — the script always builds both flavors; for the first
+      transfer carry only the plain one — `assemble.sh` copes without
+      `nix-layer-nvim.tar.gz`:
 
       ```bash
-      ./scripts/build-layers.sh          # -> dist/nix-layer.tar.gz
+      ./scripts/build-layers.sh          # -> dist/nix-layer.tar.gz + -nvim + repo-layer.tar
       ```
 
       No signing key, by decision (2026-09): integrity is the content-addressed
@@ -81,8 +82,9 @@ command or decision.
       ```
 
 - [ ] **[gap]** Run CI (GitLab, branch `main`): lint → assemble. The assemble
-      stage fetches the nix layer, tars this checkout as `repo-layer.tar`,
-      and crane-appends onto every configured base variant.
+      stage fetches the nix layer, builds `repo-layer.tar` with
+      `docker/mklayer.sh` (libexec/, agent/, VERSION — not the whole
+      checkout), and crane-appends onto every configured base variant.
 
 ## 3. First pod — the questions only a real pod answers
 

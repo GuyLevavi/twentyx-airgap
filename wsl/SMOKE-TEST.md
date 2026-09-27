@@ -22,15 +22,17 @@ journal head and the reasons; report it.
 
 ## 1. Offline rebuild (the durable path — do this once)
 
-This is what makes config edits cheap forever after; it needs the
-`wsl-rebuild.tar.gz` + `repo-src.tar.gz` carried from the build host (already
-in `C:\twentyx` if the transfer shipped them).
+This is what makes config edits cheap forever after. It needs the two
+artifacts the transfer bundle ships: `twentyx-airgap.bundle` (the repo) and
+`wsl-rebuild.tar.gz` (the offline rebuild cache), both carried to
+`C:\twentyx`.
 
 ```bash
-# as root (one-time; imports the eval inputs + stdenvNoCC into the store)
+# as root (one-time; clones the repo, imports the cache, activates) --
+# exactly what setup-wsl.sh does, spelled out:
 wsl -d twentyx -u root -- bash -lc '
-  mkdir -p /root/twentyx /var/cache/nix-transfer
-  tar -xzf /mnt/c/twentyx/repo-src.tar.gz -C /root/twentyx
+  git clone /mnt/c/twentyx/twentyx-airgap.bundle /root/twentyx
+  mkdir -p /var/cache/nix-transfer
   tar -xzf /mnt/c/twentyx/wsl-rebuild.tar.gz -C /var/cache/nix-transfer --strip-components=1
   nix copy --from file:///var/cache/nix-transfer --all
   nixos-rebuild switch --flake /root/twentyx#wsl
@@ -160,9 +162,9 @@ echo "$TERM $TERM_PROGRAM"               # terminal identity, see §5
 ## 5. Terminal / WezTerm
 
 You already run WezTerm with `default_domain = "WSL:twentyx"` and Tokyo Night
-(`C:\Users\guyle\.wezterm.lua`; a dotfiles copy lives under
-`Projects/dotfiles-wsl-main/wezterm/`). The one missing setting was the kitty
-keyboard protocol; it has been added to both:
+(`C:\Users\<you>\.wezterm.lua`; a dotfiles copy lives under
+`Projects/dotfiles-wsl-main/wezterm/`). The one setting that matters is the
+kitty keyboard protocol:
 
 ```lua
 config.enable_kitty_keyboard = true
@@ -211,12 +213,7 @@ images you carried (`podman images`, `podman load`).
 
 Zed's WSL integration needs no SSH setup: it spawns the server itself (see
 §3). The SSH bridge remains for the pod side and as a fallback — see
-`wsl/README.md` "SSH, both directions": keys, `gl@localhost`.
-
-VS Code was dropped from the kit and the image (2026-09-26): the pre-seeded
-server cost ~500 MB in the image and ~220 MB in the kit, and Zed's WSL remote
-covers the same workflow. To bring it back, re-add the installer + server
-tarball to `nix/packages/windows-kit.nix` and the seed to `nix/hosts/wsl.nix`.
+`wsl/README.md` "Windows → distro over SSH": keys, `<you>@localhost`.
 
 ## 10. Nix itself
 

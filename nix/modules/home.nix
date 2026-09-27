@@ -24,11 +24,10 @@ let
     ];
   };
 
-  # The official opencode extension for VS Code / code-server. The pod's
-  # code-server gets it seeded as a packaged default; on WSL the same vsix is
-  # there for sideloading onto the Windows side, which has no marketplace in
-  # the airgap. Version and hash are pinned deliberately: a moving ref would
-  # break offline rebuilds.
+  # The official opencode extension for code-server (the pod IDE). It is
+  # seeded as a packaged default; the raw .vsix below rides along for a
+  # machine that ever wants to sideload it manually. Version and hash are
+  # pinned deliberately: a moving ref would break offline rebuilds.
   opencodeVscode = pkgs.vscode-utils.buildVscodeMarketplaceExtension {
     mktplcRef = {
       publisher = "sst-dev";
@@ -95,8 +94,9 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        LazyVim with curated treesitter grammars and LSPs. ~750 MB of closure,
-        which is why the RunAI side builds it as a separate image flavor.
+        Pure nvim with curated treesitter grammars, drawing its language
+        servers from the shared closure. ~48 MiB of profile closure, which is
+        why the RunAI side builds it as a separate image flavor.
       '';
     };
 
@@ -170,7 +170,7 @@ in
       ];
 
       # kubectl exec forwards TERM from the client but never COLORTERM, so
-      # truecolor detection fails and LazyVim falls back to 16 colours.
+      # truecolor detection fails and nvim falls back to 16 colours.
       COLORTERM = "truecolor";
 
       # The plain pod flavor has no nvim — an $EDITOR pointing at it would

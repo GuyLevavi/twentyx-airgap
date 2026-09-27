@@ -8,12 +8,12 @@
 # ones, which is what keeps the build pod inside its ephemeral storage budget.
 #
 # Two layers, appended in ascending order of how often they change, so a
-# config edit re-uploads ~80KB and cross-mounts the rest:
+# config edit re-uploads ~380KB and cross-mounts the rest:
 #
-#   1. nix-layer      the whole toolchain closure     monthly    ~414MB / ~634MB
-#   2. repo-layer     libexec, agent helpers, sudoers hourly     ~80KB
+#   1. nix-layer      the whole toolchain closure     monthly    ~830MB / ~847MB
+#   2. repo-layer     libexec, agent helpers, sudoers hourly     ~380KB
 #
-# Two flavors per variant: the nvim layer is ~250MB larger, and not every
+# Two flavors per variant: the nvim layer is ~17MB larger, and not every
 # workspace wants an editor in it.
 set -euo pipefail
 

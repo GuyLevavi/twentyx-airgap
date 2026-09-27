@@ -62,9 +62,9 @@ Why local checks missed it:
 
 - the chroot smoke test ran **as root** (namespace root), and root bypasses
   the 0700 `/`;
-- extracting the tar as `gl` into a `gl`-owned directory and reading it back
-  as `gl` also works — the directory is 0700 but *owned by gl*, so traversal
-  is allowed;
+- extracting the tar as your own user into a directory you own and reading it
+  back also works — the directory is 0700 but *owned by you*, so traversal is
+  allowed;
 - the mode lives in the `./` entry, which nobody looks at until it bites.
 
 ## 3. The separate, real ownership class
@@ -79,10 +79,6 @@ time, and is handled where root *is* real: systemd-tmpfiles at boot.
 |---|---|---|
 | user home `/home/<user>` | chown EINVAL, ships root | tmpfiles `d`/`z` create/re-own it |
 | `/var/lib/dbus`, `/var/empty`, journal dirs | tmpfiles chowns fail | systemd-tmpfiles as real root |
-| `.vscode-server` pre-seed | `chown -R` EINVAL, aborted the activation | guard `|| true`; tmpfiles `z` re-owns |
-
-The seed's unguarded `chown -R` under `set -e` used to abort the activation
-snippet; that is why it is now `|| true` (ownership is fixed at boot anyway).
 
 ## 4. The boot logger
 
@@ -120,35 +116,16 @@ Deliberately **not** in the build anymore:
 
 ## 6. Was the approach healthy? (no)
 
-The first several iterations patched *symptoms*: switched D-Bus
-implementations, added a unit to re-chmod a socket, guarded a chown — each
-justified by the last EACCES seen. That is exactly the kind of iteration that
-keeps failing at runtime, and it did: every "fix" moved the error somewhere
-new instead of removing the cause.
-
-The healthy version, and the principle this file now records:
-
-1. **Find the invariant, not the symptom.** "Root works, nothing user-level
-   does" is a traversal-class statement, not a dbus statement.
-2. **Enforce it for the whole tree, at one place.** The fix is one `find`
-   pass over the image: every directory is traversable. Not a `chmod` on one
-   path.
-3. **Assert it at build time.** The builder now fails if any directory in the
-   image is not traversable. That is the difference between "fixed" and "will
-   bite us again": the invariant can no longer silently rot.
-4. **Do not widen files.** The store's exec bits are already correct, and
-   widening files would break sshd (it refuses to start unless host keys are
-   exactly 0600). Directory traversal is the actual requirement.
-
-The remaining scoped patches (tmpfiles for the home directory, the boot
-logger) survive the same test: each addresses a class root cause with a
-general mechanism (tmpfiles is NixOS's own declarative ownership engine), not
-a one-off observation.
-
-The deeper structural note stands: the builder's user-namespace design is the
-source of both the ownership class (§3) and the mode trap (§2). Real root at
-build time (one `sudo`, or `systemd-nspawn`/a VM) would remove both. If that
-becomes acceptable, take it and delete the scaffolding.
+The first iterations patched *symptoms* — D-Bus implementation swaps, a unit
+to re-chmod a socket, a guarded chown — and every "fix" moved the error
+somewhere new. The healthy fix is the one now shipped: find the invariant
+("root works, nothing user-level does" is a traversal statement, not a dbus
+statement), enforce it for the whole tree in one place, and assert it at build
+time so it cannot silently rot. Files are deliberately not widened: the
+store's exec bits are already correct and sshd requires exactly 0600 host
+keys. The structural note stands: the user-namespace builder is the source of
+both bug classes (§2, §3); real root at build time (one `sudo`,
+`systemd-nspawn` or a VM) would remove both.
 
 ## 7. Gotchas checklist
 
@@ -182,7 +159,7 @@ becomes acceptable, take it and delete the scaffolding.
 - **Absolute symlinks in an extract resolve against the host.** `etc/static`,
   `etc/systemd/system` and friends point at `/nix/store/...`; `ls`/`cat`
   through them reads *this machine*, not the image. This once made a `jensen`
-  image appear to ship `home-manager-gl.service` (it was the host's units).
+  image appear to ship `home-manager-<user>.service` (it was the host's units).
   Read the `etc` derivation directly, or `tar -xOf` individual files.
 - The store is content-addressed, so the image's files also exist on the
   build host — usually easier than extracting 4.6 GB.
@@ -208,36 +185,17 @@ becomes acceptable, take it and delete the scaffolding.
 ## 8. Is Nix the right tool?
 
 **For the constraint, yes; for this implementation, the builder is the weak
-link.**
-
-What Nix buys, and what nothing else does as cleanly:
-
-- One pinned source of truth for both sides of the gap (same flake for the
-  RunAI pod layer and the WSL laptop), so pod/laptop drift is designed out.
-- The closure *is* the manifest: content-addressed, per-path signatures,
-  offline rebuilds for config edits, and no runtime fetch classes.
-
-What it costs, learned the hard way here:
-
-- The WSL rootfs is bespoke tooling. Upstream NixOS-WSL builds its tarball
-  with real root; this repo reimplemented activation in a user namespace to
-  avoid sudo, and both major bug classes came from that choice.
-- Debugging crosses four layers (flake eval → chroot activation → tar
-  extraction → WSL first boot) and the last one is a machine we do not have.
-
-Alternatives, and their cost:
-
-| option | first boot | airgap story | pod parity |
-|---|---|---|---|
-| plain Debian/Ubuntu WSL + offline debs | trivial | second toolchain to pin and carry | none |
-| Docker/Dev Container on Windows | easy | registry export, another runtime | can reuse the pod image, no RunAI scheduling |
-| upstream NixOS-WSL tarball + `nixos-rebuild` | easy | still needs a prebuilt closure moved in | needs a root/VM builder for this flake |
-| **current: custom tarball, no sudo** | fixable, now asserted | excellent | excellent |
-| custom tarball built as root once | easy | excellent | excellent |
-
-Verdict: the Nix bet is right because the hard constraint is one source of
-truth across the airgap and the RunAI side is not negotiable. The wrong tool
-is the no-root user-namespace builder, not Nix.
+link.** Nix buys one pinned source of truth for both sides of the gap, a
+closure that *is* the manifest (offline config rebuilds, no runtime fetch
+classes) — nothing else does that as cleanly. The costs, learned here: the
+WSL rootfs is bespoke tooling (upstream NixOS-WSL uses real root; this repo
+reimplemented activation in a user namespace to avoid sudo, and both major bug
+classes came from that), and debugging crosses four layers (flake eval →
+chroot activation → tar extraction → WSL first boot), the last on a machine we
+do not have. The alternatives — a plain distro plus offline debs, Dev
+Containers, the upstream NixOS-WSL tarball — each lose pod parity or the
+single-source property. Verdict: keep Nix; reconsider the no-root builder when
+a root path becomes acceptable (§6).
 
 ## 9. Open items
 

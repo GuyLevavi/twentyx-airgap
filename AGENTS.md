@@ -25,7 +25,7 @@ Adding a package to `nix/modules/tools.nix` changes both targets at once. Shell/
 
 ## Transfers
 
-`./scripts/transfer-bundle.sh` assembles the whole `dist/` in one shot: both nix layers, `repo-layer.tar`, `nixos-wsl.tar.gz`, the windows kit, docs and `START-HERE.txt`. It content-probes an existing WSL tarball (`./bin/init` present) and rebuilds it when stale — existence alone is not enough. Layers only: `./scripts/build-layers.sh [outdir]`, which builds in the chroot store `/tmp/airgap-test-store` when that exists (a new closure's drvs are not in the default store — NOTES §9).
+`./scripts/transfer-bundle.sh` assembles the whole `dist/` in one shot: both nix layers, `repo-layer.tar`, `nixos-wsl.tar.gz`, the windows kit, `twentyx-airgap.bundle` (the repo's real history), user-facing docs and `START-HERE.txt`. It content-probes an existing WSL tarball (`./bin/init` present) and rebuilds it when stale — existence alone is not enough (the probe guards the producer's SIGPIPE, or pipefail makes a healthy tarball look stale). Layers only: `./scripts/build-layers.sh [outdir]`, which builds in the chroot store `/tmp/airgap-test-store` when that exists (a new closure's drvs are not in the default store — NOTES §9).
 
 `wsl-username` is per-machine and gitignored: a plain-directory flake copy uses it, a git checkout excludes it and ships the default (`jensen` in `flake.nix`).
 
@@ -33,7 +33,7 @@ Adding a package to `nix/modules/tools.nix` changes both targets at once. Shell/
 
 - **Git is text-only, enforced by design.** No vendored blobs, no binaries, no lockfile-generated artifacts. The closure replaces any manifest/CHECKSUMS scheme.
 - **Never run Nix inside a pod.** `nix/runai/layer.nix` extracts the built closure as an OCI layer tarball; the lock is law in the airgap (`nix flake update` only on a connected machine).
-- Pin inputs deliberately; most follow `nixpkgs`. The `vscode-server` input must *not* (overriding a nonexistent input warns on every eval). Marketplace extensions and tarball fetches pin exact hashes — re-pin only when upstream mutates the asset.
+- Pin inputs deliberately; most follow `nixpkgs`. Marketplace extensions and tarball fetches pin exact hashes — re-pin only when upstream mutates the asset.
 - Auto-updates are disabled everywhere: a runtime fetch in the gap is a hang, not an error (tldr/tealdeer was removed entirely for this reason — a 2 MB nicety that mutated upstream three times is not worth a fetch class that bites).
 
 ## Image assembly (`docker/`)

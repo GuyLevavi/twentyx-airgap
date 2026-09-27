@@ -15,8 +15,8 @@ actually references, and nothing else.
 |---|---|---|
 | What it is | a real NixOS system **inside** the gap | a read-only tree baked into an OCI layer |
 | Nix at runtime | yes — rebuilds offline | **no** — never runs in a pod |
-| How it arrives | binary cache, `scripts/nix-import.sh` | `crane append`, `docker/assemble.sh` |
-| Python | Nix (3.11 + 3.12, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
+| How it arrives | git bundle + cache tarball, `scripts/setup-wsl.sh` | `crane append`, `docker/assemble.sh` |
+| Python | Nix (3.12 only, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
 | Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
 | Agent | opencode + herdr | opencode (via `run-opencode`) + herdr |
 | Editor | zed (Windows client + remote server), nvim | code-server (closure) + zed remote server |
@@ -28,18 +28,19 @@ tells you what that costs before you carry it anywhere.
 
 | | |
 |---|---|
-| WSL bootstrap, one file | **~1.1 GB** (gzip; dropped ~500 MB with the VS Code server pre-seed, 2026-09-26) |
-| `nix-layer.tar.gz` | ~850 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
-| `nix-layer-nvim.tar.gz` | ~880 MB |
+| WSL bootstrap, one file | **~1.1 GB** (`nixos-wsl.tar.gz`, gzip) |
+| `nix-layer.tar.gz` | ~830 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
+| `nix-layer-nvim.tar.gz` | ~847 MB (+ pure nvim and treesitter) |
 | `repo-layer.tar` | ~380 KB |
 | `windows-kit-*.tar.gz` | ~435 MB (Zed installer + WSL2 MSI + themes + client templates) |
 
-The WSL bootstrap is a single ~1.1 GB gzip'd tarball (`.wsl` is just the
-extension — `wsl --import` takes the same bytes under any name). The
-binary-cache exporter shards by default; reassembly is order-independent
-because the cache is content-addressed. If the size ever hurts, the single
-biggest lever is clangd (~2 GB of the WSL closure) — removable as an offline
-config edit on the WSL machine itself, no transfer needed.
+The WSL bootstrap is a single ~1.1 GB gzip'd tarball (`nixos-wsl.tar.gz` —
+the builder's own default name is `nixos.wsl`, but `wsl --import` takes the
+same bytes under any name). The binary-cache exporter shards by default;
+reassembly is order-independent because the cache is content-addressed. If
+the size ever hurts, the single biggest lever is clangd (~1.4 GB of the WSL
+closure) — removable as an offline config edit on the WSL machine itself, no
+transfer needed.
 
 ## The two layers at runtime
 
@@ -184,8 +185,12 @@ nix/runai/layer.nix           the closure -> an OCI layer tarball
 libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
+scripts/transfer-bundle.sh    run OUTSIDE -> the whole dist/ in one shot (layers, tarball, kit, bundle, docs)
+scripts/export-rebuild-cache.sh  run OUTSIDE -> dist/wsl-rebuild.tar.gz (WSL offline rebuilds)
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
+scripts/setup-wsl.sh          run INSIDE (as root) -> clone the bundle, import the cache, rebuild
+scripts/windows/UNPACK.ps1    run on WINDOWS -> extract the kit, install themes + client templates
 scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory, for CI
 scripts/ssh-bridge.sh         run on WSL  -> socat bridge: Zed/SSH into a pod
 tests/                        container integration tests (podman, no cluster)

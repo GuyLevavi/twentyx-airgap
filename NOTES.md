@@ -1,76 +1,42 @@
-# Open items -- fill in from work
+# Notes: war stories, design decisions, open items
 
-Blockers are marked. Everything else has a working default.
+Blockers are marked. Everything else has a working default. README,
+ARCHITECTURE and MANUAL are canonical for how the system works; the resolved
+sections here are verdicts plus pointers, kept because the failures behind a
+line of code are worth one paragraph each.
 
 ## 1. RunAI preload antidote  [RESOLVED -- implemented]
 
-The interceptors:
+The working antidote does **not** unset `LD_PRELOAD`; it *replaces* it with the
+libc **matching the target binary's own glibc** (a system libc preloaded into a
+Nix-built binary is a `GLIBC_PRIVATE` symbol-lookup error, not a no-op), and
+stashes the original in `PRELOAD_ORIGINAL` for children. Tested across the four
+input cases: both RunAI `.so`s / RunAI + a legitimate `.so` / unrelated `.so`
+only (untouched) / unset (no-op). The split and its rationale: README "The
+LD_PRELOAD / CUDA split"; the implementation: `libexec/run-opencode`,
+`agent/plugins/preload.ts` (opencode `shell.env` hook),
+`agent/restore-preload.sh` (`BASH_ENV`).
 
-    /runai/shared/pid/preloader.so
-    /runai/shared/memory/loader.so
-
-The working antidote does **not** unset `LD_PRELOAD`; it *replaces* it with libc:
-
-    LD_PRELOAD="${LIBC:-/lib/x86_64-linux-gnu/libc.so.6}"   # LIBC via ldd + awk
-
-That is better than unsetting, and `libexec/run-opencode` now matches it exactly -- with one
-refinement the pi-era version got wrong: **the libc must come from the same glibc as the binary
-being preloaded**. opencode is Nix-built (glibc 2.4x); preloading the base image's *system* libc
-into it is a `GLIBC_PRIVATE` symbol-lookup error, not a no-op. The launcher resolves the libc with
-`ldd $(command -v opencode)`, which is correct for both Nix-built and system-built targets.
-
-Implemented and tested across four cases:
-
-| `LD_PRELOAD` in | result |
-|---|---|
-| both RunAI `.so`s | replaced with libc |
-| RunAI + a legitimate `.so` | replaced with libc (original stashed, restored for children) |
-| unrelated `.so` only | **untouched** |
-| unset | no-op |
-
-**Bug found while testing:** `ldconfig -p \| awk '...exit'` returns 141 (SIGPIPE) under
-`set -o pipefail`, because awk's early `exit` closes the pipe. With `set -e` that silently kills
-the launcher and opencode never starts. Fixed with `|| true` -- the same pattern guards every
-`ldd`/`ldconfig \| awk ...exit` probe in libexec.
-
-Still worth confirming in-pod: nothing beyond the TUI is affected once the split is in place --
-the TUI gets the matching-libc no-op preload, and every bash child gets the original back via
-`agent/plugins/preload.ts` (opencode `shell.env` hook) plus `agent/restore-preload.sh`
-(`BASH_ENV`). Set `PRELOAD_RESTORE_AGENT_BASH=0` to disable the restore half.
+**Bug found while testing:** `ldconfig -p | awk '...exit'` returns 141
+(SIGPIPE) under `set -o pipefail`, silently killing the launcher. Every
+`ldd`/`ldconfig | awk ...exit` probe in libexec carries `|| true` for this.
+Still worth confirming in-pod that nothing beyond the TUI is affected; set
+`PRELOAD_RESTORE_AGENT_BASH=0` to disable the restore half.
 
 ## 2. Identity on the shared PVC  [RESOLVED -- implemented, team-shaped]
 
-Probe output confirmed: every runtime user is `jensen`, uid 10001, gid 0, and the hostname is
-`<workspace-name>-<n>-<n>` where workspace names follow a `<username>-<whatever>` convention.
-The OS knows nothing about who you are; the workspace name is the per-user signal the platform
-gives.
-
-Resolution chain in `session_user()`, first hit wins:
-
-1. `$SESSION_USER` (explicit override -- the dash-in-username escape hatch)
-2. hostname, stripped of the `-<n>-<n>` suffix, leading component -- **the
-   intended rule**: the platform's own per-user convention, and the reason a
-   baked identity is NOT part of the image
-3. local part of `git config user.email` -- the USER's own, set once on the
-   durable PVC (`git config --global user.email`); it can only ever fire
-   when rule 2 produced nothing, so configuring git later can never
-   relocate an existing directory
-4. `$USERNAME` / `$USER`
-
-This is deliberately **not** what it used to be: a baked `airgap.git.userEmail`
-sat at rank 2, which was right for a single owner and wrong for a team -- the
-closure is distributed, so a baked email would file every teammate's state
-into the owner's PVC directory. Consequently there is also NO packaged
-`~/.config/git/config`: it would be a store symlink, and `git config --global`
-on the PVC could never write through it (EROFS). The neutral git settings
-(defaultBranch, pager/delta) ship as `/etc/gitconfig` from the repo layer
-(pod) and `environment.etc` (WSL), and each user owns their identity as a real
-file on the durable home. Renaming a workspace changes rule 2's answer -- that
-tradeoff is accepted and visible (doctor prints which rule fired); the
-override at rank 1 exists for it.
-
-It picks `/data/<user>` (falling back to `/code/<user>`) as the relocated `$HOME`. A wrong guess
-is cosmetic, never destructive.
+Probe findings: every runtime user is uid 10001/gid 0 and the hostname is
+`<workspace-name>-<n>-<n>` with `<username>-<whatever>` workspace names, so the
+OS knows nothing about who you are. `session_user()` resolves, first hit wins:
+`$SESSION_USER` -> workspace-name leading component -> local part of
+`git config user.email` -> `$USERNAME`/`$USER`. A baked email deliberately does
+not exist: the closure is distributed to a team, so a baked identity would file
+everyone's state into one person's PVC directory. For the same reason there is
+no packaged `~/.config/git/config` (a store symlink would make
+`git config --global` unwritable on the PVC): neutral git settings ship as
+`/etc/gitconfig`, identity is a real file on the durable home. Renaming a
+workspace changes the answer — accepted, and visible because `doctor` prints
+which rule fired. Details: `libexec/common.sh`, MANUAL §0.
 
 ## 3. Artifactory + transfer flow  [SETTLED -- reshaped by Nix]
 
@@ -86,7 +52,7 @@ Two independent flows, which used to be one:
     IMAGES   outside -> build-layers.sh -> nix-layer{,-nvim}.tar.gz
                      -> physical transfer
                      -> push-artifactory.sh -> generic-local/airgap/<ver>/
-                     -> CI fetches, tars repo-layer, crane appends
+                     -> CI fetches, builds repo-layer.tar, crane appends
 
 - Git holds **text only** -- now literally true. There is no `vendor/` and no blob list: the
   closure is computed, so the only binary artifacts are Nix build outputs.
@@ -104,8 +70,7 @@ transfer corrupt anything?*). Nix covers both, better: the flake lock pins input
 binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
 the path it damaged, not on "the transfer". The tarballs carry no checksum sidecars either: a
 corrupt layer surfaces as missing store paths in the pod (`doctor` checks exactly that),
-which is the failure that matters. (Signing was the old plan for tamper-evidence; declined
-2026-09 -- see above.)
+which is the failure that matters.
 
 ## 4. Base images  [resolved 2026-09-27 -- see docker/BASE-IMAGES.md]
 
@@ -114,14 +79,15 @@ with registries and CA certs, so CI runs on an internal slim base, never a publi
 The vendor bases are **already present in the airgap registry**: `crane append` cross-mounts
 them, so they never cross the gap and their size does not touch the build pod. Rely on them.
 
-Editor is **code-server**, now shipped in the closure (see §7) rather than borrowed from the
+Editor is **code-server**, shipped in the closure (see §7) rather than borrowed from the
 base, so an editor exists on every base including the slim ones.
 
 There is no container build left in OUR pipeline -- no Stage 1, no node layer, only
 `tar` + `crane`. CI's assemble stage still runs on `base-slim`.
 
 A **derived tag** on top of the vendor base is the escape hatch for what layers cannot do
-(registry/CA/pip/npm defaults as overridable defaults; the uid-10001 passwd line, §6). The
+(registry/CA/pip/npm defaults as overridable defaults — the env-injection contract in
+`libexec/common.sh` wins per cluster; the uid-10001 passwd line, §6). The
 derived-base workflow is in use; keep it to exactly that, and let everything else come from
 the layers -- the imperative "install CLI tools into the base" habit is how a base drifts
 from the closure. The full decision matrix (vendor as-is / thin derived / custom minimal),
@@ -131,6 +97,18 @@ stow + packages) is obsolete for this toolchain.
 
 Fill in yourself: registry hostname, repo paths, tag convention
 (`BASE_REGISTRY` / `BASE_TAG` in `.gitlab-ci.yml`).
+
+## 5. First transfer should be deliberately small
+
+Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~830 MB)
+and skip `-nvim` (~847 MB). `assemble.sh` detects the missing nvim tarball and builds one
+flavor.
+
+That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things
+that can only fail against real internal bases: `PATH` prepending on a pytorch base and
+ENTRYPOINT hand-over on a `vscode-*` one.
+
+The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- see `wsl/README.md`.
 
 ## 6. Arbitrary UID: one line in your own derived base  [cosmetic today]
 
@@ -168,36 +146,15 @@ Until the derived base exists the warning is noise, not breakage.
 
 ## 7. code-server  [RESOLVED -- in the closure, 2026-09]
 
-It was deferred on the grounds that the base `vscode-*` images ship code-server and shadowing
-it was a tier-3 blob with a bundled-Node microarchitecture risk. Deferred is no longer the
-right word: **nixpkgs' `code-server` is in the pod closure now.** It is built from source
-against a baseline Node (no microarch trap, unlike the bundled-runtime failure that SIGILL'd
-opencode), lands on PATH ahead of the base's copy because our PATH is prepended, and the
-`sst-dev.opencode` extension is seeded as a packaged default (see home.nix). The slim bases,
-which had no editor at all, get one; the vscode-* bases get a current one via the same
-mechanism instead of whatever the base bundled.
-
-What stays from the deferral, because it costs nothing:
-
-- `assemble.sh` records the base's ENTRYPOINT in `BASE_ENTRYPOINT` and `entrypoint`
-  hands over to it. Without that, replacing ENTRYPOINT to run bootstrap would give you a
-  `vscode-*` workspace whose IDE never starts.
-- Session variables are image ENV, so code-server's task runner -- not a login shell -- still gets
-  `TERMINFO_DIRS` and `LOCALE_ARCHIVE`.
-
-If the version ever matters more than the closure cost, the interesting part is smarter vsix
-management, not the binary.
-
-## 5. First transfer should be deliberately small
-
-Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~847 MB) and
-skip `-nvim` (~880 MB). `assemble.sh` detects the missing nvim tarball and builds one flavor.
-
-That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things
-that can only fail against real internal bases: `PATH` prepending on a pytorch base and
-ENTRYPOINT hand-over on a `vscode-*` one.
-
-The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- see `wsl/README.md`.
+Verdict: nixpkgs' `code-server` is in the pod closure, built from source against a
+baseline Node (no bundled-runtime microarchitecture trap), on PATH ahead of the
+base's copy, with the `sst-dev.opencode` extension seeded as a packaged default.
+The slim bases get an editor; the `vscode-*` bases get a current one via the same
+mechanism. Two things from the old deferral stay because they cost nothing and are
+load-bearing: `assemble.sh` records the base's ENTRYPOINT in `BASE_ENTRYPOINT`
+and `entrypoint` hands over to it, and the session variables are image ENV so
+code-server's task runner still gets `TERMINFO_DIRS`/`LOCALE_ARCHIVE`. Details:
+`docker/README.md`, `nix/runai/layer.nix`.
 
 ## 8. How this is tested without the gap  [test suite: tests/]
 
@@ -216,7 +173,7 @@ under the problematic pod shape and assert the behaviors that each broke once:
   preload back via `BASH_ENV`.
 - Also asserted: closure integrity after `crane append`, defaults seeding
   (opencode plugin, Zed settings), the env-injection contract, sudoers +
-  setuid sudo, nginx presence, repo-layer determinism.
+  setuid sudo, nginx presence, repo-layer determinism. 19 checks total.
 
 Two artifacts of the harness, not the image: the sudo PAM error under rootless
 podman is a userns artifact (setuid-root maps to the host user, which cannot
@@ -238,42 +195,28 @@ mounts. Rootless podman (no sudo) needs unprivileged userns + subuids, which
 OpenShift usually denies -- hence the sudo path.
 
 Also in the closure: `herdr` (0.8.2 in the pinned snapshot), `zed-editor` (remote server),
-`code-server` (the pod IDE, §7), `openssh`, `nginx`, and
-`sst-dev.opencode` 0.0.13 (the official VS Code extension, seeded for
-code-server and shipped as a raw `.vsix` for the Windows side, which has no
-marketplace in the gap).
+`code-server` (the pod IDE, §7), `openssh`, `nginx`, and `sst-dev.opencode` 0.0.13
+(the official extension, seeded for code-server).
 
 ## 9. The local store was missing the layer's build plan  [RESOLVED -- healed 2026-09]
 
-`nix build .#runai-layer` on the connected NixOS machine failed with
-`store path '...drv' does not exist`, and each fix revealed the next path.
-The real diagnosis, after the whack-a-mole was decoded:
+Verdict: the default store had never held the layer's build-plan closure (6,034
+paths: drv files, patches, source trees) -- only the WSL system; the layer builds
+lived in the chroot store (`/tmp/airgap-test-store`), which built the same eval
+fine, so the pinned snapshot was always healthy. Three damage classes, each with
+a different remedy:
 
-- **The default store never held the layer's build-plan closure** -- 6,034
-  paths (drv files, patches, source trees). It had only ever held the WSL
-  system; the layer builds lived in the chroot store
-  (`/tmp/airgap-test-store`), which builds the same eval fine -- so the pinned
-  snapshot was always healthy and this was purely local store state.
-- Three damage classes, each needing a different remedy:
-  1. *file + row missing* (545 `.drv` files): invisible to `nix copy`
-     (source-side closure says "needed", but the destination-side skip logic
-     and ordering interact badly) -- needs file copy **and** row registration;
-  2. *row present, file lost* (e.g. `jlgld...-zsh-5.9.2.tar.xz.drv`, later
-     `file-5.48`): **`nix copy` silently skips these** ("copying 0 paths" --
-     the daemon trusts its DB row), and `nix build` believes the path is
-     realized until build-env setup trips over the missing file. Only a file
-     copy fixes these;
-  3. *rows for paths in no store anymore* (53 relics of old WSL system
-     generations, e.g. `zed-editor-wrapped-1.16.1`): harmless unless a current
-     eval references them; the cure is
-     `sudo nix-store --verify --check-contents --repair`, which substitutes
-     what the public cache serves and unregisters the rest so nix rebuilds
-     them.
-- **`/nix/store` was never read-only.** The earlier "read-only mount, remount
-  first" advice was wrong: `mount -o remount,rw` on an already-rw mount fails
-  `EBUSY` ("mount point is busy"), which is how the misdiagnosis started. The
-  mount is a rw subdirectory bind of the root partition -- plain `sudo cp`
-  works.
+1. *file + row missing* (545 `.drv` files): invisible to `nix copy` (its
+   skip-on-row logic and ordering interact badly) -- needs file copy **and**
+   row registration;
+2. *row present, file lost* (e.g. `jlgld...-zsh-5.9.2.tar.xz.drv`): `nix copy`
+   silently skips these ("copying 0 paths" -- the daemon trusts its DB row),
+   and `nix build` believes the path is realized until build-env setup trips
+   over the missing file. Only a file copy fixes these;
+3. *rows for paths in no store anymore* (53 relics of old WSL generations):
+   harmless unless a current eval references them;
+   `sudo nix-store --verify --check-contents --repair` substitutes what the
+   public cache serves and unregisters the rest.
 
 The repair that worked, in order (against the chroot store as donor):
 
@@ -286,15 +229,14 @@ The repair that worked, in order (against the chroot store as donor):
     # 4. if some lost relic of an old generation ever blocks a build:
     sudo nix-store --verify --check-contents --repair   # substitutes or unregisters
 
-Gotcha while using the chroot as donor: running `nix copy` as root **from** a
-chroot store leaves root-owned lock files / store dir in the donor -- the next
-`gl` build there dies with `opening lock file ... Permission denied`. One line
-fixes it: `sudo chown -R <you> /tmp/airgap-test-store`.
-
-Both layer flavors now build on the default store (verified 2026-09); the
-chroot store remains the independent throwaway. The diagnostic classes above
-are worth remembering because `nix copy`'s skip-on-row behavior makes it a
-no-op precisely for damage class 2, which is the least visible one.
+Two facts worth remembering: **`/nix/store` was never read-only** (the earlier
+"remount first" advice was wrong -- `mount -o remount,rw` on an already-rw mount
+fails `EBUSY`, which is how the misdiagnosis started), and running `nix copy` as
+root **from** a chroot store leaves root-owned lock files in the donor, so the
+next build there dies with `opening lock file ... Permission denied`; one
+`sudo chown -R <you> /tmp/airgap-test-store` fixes it. Both layer flavors now
+build on the default store (verified 2026-09); the chroot remains the
+independent throwaway and fallback (see AGENTS.md).
 
 ## 10. The role of Nix: where configs belong  [design note, 2026-09 refactor]
 
@@ -307,7 +249,7 @@ it is not relitigated:
   shadows the packaged symlink. A config tweak inside the pod has never
   required a rebuild -- that is the `$HOME` layering rule.
 - **The closure-vs-text split already is the config-layer split.** The repo
-  layer (80KB of git text, re-tarred by CI per commit) is the "frequent, thin
+  layer (380 KB of git text, re-tarred by CI per commit) is the "frequent, thin
   layer"; the Nix layer is the rare, fat one. `crane append` + overlayfs
   semantics do the rest. There is nothing to diff: the layer a change belongs
   to is visible from the directory it touched.
@@ -333,30 +275,14 @@ it is not relitigated:
   base. The exact site config RunAI expects (and whether it wants one at all)
   is unpinned -- when known, it belongs in the env-injection mount, not in
   the closure.
-- **Zed remote development [RESOLVED -- in the closure]**: `zed-editor` builds
-  the remote server as a second output (`remote_server`), shipped as a
-  packaged default under `~/.zed_server/`. The lookup is EXACT-MATCH on the
-  client's full version string, build metadata included:
-  `zed-remote-server-stable-<1.17.2+stable.349.c8e44cf...>` (zed
-  `crates/remote/src/transport/wsl.rs`: `format!("zed-remote-server-{}-{}",
-  dev_name, version.to_string())`), and "present" means running `<file>
-  version` exits 0. The `.gz` name that shows up in client logs is a
-  PID-suffixed temporary upload (`{dst}.{pid}.gz`) -- not the lookup name.
-  So `.#windows-kit` pins the installer, `nix/zed-client-version.nix` carries
-  that installer's exact client version string (single source for the shim),
-  and `home.nix` generates the shim from it. Measured 2026-09-26: with only
-  bare `<v>`/`<v>+stable` shims the client silently downloaded its own server;
-  with the packaged settings default shadowed by a real `settings.json` it
-  also downloaded Node.js, the basedpyright npm package and the ruff release
-  tarball. Both fixed; re-pin the two files in lockstep when nixpkgs bumps
-  zed. Known edge: the client
-  resolves `.zed_server` relative to the SSH session's `$HOME`, which is why
-  the entrypoint/sshd-inetd self-registration must point at the PVC home --
-  it does. The `opencode acp` integration needs none of this: it runs
-  locally. The `sshd -i` bridge (`libexec/sshd-inetd` +
-  `scripts/ssh-bridge.sh`) is implemented but only exercised against a real
-  `runai exec` -- the privsep-user and passwd self-registration inside the
-  pod are best-effort until then.
+- **Zed remote development [RESOLVED -- in the closure]**: the remote server
+  ships as a packaged default, and the client's exact-match lookup on its FULL
+  version string is satisfied by a shim generated from
+  `nix/zed-client-version.nix`. Re-pin the kit installer and that file in
+  lockstep when nixpkgs bumps zed. The `sshd -i` bridge
+  (`libexec/sshd-inetd` + `scripts/ssh-bridge.sh`) is implemented but only
+  exercised against a real `runai exec`. Full story: README "Zed remote,
+  declared", `nix/modules/home.nix`.
 - **runai CLI on WSL**: prefer the Linux executable the RunAI UI offers (it
   matches the cluster's server version); pin it as a declared derivation --
   recipe in `nix/packages/runai-cli.nix` (fill version/hash/url, wire into
@@ -388,14 +314,10 @@ it is not relitigated:
   container but not the ext4 inside; the `debugfs` route is untested). Waiting
   on a dump from inside the distro:
   `wsl -d twentyx -- bash -lc 'cd ~; { cat .config/opencode/opencode.json; ls -la .local/share/opencode/log/; tail -150 "$(ls -t .local/share/opencode/log/*.log | head -1)"; } > /mnt/c/twentyx/diag.txt 2>&1'`.
-- **WSL first boot [root cause found 2026-09-26]**: the imported distro's `/`
-  shipped mode 0700 — the build root came from `mktemp -d` and tar recorded
-  that mode on the `./` entry, which extractors apply to the distro root. Every
-  non-root process then got EACCES traversing absolute paths (shell exec,
-  messagebus's journal connect, login's cd, the WSL relay); root bypassed it
-  via DAC_OVERRIDE, which is why the first iterations chased dbus and were
-  reverted. The builder now enforces one invariant for the whole tree (every
-  directory traversable) and fails the build if violated. A separate class —
-  ownership that cannot be set inside the build's user namespace (home dir) —
-  is restored by tmpfiles at boot. Full story, gotchas, and the
-  builder-is-the-weak-link assessment: `wsl/FIRST-BOOT.md`.
+- **WSL first boot [RESOLVED -- root cause found 2026-09-26]**: the imported
+  distro's `/` shipped mode 0700 (the build root came from `mktemp -d` and tar
+  recorded that mode on the `./` entry), so every non-root process got EACCES
+  traversing absolute paths while root bypassed it via DAC_OVERRIDE. The
+  builder now enforces one invariant for the whole tree (every directory
+  traversable) and fails the build if violated; the home-directory ownership
+  class is restored by tmpfiles at boot. Full story: `wsl/FIRST-BOOT.md`.

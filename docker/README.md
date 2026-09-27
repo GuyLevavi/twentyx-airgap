@@ -8,7 +8,7 @@ filesystem, add layers, and push the result. Peak disk is roughly 2–3× the im
 why the pytorch variants die on ephemeral storage while the slim ones succeed.
 
 Raising the storage quota treats the symptom. The real issue is that we unpack 30GB in order to
-add 400MB.
+add under a gigabyte.
 
 ## The insight
 
@@ -26,10 +26,10 @@ and with it the only CI stage that needed Artifactory.
 
 ## The design
 
-    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (~740MB)
-                                            nix-layer-nvim.tar.gz  (~950MB)
+    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (~830MB)
+                                            nix-layer-nvim.tar.gz  (~847MB)
     TRANSFER  physical, then scripts/push-artifactory.sh
-    INSIDE    .gitlab-ci.yml  ->  repo-layer.tar (tar of the checkout)
+    INSIDE    .gitlab-ci.yml  ->  repo-layer.tar (docker/mklayer.sh: libexec/, agent/)
               docker/assemble.sh  ->  crane append + crane mutate
 
 `crane append` fetches only the base's **manifest and config**, never its layers. It uploads the
@@ -72,7 +72,7 @@ tmux handed that literal string would create a directory named `$(id`.
 
 ## Constraint
 
-Stage 2 (the crane-mutate step in assemble.sh) cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
+The crane-mutate step in `assemble.sh` cannot run commands — it only adds files and edits image config (`ENV`, `ENTRYPOINT`,
 `LABEL`) via `crane mutate`. Anything requiring execution must happen at container startup in
 `entrypoint` (or, for the sudo setuid bit, in `mklayer.sh` — Nix strips setuid from build
 outputs, so the repo layer sets it on the copy it re-tars).
@@ -82,9 +82,9 @@ lets the WSL target share the same Nix expressions.
 
 ## Two flavors
 
-`nvim` roughly adds 220MB, and not every workspace wants an editor in it. Every variant is built
-twice, `-nvim` suffixed, from the same nix and repo blobs. If `nix-layer-nvim.tar.gz` is absent,
-`assemble.sh` builds the plain flavor only and says so.
+`nvim` adds ~17 MB compressed (~48 MiB of closure), and not every workspace wants an editor in
+it. Every variant is built twice, `-nvim` suffixed, from the same nix and repo blobs. If
+`nix-layer-nvim.tar.gz` is absent, `assemble.sh` builds the plain flavor only and says so.
 
 ## Fallback if crane is unavailable
 

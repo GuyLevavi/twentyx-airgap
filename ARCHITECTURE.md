@@ -64,7 +64,7 @@ just files, and an OCI image is a stack of tar-layer diffs. So:
 ```
 base manifest (never pulled, never unpacked)
    + nix-layer.tar.gz      the closure, landed at literal /nix/store
-   + repo-layer.tar        ~80 KB of this repo's text (libexec/, agent/, defaults)
+   + repo-layer.tar        ~380 KB of this repo's text (libexec/, agent/, defaults)
    = assembled image, done registry-side by CI with `crane append`
 ```
 
@@ -103,7 +103,7 @@ agent binary. The boot chain:
 The `$HOME` rule to remember: **a symlink into `/nix/store` is ours, a real
 file is the user's.** Packaged defaults are per-file symlinks; the user's PVC
 files shadow them; and because overlayfs merges directories across layers,
-the 80 KB repo layer can override individual defaults per commit — a
+the 380 KB repo layer can override individual defaults per commit — a
 fleet-wide config change without a transfer.
 
 Cluster-specific files (internal CA, pip.conf) are never baked in: they arrive
@@ -113,9 +113,9 @@ names to the standard env vars.
 
 ## The WSL side
 
-Same modules, evaluated as a real NixOS system: systemd, zed GUI, the full
-python stack (the pod deliberately does *not* carry python — the base image
-owns torch). It rebuilds **offline** from the imported binary cache. Config
+Same modules, evaluated as a real NixOS system: systemd, the full python
+stack (the pod deliberately does *not* carry python — the base image owns
+torch). It rebuilds **offline** from the imported binary cache. Config
 changes (generated files: starship, tmux, fish, …) rebuild in seconds without
 any fetch; only adding a package needs a transfer — which is the whole
 economic model: cheap text pushes, rare fat transfers.
@@ -140,12 +140,11 @@ economic model: cheap text pushes, rare fat transfers.
 
 ## Glossary
 
-- **closure** — a store path plus everything it references, recursively.
-- **store path** — `/nix/store/<hash>-<name>`, immutable, content-addressed.
+Terms defined in the tour above are not repeated here.
+
 - **drv (derivation)** — Nix's build plan for one store path; its file lives in
   the store too, which is why losing `.drv` files breaks builds even when the
   built software is still there.
-- **flake** — a Nix entrypoint with hash-pinned inputs; the lockfile is law.
 - **OCI layer** — a tar diff in an image; overlayfs merges the stack.
 - **overlayfs merge** — directories with the same name across layers are
   merged file-by-file, which is how the repo layer overrides defaults.
@@ -156,4 +155,4 @@ economic model: cheap text pushes, rare fat transfers.
 - **chroot store** — a secondary Nix store rooted elsewhere (we use
   `/tmp/airgap-test-store` for building without touching the system store).
 - **nix-ld** — the NixOS shim that runs foreign dynamically-linked binaries
-  (VS Code's server, on WSL).
+  (the runai CLI, uv-managed interpreters, anything prebuilt).
