@@ -26,8 +26,8 @@ and with it the only CI stage that needed Artifactory.
 
 ## The design
 
-    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (~830MB)
-                                            nix-layer-nvim.tar.gz  (~847MB)
+    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (~840MB)
+                                            nix-layer-nvim.tar.gz  (~857MB)
     TRANSFER  physical, then scripts/push-artifactory.sh
     INSIDE    .gitlab-ci.yml  ->  repo-layer.tar (docker/mklayer.sh: libexec/, agent/)
               docker/assemble.sh  ->  crane append + crane mutate

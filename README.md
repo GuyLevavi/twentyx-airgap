@@ -29,8 +29,8 @@ tells you what that costs before you carry it anywhere.
 | | |
 |---|---|
 | WSL bootstrap, one file | **~1.1 GB** (`nixos-wsl.tar.gz`, gzip) |
-| `nix-layer.tar.gz` | ~830 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
-| `nix-layer-nvim.tar.gz` | ~847 MB (+ pure nvim and treesitter) |
+| `nix-layer.tar.gz` | ~840 MB (code-server + zed remote server + podman/sudo/nginx/openssh) |
+| `nix-layer-nvim.tar.gz` | ~857 MB (+ pure nvim and treesitter) |
 | `repo-layer.tar` | ~380 KB |
 | `windows-kit-*.tar.gz` | ~435 MB (Zed installer + WSL2 MSI + themes + client templates) |
 

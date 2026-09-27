@@ -100,8 +100,8 @@ Fill in yourself: registry hostname, repo paths, tag convention
 
 ## 5. First transfer should be deliberately small
 
-Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~830 MB)
-and skip `-nvim` (~847 MB). `assemble.sh` detects the missing nvim tarball and builds one
+Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~840 MB)
+and skip `-nvim` (~857 MB). `assemble.sh` detects the missing nvim tarball and builds one
 flavor.
 
 That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things

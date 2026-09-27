@@ -144,12 +144,12 @@ carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/nix-layer.tar.gz` (+`-nvim`) | ~830 / ~847 MB | Artifactory → CI `crane append` |
+| `dist/nix-layer.tar.gz` (+`-nvim`) | ~840 / ~857 MB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
 | `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.1 GB | `wsl --import` |
 | `dist/windows-kit-*.tar.gz` | ~435 MB | Windows: `UNPACK.ps1` (Zed, themes, templates, WSL2 MSI) |
 | `dist/wsl-rebuild.tar.gz` | ~97 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
-| `dist/twentyx-airgap.bundle` | ~260 KB | `git clone` inside the distro (real history) |
+| `dist/twentyx-airgap.bundle` | ~276 KB | `git clone` inside the distro (real history) |
 | `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly — see §1 |
 
 The bases themselves never cross the gap (they are in the airgap registry and
@@ -190,7 +190,7 @@ sudo podman images                                    # rootful podman, vfs prew
 Editors: `code-server` is in the closure and wins over the base's copy;
 a `vscode-*` workspace starts it via the base ENTRYPOINT. Zed remote connects
 through `scripts/ssh-bridge.sh` (WSL side) — see README "Zed remote, declared".
-The `-nvim` flavor adds pure nvim + treesitter (~847 MB layer; its LSPs come
+The `-nvim` flavor adds pure nvim + treesitter (~857 MB layer; its LSPs come
 from the shared Nix-declared set that Zed also reads); plain ships `nano` as
 `EDITOR`.
 

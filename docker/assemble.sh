@@ -10,7 +10,7 @@
 # Two layers, appended in ascending order of how often they change, so a
 # config edit re-uploads ~380KB and cross-mounts the rest:
 #
-#   1. nix-layer      the whole toolchain closure     monthly    ~830MB / ~847MB
+#   1. nix-layer      the whole toolchain closure     monthly    ~840MB / ~857MB
 #   2. repo-layer     libexec, agent helpers, sudoers hourly     ~380KB
 #
 # Two flavors per variant: the nvim layer is ~17MB larger, and not every
