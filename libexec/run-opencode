@@ -39,13 +39,7 @@ fi
 # Environment-provided assets (internal CA, pip.conf) -- same set bootstrap
 # writes into the shell drop-ins, so the agent's process tree trusts what an
 # interactive shell trusts.
-if INJ="$(injection_exports)"; then
-    while IFS=$'\t' read -r k v; do
-        export "$k=$v"
-    done <<EOF
-$INJ
-EOF
-fi
+apply_injection_exports
 
 # Byte-for-byte. The plugin and BASH_ENV script must reproduce this exactly,
 # never approximate it.

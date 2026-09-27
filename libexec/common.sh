@@ -100,6 +100,20 @@ injection_exports() {
     return 1
 }
 
+# Apply injection_exports() to THIS process. bootstrap writes the same pairs
+# into the per-shell drop-ins (file-shaped consumers); entrypoint and
+# run-opencode need them exported so every process they exec -- the base
+# entrypoint, code-server, the agent's children -- trusts what a shell trusts.
+apply_injection_exports() {
+    local INJ k v
+    INJ="$(injection_exports)" || return 0
+    while IFS=$'\t' read -r k v; do
+        export "$k=$v"
+    done <<EOF
+$INJ
+EOF
+}
+
 # Durable $HOME. The pod's real $HOME (/home/jensen) is wiped on every restart,
 # and symlinking individual pieces onto the PVC only ever rescues the state we
 # remembered to enumerate -- there is always another tool writing a dotfile we

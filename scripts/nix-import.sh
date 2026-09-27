@@ -55,12 +55,13 @@ if [ -n "$TOPLEVEL" ]; then
     echo "    sudo nix-env -p /nix/var/nix/profiles/system --set $TOPLEVEL"
     echo "    sudo $TOPLEVEL/bin/switch-to-configuration switch"
     echo
-    echo "  After that, config-only edits rebuild offline:"
-    echo "    sudo nixos-rebuild switch --flake /etc/nixos#wsl"
+    echo "  After that, config-only edits rebuild offline (point <repo> at your"
+    echo "  clone of the shipped twentyx-airgap.bundle):"
+    echo "    sudo nixos-rebuild switch --flake <repo>#wsl"
     if [ -f "$SRC/cache-pubkey" ]; then
         echo
         echo "  Copy cache-pubkey next to the flake so future rebuilds trust it:"
-        echo "    sudo cp $SRC/cache-pubkey /etc/nixos/cache-pubkey"
+        echo "    cp $SRC/cache-pubkey <repo>/cache-pubkey"
     fi
 else
     nix copy --from "file://$DEST" "${VERIFY[@]}" --all

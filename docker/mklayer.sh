@@ -53,7 +53,6 @@ chmod 0440 "$STAGE/etc/sudoers" "$STAGE/etc/sudoers.d/twentyx"
 # could then never write through it. Identity is per-user on the durable home;
 # these shared, identity-free defaults ship here and in nix/hosts/wsl.nix
 # (environment.etc) — keep the two in sync.
-mkdir -p "$STAGE/etc"
 cat > "$STAGE/etc/gitconfig" <<'EOF'
 # Managed by the airgap repo layer. Per-user identity belongs in the user's
 # own ~/.config/git/config (durable PVC), set once: git config --global.

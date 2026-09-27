@@ -38,6 +38,9 @@ assemble:
   # Only needs crane, jq, tar and the artifacts; the slim base is plenty.
   image: "$BASE_REGISTRY/base-slim:$BASE_TAG"
   script:
+    # dist/ is gitignored and absent on a fresh checkout; curl -o will not
+    # create the parent directory.
+    - mkdir -p dist
     - |
       # The plain layer is a hard requirement; the nvim flavor is optional
       # (a transfer without it must not fail CI -- assemble.sh copes).
@@ -46,7 +49,7 @@ assemble:
       curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
         -o dist/nix-layer-nvim.tar.gz "$LAYER_BASE_URL/nix-layer-nvim.tar.gz" ||
         echo "note: nix-layer-nvim.tar.gz not in Artifactory -- plain flavor only"
-    # Built here rather than carried: it is 80KB of this very checkout, and
+    # Built here rather than carried: it is ~380 KB of this very checkout, and
     # rebuilding it is what makes a script change a one-commit deploy.
     - ./docker/mklayer.sh dist/repo-layer.tar
     - crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"

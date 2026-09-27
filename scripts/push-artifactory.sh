@@ -47,5 +47,5 @@ cat <<EOF
 
   CI fetches layers from there; see .gitlab-ci.yml:
 
-    LAYER_URL=$ART_URL/$DEST_PATH
+    LAYER_BASE_URL=$ART_URL/$DEST_PATH
 EOF

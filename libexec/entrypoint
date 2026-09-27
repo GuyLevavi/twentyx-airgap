@@ -30,13 +30,7 @@ mkdir -p "$HOME" 2>/dev/null || true
 # below -- code-server and friends never source a shell rc, and this is the
 # last point where pod-wide env can be set. (`runai exec` payloads are a CRI
 # exec: they get image ENV only, which is why the launcher re-resolves too.)
-if INJ="$(injection_exports)"; then
-    while IFS=$'\t' read -r k v; do
-        export "$k=$v"
-    done <<EOF
-$INJ
-EOF
-fi
+apply_injection_exports
 
 # OpenShift runs us under an arbitrary UID (observed: uid 10001, gid 0, plus a
 # nameless supplementary group such as 1001650000) with no /etc/passwd or
