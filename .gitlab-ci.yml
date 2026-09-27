@@ -13,13 +13,14 @@
 
 stages: [lint, assemble]
 
+# Every cluster fact below is a DEFAULT. The airgap's GitLab sets the real
+# ones as project/group CI variables, which beat this file -- nothing here is
+# "filled in" from the connected side, so the repo stays machine-agnostic.
 variables:
   IMAGE_REGISTRY: "$CI_REGISTRY_IMAGE"
-  BASE_REGISTRY: "quay.internal/ai"      # TODO: real path, see NOTES.md
+  BASE_REGISTRY: "quay.internal/ai"
   BASE_TAG: "latest"
   IMAGE_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
-  # Where push-artifactory.sh put the transferred layers.
-  LAYER_BASE_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0"
 
 # ---------------------------------------------------------------------------
 lint:
@@ -42,6 +43,9 @@ assemble:
     # create the parent directory.
     - mkdir -p dist
     - |
+      # The layers push-artifactory.sh put in Artifactory. The version path
+      # derives from VERSION, so CI can never skew from push-artifactory.sh.
+      LAYER_BASE_URL="$ARTIFACTORY_URL/${ARTIFACTORY_GENERIC_REPO:-generic-local}/airgap/$(cat VERSION)"
       # The plain layer is a hard requirement; the nvim flavor is optional
       # (a transfer without it must not fail CI -- assemble.sh copes).
       curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \

@@ -175,6 +175,12 @@ in
     createHome = false;
   };
 
+  # sudo with no password prompt: the account's password is locked ("*"), so
+  # a prompt is unanswerable rather than a gate -- and anyone who can run
+  # `wsl` is one `wsl -u root` away from root anyway. This is what makes
+  # `rb` (and the documented `sudo nixos-rebuild`) usable from the distro.
+  security.sudo.wheelNeedsPassword = false;
+
   # /home/<user> has to be owned by the user with mode 0700. tmpfiles runs
   # as real root at boot: `d` creates it, `z` fixes ownership recursively
   # (in the build's user namespace only uid 0 is mapped, so anything the

@@ -36,6 +36,22 @@
         "type": "github"
       }
     },
+    "matt-skills": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789726349,
+        "narHash": "sha256-L3CpIT2DeI+fUFl9fcygojtQo2DzEen69rMD1XqR1vM=",
+        "owner": "mattpocock",
+        "repo": "skills",
+        "rev": "c55ee46073ed923f86ce59a5eb3b6d895095d1b7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mattpocock",
+        "repo": "skills",
+        "type": "github"
+      }
+    },
     "nixos-wsl": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -76,8 +92,30 @@
     "root": {
       "inputs": {
         "home-manager": "home-manager",
+        "matt-skills": "matt-skills",
         "nixos-wsl": "nixos-wsl",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "workmux": "workmux"
+      }
+    },
+    "workmux": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790369670,
+        "narHash": "sha256-6wzP+bUyuV+Ror+H3sW2RanMdmBjx2zRFumTKaHsSKg=",
+        "owner": "raine",
+        "repo": "workmux",
+        "rev": "3bfb2eb6260079742c3fba24ee4f8c61c24b8308",
+        "type": "github"
+      },
+      "original": {
+        "owner": "raine",
+        "repo": "workmux",
+        "type": "github"
       }
     }
   },

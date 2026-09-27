@@ -75,6 +75,7 @@ in
     ./shell.nix
     ./tools.nix
     ./nvim.nix
+    ./skills.nix
   ];
 
   options.twentyx = {

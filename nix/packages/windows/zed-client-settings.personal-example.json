@@ -1,0 +1,90 @@
+// Guy's Zed client settings for the airgap Windows client — an EXAMPLE, not
+// the default. Copy it over zed-client-settings.json (i.e. to
+// %APPDATA%\Zed\settings.json) if you want this exact setup: vim mode,
+// which-key, Catppuccin, right-docked panels, agent auto-approve. It is a
+// superset of the neutral file, so nothing is lost by replacing it.
+//
+// Everything here is CLIENT-side (UI, keymap, agent panel). The WSL-side
+// language-server pins live in the closure's ~/.config/zed/settings.json and
+// are untouched by this file.
+{
+  // Adjust the username if your distro does not use the default `jensen`.
+  "wsl_connections": [
+    {
+      "distro_name": "twentyx",
+      "user": null,
+      "projects": [
+        {
+          "paths": [
+            "/home/jensen"
+          ]
+        }
+      ]
+    }
+  ],
+  "auto_update": false,
+  "telemetry": {
+    "metrics": false,
+    "diagnostics": false
+  },
+  "auto_install_extensions": {
+    "nix": true,
+    "basedpyright": true,
+    "ruff": true,
+    "toml": true,
+    "tombi": true,
+    "dockerfile": true,
+    "env": true
+  },
+  // Catppuccin ships in the kit's themes\ folder; Tokyo Night and the other
+  // bundled themes work too, or a Zed built-in like "Gruvbox Dark".
+  "theme": {
+    "mode": "system",
+    "dark": "Catppuccin Mocha",
+    "light": "Catppuccin Latte"
+  },
+  "base_keymap": "VSCode",
+  "vim_mode": true,
+  "buffer_font_family": "JetBrainsMono Nerd Font",
+  "buffer_font_size": 16,
+  "ui_font_size": 18,
+  "format_on_save": "on",
+  // Everything docks right; panels are keyboard toggles, so the status-bar
+  // buttons stay hidden.
+  "project_panel": {
+    "dock": "right",
+    "button": false
+  },
+  "git_panel": {
+    "dock": "right",
+    "button": false
+  },
+  "outline_panel": {
+    "dock": "right",
+    "button": false
+  },
+  "collaboration_panel": {
+    "dock": "right",
+    "button": false
+  },
+  "agent": {
+    "dock": "right",
+    "button": false,
+    "sidebar_side": "right",
+    // Auto-approve agent tool calls; font matches buffer_font_size.
+    "tool_permissions.default": "allow",
+    "agent_buffer_font_size": 16,
+    // Terminal Threads (agent panel -> New Thread -> Terminal) start opencode
+    // immediately, as a TUI instead of ACP.
+    "terminal_init_command": "opencode"
+  },
+  // Hold a combo briefly to see available follow-up keys.
+  "which_key": {
+    "enabled": true,
+    "delay_ms": 500
+  },
+  "tab_bar": {
+    "show_nav_history_buttons": false,
+    "show_tab_bar_buttons": false
+  }
+}

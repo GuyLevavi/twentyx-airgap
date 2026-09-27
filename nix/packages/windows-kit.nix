@@ -96,6 +96,7 @@ let
     ln -s ${wslMsi} $out/wsl.2.9.12.0.x64.msi
     # Version-controlled client templates (repo files, not store paths).
     install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
+    install -m 0644 ${./windows/zed-client-settings.personal-example.json} $out/zed-client-settings.personal-example.json
     install -m 0644 ${./windows/wezterm.lua} $out/wezterm.lua
     ${themeInstalls}
     cat > $out/README.txt <<'EOF'
@@ -109,6 +110,11 @@ let
                                %APPDATA%\Zed\settings.json (merge into yours
                                if one exists) -- it pins auto_update off,
                                telemetry off, and the airgap extensions.
+                               zed-client-settings.personal-example.json is a
+                               fuller client config (vim mode, which-key,
+                               Catppuccin, right-docked panels, agent
+                               auto-approve) -- copy it INSTEAD if you want
+                               that exact setup.
 
       themes\*.json            Zed themes (Tokyo Night, Catppuccin, Kanagawa,
                                Rose Pine, Nord, Dracula, Eldritch). Copy the

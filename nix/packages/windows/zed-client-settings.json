@@ -35,7 +35,9 @@
     "basedpyright": true,
     "ruff": true,
     "toml": true,
-    "tombi": true
+    "tombi": true,
+    "dockerfile": true,
+    "env": true
   },
   // Tokyo Night ships in the kit's themes\ folder; any of the shipped themes
   // works here, or a Zed built-in like "Gruvbox Dark".

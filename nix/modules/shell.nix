@@ -8,6 +8,7 @@
   lib,
   pkgs,
   config,
+  inputs,
   ...
 }:
 let
@@ -183,9 +184,14 @@ in
     mouse = true;
     keyMode = "vi";
     historyLimit = 50000;
+    aggressiveResize = true;
+    clock24 = true;
     extraConfig = ''
       set -as terminal-features ",*:RGB"
-
+      # kitty keyboard protocol: the shipped WezTerm config turns it on, and
+      # without this tmux drops the extended sequences -- Ctrl-hjkl leaks into
+      # the shell as raw bytes instead of reaching nvim.
+      set -g extended-keys on
       # OSC 52 clipboard. This is the only way a yank inside a RunAI pod
       # reaches the Windows clipboard: there is no X11, no Wayland, and no
       # wl-copy to forward to. tmux must both allow the sequence through from
@@ -193,15 +199,81 @@ in
       # terminal emulator at the far end must honour it — WezTerm does.
       set -g allow-passthrough on
       set -g set-clipboard on
+      set -g focus-events on
+      set -g renumber-windows on
+      set -g display-time 4000
+      set -g status-interval 5
+      bind C-p previous-window
+      bind C-n next-window
+      bind R source-file ~/.config/tmux/tmux.conf \; display "reloaded"
 
+      # copy-mode vi
+      set -g mode-keys vi
+      bind -T copy-mode-vi v send -X begin-selection
+      bind -T copy-mode-vi V send -X select-line
+      bind -T copy-mode-vi y send -X copy-selection-and-cancel
+      bind -T copy-mode-vi Escape send -X cancel
+
+      # splits + pane nav
       bind | split-window -h -c "#{pane_current_path}"
       bind - split-window -v -c "#{pane_current_path}"
       unbind '"'
       unbind %
+      bind h select-pane -L
+      bind j select-pane -D
+      bind k select-pane -U
+      bind l select-pane -R
 
-      # kubectl exec sessions die on any network blip. Losing the connection
-      # should cost you nothing, so make detaching cheap and obvious.
-      set -g status-right " #{session_name} "
+      # structure -- Tokyo Night, static: there is no Noctalia in the gap.
+      set -g status-position top
+      set -g status-justify left
+      setw -g window-status-separator ""
+      set -g pane-border-lines heavy
+      set -g pane-border-indicators colour
+      ${lib.optionalString (cfg.target == "wsl") ''
+        setw -g window-status-format ' #I:#W#{?@workmux_status, #{@workmux_status},}#{?window_flags,#{window_flags}, } '
+        setw -g window-status-current-format ' #I:#W#{?@workmux_status, #{@workmux_status},}#{?window_flags,#{window_flags}, } '
+      ''}
+      set -g status-style "bg=#1a1b26,fg=#a9b1d6"
+      set -g status-left "#[bg=#7aa2f7,fg=#1a1b26,bold] #S #[bg=#1a1b26,fg=#7aa2f7,nobold]"
+      set -g status-right "#[fg=#565f89]#h #[fg=#7aa2f7]%H:%M "
+      setw -g window-status-style "fg=#565f89,bg=#1a1b26"
+      setw -g window-status-current-style "fg=#1a1b26,bg=#7aa2f7,bold"
+      set -g message-style "bg=#414868,fg=#a9b1d6"
+      set -g mode-style "bg=#7aa2f7,fg=#1a1b26"
+      setw -g clock-mode-colour "#bb9af7"
+      set -g pane-border-style "fg=#414868"
+      set -g pane-active-border-style "fg=#7aa2f7"
+      set -g popup-style "bg=#1a1b26,fg=#a9b1d6"
+      set -g popup-border-style "fg=#414868"
+      ${lib.optionalString (cfg.target == "wsl") ''
+        # workmux: status_format is off in its config.yaml, so this format
+        # owns the bar; @workmux_status is the per-window agent icon it sets.
+        bind C-s display-popup -E -h 80% -w 90% "workmux dashboard"
+        bind Tab run-shell "workmux last-agent"
+        bind w run-shell "workmux last-done"
+      ''}
     '';
+  };
+
+  # ── workmux: parallel agents in worktrees + tmux windows ───────────────
+  # WSL only: the pod's multiplexer is herdr and its layer stays lean. The
+  # package, its global config and the opencode status plugin all come from
+  # ONE pinned revision (flake input), so the plugin cannot skew from the
+  # binary.
+  home.packages = lib.optionals (cfg.target == "wsl") [
+    inputs.workmux.packages.${pkgs.stdenv.hostPlatform.system}.default
+  ];
+
+  xdg.configFile = lib.mkIf (cfg.target == "wsl") {
+    "workmux/config.yaml".text = ''
+      nerdfont: true
+      merge_strategy: rebase
+      agent: opencode
+      status_format: false
+    '';
+    # From the same pinned revision as the package so the two never skew.
+    "opencode/plugins/workmux-status.ts".source =
+      "${inputs.workmux}/resources/opencode/plugins/workmux-status.ts";
   };
 }

@@ -16,6 +16,23 @@
       url = "github:nix-community/NixOS-WSL";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Vendored into the store by nix/modules/skills.nix (no flake.nix
+    # upstream). Same source as /etc/nixos, pinned to the same revision the
+    # owner uses -- the agents in the gap lose every workflow without them.
+    matt-skills = {
+      url = "github:mattpocock/skills";
+      flake = false;
+    };
+
+    # workmux: worktrees + tmux windows for parallel agents. Package, tmux
+    # integration and the opencode status plugin all come from this ONE
+    # revision (nix/modules/shell.nix), so the plugin can never skew from the
+    # binary. nixpkgs follows, so no second nixpkgs closure.
+    workmux = {
+      url = "github:raine/workmux";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =

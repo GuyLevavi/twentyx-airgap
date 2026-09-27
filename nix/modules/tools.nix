@@ -225,6 +225,35 @@ in
       # this nix build is what actually runs. Vault lives on the laptop.
       markdown-oxide
 
+      # ── daily drivers, synced from /etc/nixos (2026-09-27) ─────────────
+      # yazi: file manager; pairs with tmux passthrough for inline images.
+      yazi
+      # Container workflows: podman is virtualisation.podman on WSL; these
+      # are the two things the desktop always had next to it.
+      lazydocker
+      podman-compose
+      # A compiler and node: the internal pip serves wheels, but a source
+      # build is the difference between a working sdist and a failed one,
+      # and JS tooling is otherwise absent from the closure.
+      gcc
+      nodejs
+      # Zed's agent sandboxes terminal commands with bwrap; in remote dev
+      # those terminals run HERE, so the WSL side has to carry it.
+      bubblewrap
+
+      # rb: the muscle memory from /etc/nixos (home/scripts.nix). Stage
+      # everything first -- the flake reads the GIT TREE, so untracked files
+      # are invisible to a build -- then switch the system from this
+      # checkout. Works with the network down: the offline cache is already
+      # a substituter (nix/hosts/wsl.nix), and wheelNeedsPassword is off
+      # there for exactly this.
+      (pkgs.writeShellScriptBin "rb" ''
+        set -euo pipefail
+        cd "''${TWENTYX_REPO:-$HOME/twentyx-airgap}"
+        git add -A
+        exec sudo nixos-rebuild switch --flake "$PWD#wsl" "$@"
+      '')
+
       # Deliberately ABSENT, measured against the tarball (6.6 GiB system
       # closure, 2026-09): clang-tools (clangd) alone is ~1.4 GB of unpacked
       # closure — C/C++ editing loses its LSP in the airgap until someone
