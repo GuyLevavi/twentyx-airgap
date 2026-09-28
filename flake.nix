@@ -33,6 +33,15 @@
       url = "github:raine/workmux";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Remote-WSL support for the Microsoft VS Code server: a user service
+    # that patches each freshly installed server's bundled node for NixOS
+    # (interpreter, RPATH, the vsce-sign libssl dependency). The server and
+    # the extension set themselves are pinned in nix/vscode-version.nix and
+    # nix/vscode-extensions.nix -- this input is only the patch mechanism.
+    nixos-vscode-server = {
+      url = "github:nix-community/nixos-vscode-server";
+    };
   };
 
   outputs =
@@ -124,6 +133,32 @@
         runai = mkRunai { nvim = false; };
         runai-nvim = mkRunai { nvim = true; };
       };
+
+      # ── WSL rolling-update delta roots ───────────────────────────────────
+      # Store paths a rebuild needs that an older imported image does not
+      # have, consumed by scripts/export-rebuild-cache.sh (which packs them
+      # into dist/wsl-rebuild.tar.gz; see that script's header for the rest
+      # of the root list). Deliberately NOT the whole closure: a delta that
+      # carries the closure is a re-import with extra steps. Add a path here
+      # only when a rolling update names it as missing; a rebase (fresh
+      # wsl --import of a rebuilt tarball) never needs it.
+      wslDeltaRoots =
+        let
+          vscode = import ./nix/vscode-version.nix { inherit pkgs; };
+          vscodeExtensions = import ./nix/vscode-extensions.nix { inherit pkgs; };
+          # Same derivation the module installs, built with OUR nixpkgs
+          # (the input's own flake has no nixpkgs input to build against).
+          autoFixVscodeServer = pkgs.callPackage "${inputs.nixos-vscode-server}/pkgs/auto-fix-vscode-server.nix" { };
+        in
+        [
+          pkgs.tree-sitter
+          # The script the VS Code server node patching runs from; its
+          # closure carries inotify-tools/patchelf/icu/krb5/... for it.
+          autoFixVscodeServer
+          # The pre-seeded Remote-WSL server plus every pinned .vsix.
+          (pkgs.fetchurl { inherit (vscode.server) url name hash; })
+        ]
+        ++ map (e: e.src) vscodeExtensions;
 
       packages.${system} = {
         runai-layer = pkgs.callPackage ./nix/runai/layer.nix {

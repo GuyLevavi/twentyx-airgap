@@ -51,12 +51,18 @@ Two independent flows, which used to be one:
 
     IMAGES   outside -> build-layers.sh -> nix-layer{,-nvim}.tar.gz
                      -> physical transfer
-                     -> push-artifactory.sh -> generic-local/airgap/<ver>/
+                     -> push-gitlab-packages.sh -> GitLab generic packages
+                        (twentyx-airgap/<ver>/; Artifactory generic-local
+                        remains the fallback)
                      -> CI fetches, builds repo-layer.tar, crane appends
 
 - Git holds **text only** -- now literally true. There is no `vendor/` and no blob list: the
   closure is computed, so the only binary artifacts are Nix build outputs.
-- generic-local: the layer tarballs. There is no node layer and no npm anywhere in the pipeline:
+- The layer tarballs are published to the project's GitLab generic package
+  registry (`twentyx-airgap/<VERSION>/`, 2026-09; Artifactory stays the
+  fallback). Check the instance's max package size before the first push --
+  the header of `push-gitlab-packages.sh` has the details. There is no node
+  layer and no npm anywhere in the pipeline:
   opencode is built from source by nixpkgs and rides in the closure.
 
 **No signing keys, by decision (2026-09).** The two-checksum scheme is covered by Nix's
@@ -68,9 +74,11 @@ so the unsigned path needs no edit and prints that it is unverified.
 download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
 transfer corrupt anything?*). Nix covers both, better: the flake lock pins inputs by hash, and the
 binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
-the path it damaged, not on "the transfer". The tarballs carry no checksum sidecars either: a
-corrupt layer surfaces as missing store paths in the pod (`doctor` checks exactly that),
-which is the failure that matters.
+the path it damaged, not on "the transfer". The binary cache still carries no sidecars; `dist/`
+gained one `SHA256SUMS` + `MANIFEST.txt` (2026-09-28) purely as a post-copy convenience for the
+carry medium (`sha256sum -c` before import). The trust anchor is unchanged: a corrupt layer
+surfaces as missing store paths in the pod (`doctor` checks exactly that), which is the failure
+that matters.
 
 ## 4. Base images  [resolved 2026-09-27 -- see docker/BASE-IMAGES.md]
 
@@ -98,15 +106,18 @@ stow + packages) is obsolete for this toolchain.
 Cluster facts are CI variables set in the airgap's GitLab (project/group
 variables beat `.gitlab-ci.yml`) -- decision 2026-09-27, so nothing is
 "filled in" from the connected side. The file carries readable defaults
-only, and the Artifactory path derives from `VERSION`.
+only, and the versioned artifact paths derive from `VERSION` (GitLab generic
+packages primary since 2026-09-28; Artifactory fallback).
 
 ## 5. First transfer should be deliberately small
 
-Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, ~1070 MB)
-and skip `-nvim` (~1087 MB). `assemble.sh` detects the missing nvim tarball and builds one
-flavor.
+Still true, and the shape changed slightly: `transfer-bundle.sh` always builds
+both flavors (plain ~1070 MB, `-nvim` ~1087 MB), but CI copes when the nvim
+tarball is absent (`assemble.sh` builds one flavor), so the first transfer can
+publish only the plain one.
 
-That proves transfer -> Artifactory -> `crane append` -> pod end to end, including the two things
+That proves transfer -> GitLab packages (Artifactory fallback) -> `crane
+append` -> pod end to end, including the two things
 that can only fail against real internal bases: `PATH` prepending on a pytorch base and
 ENTRYPOINT hand-over on a `vscode-*` one.
 
@@ -156,7 +167,9 @@ mechanism. Two things from the old deferral stay because they cost nothing and a
 load-bearing: `assemble.sh` records the base's ENTRYPOINT in `BASE_ENTRYPOINT`
 and `entrypoint` hands over to it, and the session variables are image ENV so
 code-server's task runner still gets `TERMINFO_DIRS`/`LOCALE_ARCHIVE`. Details:
-`docker/README.md`, `nix/runai/layer.nix`.
+`docker/README.md`, `nix/runai/layer.nix`. The WSL side is a separate story:
+Microsoft VS Code with Remote-WSL returns there, pre-seeded server and all --
+§12.
 
 ## 8. How this is tested without the gap  [test suite: tests/]
 
@@ -173,9 +186,11 @@ under the problematic pod shape and assert the behaviors that each broke once:
   real fractioning libs (opencode dies, system binaries are fine). Asserted:
   bare opencode dies, `run-opencode` survives, children get the original
   preload back via `BASH_ENV`.
-- Also asserted: closure integrity after `crane append`, defaults seeding
-  (opencode plugin, Zed settings), the env-injection contract, sudoers +
-  setuid sudo, nginx presence, repo-layer determinism. 19 checks total.
+- Also asserted: closure integrity after `crane append`, the shipped
+  opencode's address-ascending `PT_LOAD`s, defaults seeding (opencode plugin,
+  Zed settings) including that the composed Zed settings keep a `/nix/store`
+  pin, the env-injection contract, sudoers + setuid sudo, nginx presence,
+  repo-layer determinism. 21 checks total.
 
 Two artifacts of the harness, not the image: the sudo PAM error under rootless
 podman is a userns artifact (setuid-root maps to the host user, which cannot
@@ -310,6 +325,8 @@ it is not relitigated:
   syntax-only since 1.0.3; taplo remains nvim's). Prettier auto-install is off
   (`"prettier": {"allowed": false}`). The agent integration is Terminal
   Threads + `"agent": {"terminal_init_command": "opencode"}`, not tasks.json.
+  Since 2026-09-28 the pins live in the composed default (`home.nix`), so
+  re-shipping the personal file cannot drop them -- §12.
 - **workmux / skills / daily drivers [added 2026-09-27, both targets]**: workmux
   (pinned flake input) ships with its tmux integration and the opencode status
   plugin from the same revision; opencode skills are vendored from the
@@ -330,3 +347,69 @@ it is not relitigated:
   builder now enforces one invariant for the whole tree (every directory
   traversable) and fails the build if violated; the home-directory ownership
   class is restored by tmpfiles at boot. Full story: `wsl/FIRST-BOOT.md`.
+
+## 12. Round of 2026-09-28: the first-remote-test fixes  [RESOLVED -- in the closure]
+
+- **opencode SIGSEGV on pre-6.7 kernels (WSL2 6.6; RHEL 8/9).** nixpkgs must
+  patchelf bun (its `PT_INTERP` has to point into the store), and patchelf's
+  `sortPhdrs()` moves `PT_GNU_STACK` to the front of the header table.
+  `bun build --compile` recycles *that slot* for its appended payload, so the
+  compiled opencode lists its highest-vaddr `PT_LOAD` first and the
+  BSS-carrying load last. Linux <= 6.6 computes one global BSS range while
+  walking the table in order, the writable segment's BSS tail is never
+  mapped, and glibc's ld.so dies applying `R_X86_64_COPY` relocations before
+  `main()` -- Linux >= 6.7 maps BSS per segment and is immune, which is why
+  only WSL2 and old cluster nodes were hit. Fix: a `postFixup` on
+  `opencodeFixed` runs `nix/scripts/fix-phdr-order.py`, which permutes the
+  existing LOAD slots back to address-ascending order (no header added or
+  removed, idempotent) and fails the build if the result is still unsafe;
+  `tests/test-container.sh` asserts the shipped binary's LOADs ascend. Applies
+  to both targets. References:
+  https://www.whexy.com/dyn/3b6a3698-3ee7-80f5-8b50-ff0d0e5f365f, nixpkgs
+  #520383 / #523047, opencode #26846. The AVX2/x86-64-v3 caveat still stands
+  (see the package comment in `tools.nix`): this repair is about headers, not
+  instructions.
+
+- **Zed settings shadowing: the pins cannot live in a static file.** The
+  tracked `zed-settings.json` (personal look: vim mode, Catppuccin, right-docked
+  panels) used to be shipped *wholesale* as the packaged default whenever it
+  existed, so the LSP/agent blocks `home.nix` carried were never emitted -- Zed
+  fell back to npm-installing its own servers at runtime, the fetch class this
+  repo exists to prevent. The fix is composition, not copying the pins into
+  the file: the pins are `/nix/store` paths that move with nixpkgs, so a
+  hardcoded one goes stale silently. `nix/modules/home.nix` now reads the
+  tracked file with `builtins.fromJSON` and merges the dynamic `airgap` block
+  on top (`lsp` ours outright -- a stale personal `lsp` block was the bug;
+  `agent` merged so panel styling and `terminal_init_command` coexist), then
+  emits strict JSON as the per-file packaged default. A real
+  `~/.config/zed/settings.json` on the PVC still wins by the `$HOME` rule.
+  The container test greps the seeded file for a `/nix/store` pin, so the
+  shadowing cannot come back silently.
+
+- **tmux panes opened as bash.** `BASH_EXECS_FISH` -- the login-bash marker
+  that makes an interactive bash exec fish -- is inherited by the tmux server,
+  so every pane tmux spawned as bash saw the marker and skipped the exec,
+  silently landing in bash. Fix:
+  `set -g default-shell ${config.programs.fish.package}/bin/fish` in
+  `nix/modules/shell.nix`; tmux spawns fish directly and never consults the
+  marker. (`config.programs.fish.package`, not `pkgs.fish`: the same
+  python-less override the exec path uses.)
+
+- **VS Code returns for WSL, pinned end to end.** The Windows client is
+  Microsoft VS Code, not code-server, and Remote-WSL demands a server for the
+  client's **exact** commit -- undownloadable in the gap. `nix/vscode-version.nix`
+  pins 1.115.0 / commit 41dd792b5e65... and `throw`s at eval time when
+  `pkgs.code-server.version` is not `4.115.0` (code-server 4.Y.Z is VS Code
+  1.Y.Z), so a nixpkgs bump cannot silently leave the pin behind.
+  `nix/vscode-extensions.nix` pins the six nixpkgs extensions and records
+  their `engines.vscode` ranges as checked against that release; the server
+  tarball and `.vsix` set are every one a store path. `nix/hosts/wsl.nix`
+  pre-seeds the server tarball by activation, a stamp-guarded oneshot installs
+  the extensions with the server's own CLI, and the `nixos-vscode-server`
+  flake input patches the bundled node (interpreter/RPATH, the vsce-sign
+  libssl fix) for NixOS; `linger = true` starts the user manager at boot so
+  the patch wins the race with the first connect. The kit ships the installer,
+  the `.vsix` files and an updates-off settings template; the remote machine
+  settings pin `ruff.path`/`nix.serverPath` to the same closure binaries Zed
+  and nvim use. History: an earlier VS Code round (5a1ff24 / 05a667b) was
+  added then removed; this one carries the pin chain that removal lacked.

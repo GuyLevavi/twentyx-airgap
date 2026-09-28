@@ -84,7 +84,8 @@ time, and is handled where root *is* real: systemd-tmpfiles at boot.
 
 Every boot appends identity, `/` mode, home permissions, a real `su -l` exec
 test, failed units, dbus status, journal socket modes, mounts, and the journal
-head to `/var/log/bootlog.txt`, and copies it to `C:\twentyx`. Notes:
+head to `/var/log/bootlog.txt`, and copies it to `/mnt/c/twentyx`
+(`C:\twentyx`) when that directory exists. Notes:
 
 - `/var/log` does not exist in the image; the script creates it.
 - `/mnt/c` can mount later than the service; the copy retries for ~30 s.

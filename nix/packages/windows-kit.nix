@@ -26,6 +26,20 @@ let
     hash = "sha256-Ts5mC3Hmt5BJcAJ82gxXS1R1Vcn7dFly7RVPacG6NpI=";
   };
 
+  # VS Code (Microsoft, Remote-WSL): the installer the Windows side runs and
+  # the raw .vsix files for every pinned extension. Version, commit, URLs and
+  # hashes live in nix/vscode-version.nix — one file, one re-pin procedure,
+  # and the eval-time check that the nixpkgs code-server pin has not moved.
+  vscode = import ../vscode-version.nix { inherit pkgs; };
+  vscodeExtensions = import ../vscode-extensions.nix { inherit pkgs; };
+  vscodeInstaller = pkgs.fetchurl {
+    inherit (vscode.windowsInstaller) url name hash;
+  };
+  # One symlink per .vsix; Nix interpolates both paths and names.
+  vsixInstalls = lib.concatStringsSep "\n" (
+    map (ext: ''ln -s ${ext.src} $out/vscode/vsix/${ext.src.name}'') vscodeExtensions
+  );
+
   wslMsi = pkgs.fetchurl {
     # Latest stable WSL2 MSI from github.com/microsoft/WSL releases. Covers
     # Win10 and Win11 without the Microsoft Store or any network.
@@ -91,13 +105,20 @@ let
   );
 
   kit = pkgs.runCommand "windows-kit-${zedVersion}" { } ''
-    mkdir -p $out/themes
+    mkdir -p $out/themes $out/vscode/vsix
     ln -s ${zedInstaller} $out/Zed-x86_64-${zedVersion}-setup.exe
     ln -s ${wslMsi} $out/wsl.2.9.12.0.x64.msi
     # Version-controlled client templates (repo files, not store paths).
     install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
     install -m 0644 ${./windows/zed-client-settings.personal-example.json} $out/zed-client-settings.personal-example.json
     install -m 0644 ${./windows/wezterm.lua} $out/wezterm.lua
+    # VS Code: installer + user-settings template + one .vsix per pinned
+    # extension. The SAME vsix files are in the WSL closure, so the server
+    # seeds them without ever touching this folder; the copies here are for a
+    # Windows-side install or a manual sideload.
+    ln -s ${vscodeInstaller} $out/vscode/${vscode.windowsInstaller.name}
+    install -m 0644 ${./windows/vscode-settings.json} $out/vscode/vscode-settings.json
+    ${vsixInstalls}
     ${themeInstalls}
     cat > $out/README.txt <<'EOF'
     Windows-side artifacts for the airgap (build once on a connected machine,
@@ -126,6 +147,21 @@ let
       wezterm.lua              WezTerm config (Tokyo Night, kitty keyboard
                                protocol on -- required for shift+enter in
                                TUIs). Copy to %USERPROFILE%\.wezterm.lua.
+
+      vscode\VSCodeSetup-x64-*.exe
+                               VS Code for Windows (Microsoft, Remote-WSL),
+                               pinned to the exact release whose Linux server
+                               the distro pre-seeds for you. Install it and
+                               copy vscode\vscode-settings.json to
+                               %APPDATA%\Code\User\settings.json -- it pins
+                               updates OFF, which is required: a newer client
+                               demands a server the gap cannot download.
+                               UNPACK.ps1 installs both for you.
+
+      vscode\vsix\*.vsix       The pinned extensions (ruff, basedpyright,
+                               nix-ide, YAML, two themes). setup-wsl.sh
+                               installs them into the distro's VS Code server
+                               offline; the Marketplace is unreachable here.
 
       wsl.*.x64.msi            WSL2 itself, for Windows boxes with no Store
                                and no internet. Setup order: the two DISM

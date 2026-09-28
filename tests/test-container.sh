@@ -150,11 +150,28 @@ expect_grep "launcher: opencode survives the hostile preloader" "[0-9]*\.[0-9]*"
 expect_ok "children: BASH_ENV restores the original preload" \
     run_ic bash -c 'PRELOAD_ORIGINAL=/tmp/hostile.so BASH_ENV=/opt/twentyx/agent/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
 
+say "bun-compiled agent binary (kernel<=6.6 layout)"
+# The first WSL session's `SIGSEGV (address bounding error)`: nixpkgs'
+# patchelf'd bun template makes `bun build --compile` list the highest-vaddr
+# PT_LOAD first, so Linux <= 6.6 never maps the BSS and ld.so dies before
+# main. postFixup reorders (nix/scripts/fix-phdr-order.py); this asserts the
+# shipped binary, and pipefail makes a missing readelf a failure, not a pass.
+expect_ok "opencode PT_LOADs are address-ascending" \
+    run_ic bash -c 'set -o pipefail; prev=; readelf -lW /opt/twentyx/profile/bin/.opencode-wrapped | while read -r t rest; do
+        [ "$t" = LOAD ] || continue; set -- $rest; v=$(( $2 ));
+        [ -n "$prev" ] && [ "$v" -lt "$prev" ] && exit 1; prev=$v;
+    done'
+
 say "packaged defaults + env injection"
 expect_ok "opencode preload plugin seeded" \
     run_ic bash -c 'test -f /data/jensen/.config/opencode/plugins/preload.ts'
 expect_ok "zed agent_servers default seeded" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
+# The pins are composed in home.nix (personal zed-settings.json + dynamic
+# store paths), so this guards the whole merge: if the personal file ever
+# comes back whole (the shadowing bug), the /nix/store pins disappear.
+expect_ok "zed LSP pins survived the settings merge" \
+    run_ic bash -c 'grep -q "/nix/store" /data/jensen/.config/zed/settings.json'
 expect_ok "zed remote server shipped as a packaged default" \
     run_ic bash -c 'ls /data/jensen/.zed_server | grep -q zed-remote-server'
 expect_ok "zed remote client-version shim shipped (full-version spelling)" \

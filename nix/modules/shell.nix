@@ -187,6 +187,13 @@ in
     aggressiveResize = true;
     clock24 = true;
     extraConfig = ''
+      # A tmux server started from fish inherits BASH_EXECS_FISH, so every
+      # new window's bash sees the marker and skips its exec-into-fish --
+      # panes opened as bash. default-shell spawns fish directly; the config
+      # below never goes through bash at all. (config.programs.fish.package,
+      # not pkgs.fish: the same python-less override the exec lands on.)
+      set -g default-shell ${config.programs.fish.package}/bin/fish
+
       set -as terminal-features ",*:RGB"
       # kitty keyboard protocol: the shipped WezTerm config turns it on, and
       # without this tmux drops the extended sequences -- Ctrl-hjkl leaks into

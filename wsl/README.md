@@ -23,19 +23,57 @@ this design live in `wsl/FIRST-BOOT.md`. Read that before editing
 `nix/hosts/wsl.nix` or the tarball builder. `wsl/SMOKE-TEST.md` is the
 verify-everything checklist (what to run after any import or rebuild).
 
-**Carry `nixos-wsl.tar.gz` in. On Windows:**
+**Carry the folder in. On Windows** (PowerShell, **Administrator**), from the
+extracted transfer folder:
 
 ```powershell
-wsl --import twentyx C:\WSL\nixos C:\twentyx\nixos-wsl.tar.gz --version 2
-wsl -d twentyx
+powershell -ExecutionPolicy Bypass -File .\SETUP.ps1
 ```
 
-Then the two one-shot scripts (see `MANUAL.md` §1): `UNPACK.ps1` on the
-Windows side, `setup-wsl.sh` as root inside the distro.
+One idempotent command, the whole chain: imports `nixos-wsl.tar.gz` as the
+`twentyx` distro (skipped when it is already registered), runs `UNPACK.ps1`
+(kit, Zed themes/settings, WezTerm, VS Code), then runs `setup-wsl.sh` as root
+inside the distro (clone the repo bundle, import the offline rebuild cache);
+the final `nixos-rebuild` runs as the user via sudo, never as root. Every
+knob is a parameter:
+
+```powershell
+.\SETUP.ps1 -Distro twentyx -InstallDir C:\wsl\nixos -User jensen -Base <extracted folder>
+```
+
+**Manual equivalent** (the fallback), also from the extracted folder:
+
+```powershell
+wsl --import twentyx C:\wsl\nixos .\nixos-wsl.tar.gz --version 2
+powershell -ExecutionPolicy Bypass -File .\UNPACK.ps1
+wsl -d twentyx -u root -- bash /mnt/c/<extracted folder>/setup-wsl.sh jensen
+```
 
 That gives you a working NixOS with the config already applied — the flake was
 evaluated when the tarball was built, so `fish`, `nvim`, the whole toolchain are
 there on first boot. Nothing further is required to *use* it.
+
+Sudo asks for a password once? It is locked by design; the imported image
+carries passwordless sudo for wheel, so the rebuild never needs one. If you see
+a prompt you are on an older image — log in as the user and run the rebuild
+from your own shell once:
+`sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl`.
+
+The transfer folder is flat by design (no nested `windows-kit/` or
+`wsl-rebuild/`), and the carry tar `twentyx-airgap-<VERSION>.tar.gz` holds the
+same layout. At a glance:
+
+| Artifact | What it becomes |
+|---|---|
+| `twentyx-airgap-<VERSION>.tar.gz` | the one file to carry; same flat layout inside |
+| `README.md`, `MANIFEST.txt`, `SHA256SUMS` | the Windows-side page (it replaced `START-HERE.txt`), versions, `sha256sum -c` |
+| `nixos-wsl.tar.gz` | the image: consumed by `wsl --import` |
+| `wsl-rebuild.tar.gz` | additive cache delta for an existing distro |
+| `windows-kit-<ver>.tar.gz` | `UNPACK.ps1`: Zed + VS Code + WSL2 MSI, themes, client templates |
+| `twentyx-airgap.bundle` | the repo, `git clone`d inside the distro (real history) |
+| `nix-layer*.tar.gz`, `repo-layer.tar` | the pod image pipeline — crane/CI consume them |
+| `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | the one-shot chain and its halves |
+| `docs/` | README, ARCHITECTURE, MANUAL, smoke test, INNER-CONFIG |
 
 ## Rehearsing "no WWW" on a connected machine
 
@@ -61,8 +99,8 @@ sudo sh -c 'echo "nameserver 192.168.7.7" > /etc/resolv.conf'   # a dead interna
 
 With no default route nothing can leave the laptop — any hidden network
 dependency fails immediately instead of hanging, exactly like in the gap.
-Run `opencode`, `zed` (remote into itself), `nix build` of a `writeText`
-change — all must behave as if nothing happened.
+Run `opencode`, `zed` (remote into itself), a VS Code Remote-WSL window,
+`nix build` of a `writeText` change — all must behave as if nothing happened.
 
 **Restore:** `wsl --shutdown` from PowerShell (resets routes and resolv.conf
 on next start), or re-add the route:
@@ -75,27 +113,48 @@ If anything fails with the route deleted, do not "fix" it by installing or
 downloading anything — a runtime fetch is exactly what this toolchain exists
 to make impossible. A failure under Level 2 is a bug in the bundle; report it.
 
-## Subsequent updates
+## Updates: rolling, delta, rebase
 
-Once the machine exists, updates are cache transfers rather than rootfs
-rebuilds. The everyday path is `scripts/setup-wsl.sh` (clone/ff the bundle,
-import `wsl-rebuild.tar.gz`, rebuild); its steps spelled out:
+Once the machine exists, most updates are cache transfers, not rootfs
+rebuilds. Three shapes, pick deliberately:
+
+| Shape | Carry | What happens |
+|---|---|---|
+| rolling — text/config | `twentyx-airgap.bundle` (+ `wsl-rebuild.tar.gz` when the release notes say a rebuild needs new paths) | re-run `setup-wsl.sh`: fast-forward the repo, import the delta, rebuild. No re-import. |
+| delta — a rebuild names a missing store path | the next `wsl-rebuild.tar.gz` | that exact path is added to the delta and imported; then the rolling path |
+| rebase — closure changes | the new `nixos-wsl.tar.gz` | `wsl --unregister`, fresh import, `SETUP.ps1`. The home is wiped — which is what makes the new defaults apply. Usually cheaper than growing the delta. |
+
+The delta never contains the image: `nixos-wsl.tar.gz` is the image (~1.5
+GB); `wsl-rebuild.tar.gz` is an additive cache of just the store paths an
+offline rebuild needs (a few hundred MB today; it shrinks as a rebase
+absorbs paths). A missing store path named by a rebuild is exactly what gets
+added to the next delta.
+
+The everyday path is `scripts/setup-wsl.sh` (clone/ff the bundle, import
+`wsl-rebuild.tar.gz`, rebuild as the user via sudo); its steps spelled out:
 
 ```bash
 # outside (connected machine)
 ./scripts/export-rebuild-cache.sh          # -> dist/wsl-rebuild.tar.gz
 
 # inside, after carrying it across (as root)
-tar -xzf /mnt/c/twentyx/wsl-rebuild.tar.gz -C /var/cache/nix-transfer --strip-components=1
+tar -xzf <transfer>/wsl-rebuild.tar.gz -C /var/cache/nix-transfer --strip-components=1
 nix copy --from file:///var/cache/nix-transfer --all
+
+# then the switch, as the user (passwordless sudo from the imported image)
+sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl
 ```
 
-After the first activation,
-`sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl` works offline for any
-change that does not add a package — `writeText`, `buildEnv` and `symlinkJoin`
-need only `stdenvNoCC` (shipped deliberately for this reason) and build from
-string literals with no fetches. (`/etc/nixos` holds only the just-in-case
-`configuration.nix`; the repo arrives as the shipped `twentyx-airgap.bundle`.)
+Sudo asks for a password once? It is locked by design; the imported image
+carries passwordless sudo for wheel. If you see a prompt, you are on an older
+image — log in as the user and run the rebuild from your own shell once.
+
+After the first activation, `rb` (or the spelled-out `nixos-rebuild switch`)
+works offline for any change that does not add a package — `writeText`,
+`buildEnv` and `symlinkJoin` need only `stdenvNoCC` (shipped deliberately for
+this reason) and build from string literals with no fetches. (`/etc/nixos`
+holds only the just-in-case `configuration.nix`; the repo arrives as the
+shipped `twentyx-airgap.bundle`.)
 
 The generic sharded exporter (`scripts/nix-export.sh` outside,
 `scripts/nix-import.sh` inside) remains for arbitrary cache moves; its chunks
@@ -121,6 +180,27 @@ Then connect — Zed: Remote Servers → New SSH Server → `<you>@localhost`.
 The matching remote server is pre-seeded in `~/.zed_server/` (release-matched
 to the installer in the kit; see the `twentyx.zed.remoteClientVersion` note and
 the `cloud.zed.dev` preflight caveat there).
+
+## VS Code (Remote-WSL)
+
+The kit installs Microsoft VS Code pinned by `nix/vscode-version.nix`; the
+`vscode-settings.json` it plants pins updates **off** — required, because a
+newer client demands a remote server for its own commit, and the gap cannot
+download one. The WSL closure meets that exact client halfway:
+
+- the server for the pinned commit is pre-seeded at activation under
+  `~/.vscode-server/bin/<commit>/`;
+- the remote machine settings carry the LSP pins (`ruff.path`,
+  `nix.serverPath`, schema downloads off) pointing at the same closure
+  binaries Zed and nvim use;
+- a oneshot installs the pinned extensions (ruff, basedpyright, nix-ide,
+  YAML, Tokyo Night, Catppuccin) with the server's own CLI from the
+  closure's `.vsix` files — no Marketplace.
+
+`nixos-vscode-server` patches each server's bundled node on first sight (user
+linger is on, so that lands before the first connect). From Windows, open the
+distro folder (`\\wsl$\twentyx\home\<user>\...`) — first connect must not
+download anything. The checks are in `wsl/SMOKE-TEST.md` §9.
 
 ## What is deliberately NOT here
 

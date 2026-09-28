@@ -22,29 +22,38 @@ journal head and the reasons; report it.
 
 ## 1. Offline rebuild (the durable path — do this once)
 
-This is what makes config edits cheap forever after. It needs the two
-artifacts the transfer bundle ships: `twentyx-airgap.bundle` (the repo) and
-`wsl-rebuild.tar.gz` (the offline rebuild cache), both carried to
-`C:\twentyx`.
+This is what makes config edits cheap forever after. `SETUP.ps1` runs it
+during install (`setup-wsl.sh` is its Linux half); the commands below are the
+manual fallback, and worth verifying either way. It needs the two artifacts
+the transfer ships:
+`twentyx-airgap.bundle` (the repo) and `wsl-rebuild.tar.gz` (the offline
+rebuild cache), both flat in the extracted transfer folder.
 
 ```bash
-# as root (one-time; clones the repo, imports the cache, activates) --
-# exactly what setup-wsl.sh does, spelled out:
+# as root (one-time; clones the repo, imports the cache) -- exactly what
+# setup-wsl.sh does, spelled out. TRANSFER defaults to the script's own
+# directory, so set T to wherever the folder was extracted:
 wsl -d twentyx -u root -- bash -lc '
-  git clone /mnt/c/twentyx/twentyx-airgap.bundle /root/twentyx
+  T=/mnt/c/twentyx
+  runuser -u jensen -- git clone "$T/twentyx-airgap.bundle" /home/jensen/twentyx-airgap
   mkdir -p /var/cache/nix-transfer
-  tar -xzf /mnt/c/twentyx/wsl-rebuild.tar.gz -C /var/cache/nix-transfer --strip-components=1
+  tar -xzf "$T/wsl-rebuild.tar.gz" -C /var/cache/nix-transfer --strip-components=1
   nix copy --from file:///var/cache/nix-transfer --all
-  nixos-rebuild switch --flake /root/twentyx#wsl
 '
+
+# then the first switch, from the user (never as root). The account
+# password is locked by design and the image carries passwordless sudo for
+# wheel, so no prompt should ever appear:
+wsl -d twentyx -- sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl
 ```
 
 Verify it is genuinely offline: run the "no WWW" rehearsal
 (`wsl/README.md`) and repeat a config-only edit — change a string in
-`nix/modules/shell.nix`, then
+`nix/modules/shell.nix`, then, inside the distro as `jensen`:
 
 ```bash
-wsl -d twentyx -u root -- nixos-rebuild switch --flake /root/twentyx#wsl
+rb                                             # git add -A + sudo nixos-rebuild switch
+# spelled out: sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl
 ```
 
 It must finish without any fetch. This is the property the whole Nix choice
@@ -54,9 +63,14 @@ buys; test it before trusting it in the gap.
 
 ```bash
 nvim --version | head -2                       # 0.12.x from the closure
+tree-sitter --version                           # the CLI :checkhealth expects (now shipped)
 :checkhealth vim.lsp                            # all six servers: found
 :lua =vim.lsp.get_clients()                     # after opening a file
 ```
+
+`:checkhealth` (and `:checkhealth vim.treesitter`) must not flag a missing
+`tree-sitter-cli` any more; `tree-sitter` is in the closure so the health
+check can diagnose parsers without a fetch.
 
 | file to open | server that must attach |
 |---|---|
@@ -93,10 +107,10 @@ matter for the airgap and have been added there (2026-09-26):
 ```
 
 Extensions install on the CLIENT and are propagated to the remote server on
-connect — the WSL side needs nothing extra. The kit also carries the theme
-files (`windows-kit\themes\*.json` → copy to `%APPDATA%\Zed\themes\`) and a
-client settings template; without them Zed offers registry downloads for
-themes/extensions instead.
+connect — the WSL side needs nothing extra. `UNPACK.ps1` copies the kit's
+theme files into `%APPDATA%\Zed\themes\` and the client settings template to
+`%APPDATA%\Zed\settings.json` when you have none; without them Zed offers
+registry downloads for themes/extensions instead.
 
 **The remote-server lookup is exact-match on the client's full version
 string** (`zed-remote-server-stable-<1.17.2+stable.349.c8e44cf...>`, build
@@ -144,9 +158,16 @@ itself (`agent.terminal_init_command` in the packaged settings).
 ## 4. opencode
 
 ```bash
-opencode --version
+uname -r              # kernels <= 6.6 are the SIGSEGV case; the closure reorders bun's ELF headers
+opencode --version    # must print, not die in ld.so before main
+opencode acp --help   # the ACP entry point loads (Zed's agent panel starts `opencode acp`)
 echo "$TERM $TERM_PROGRAM"               # terminal identity, see §5
 ```
+
+A SIGSEGV before any output is the old kernel<=6.6 failure — the closure's
+`fix-phdr-order` repair did not land; report `uname -r`. If Zed's agent panel
+is stuck, run `opencode acp` by hand — it must start and wait, not exit with
+an error.
 
 - **Theme**: in the TUI run `/theme` to list and pick; it persists to your
   config (`~/.config/opencode/opencode.json` → `"theme": "<name>"`). The
@@ -179,6 +200,21 @@ end to end: WezTerm Tokyo Night → btop `tokyo-night` → opencode
 echo $TERM_PROGRAM $TERM                 # confirm which terminal the session is in
 ```
 
+### tmux panes are fish
+
+The tmux config sets `default-shell` to the closure fish directly — previously
+a server started from fish inherited the `BASH_EXECS_FISH` marker and every
+new pane came up as bash:
+
+```bash
+tmux new-session -d 'echo $SHELL > /tmp/tmux-shell'
+sleep 0.5 && cat /tmp/tmux-shell      # the closure fish path, not bash
+tmux show-options -g default-shell    # /nix/store/...-fish-.../bin/fish
+rm -f /tmp/tmux-shell
+```
+
+A bash path in either line means the `default-shell` line did not land.
+
 ## 6. btop
 
 ```bash
@@ -209,18 +245,40 @@ podman run --rm -it alpine:latest echo hello   # only if the image is local
 Offline means no pulls: images must arrive as archives. Verify whichever
 images you carried (`podman images`, `podman load`).
 
-## 9. Editors from Windows (Zed WSL remote is the path)
+## 9. Editors from Windows (Zed WSL remote and VS Code Remote-WSL)
 
 Zed's WSL integration needs no SSH setup: it spawns the server itself (see
 §3). The SSH bridge remains for the pod side and as a fallback — see
 `wsl/README.md` "Windows → distro over SSH": keys, `<you>@localhost`.
+
+### VS Code (Remote-WSL)
+
+The Windows client is pinned (1.115.0, commit
+`41dd792b5e652393e7787322889ed5fdc58bd75b`) and its shipped
+`vscode-settings.json` pins updates off — required, because a newer client
+demands a server for its own commit and the gap cannot download one. The WSL
+side pre-seeds the matching server:
+
+```bash
+ls ~/.vscode-server/bin/                  # exactly one dir: the pinned commit
+ls ~/.vscode-server/extensions/           # the six: ruff, basedpyright, nix-ide, YAML, tokyo-night, catppuccin
+cat ~/.vscode-server/data/Machine/settings.json   # ruff.path + nix.serverPath pins, schema fetches off
+```
+
+From Windows, open the distro folder (`\\wsl$\twentyx\home\jensen\...`) in VS
+Code: first connect must download nothing (no "installing server", no update
+prompt). Then, in that remote window, a `.py` file must attach
+basedpyright/ruff (the Problems panel shows their diagnostics), a `.yaml`
+file must validate without a schemastore fetch, and a `.nix` file must attach
+nixd. If VS Code offers to update or install a server, stop — the client is
+newer than the pin.
 
 ## 10. Nix itself
 
 ```bash
 nixos-version
 nix --version
-nixos-rebuild --flake /root/twentyx#wsl dry-activate   # eval-only sanity
+nixos-rebuild --flake ~/twentyx-airgap#wsl dry-activate   # eval-only sanity
 git config --global user.email you@work                    # once
 ```
 

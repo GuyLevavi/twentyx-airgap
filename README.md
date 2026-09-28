@@ -15,11 +15,11 @@ actually references, and nothing else.
 |---|---|---|
 | What it is | a real NixOS system **inside** the gap | a read-only tree baked into an OCI layer |
 | Nix at runtime | yes — rebuilds offline | **no** — never runs in a pod |
-| How it arrives | git bundle + cache tarball, `scripts/setup-wsl.sh` | `crane append`, `docker/assemble.sh` |
+| How it arrives | one flat transfer tar + `SETUP.ps1` (import, cache, repo, rebuild); rolling updates: git bundle + delta cache | `crane append`, `docker/assemble.sh` |
 | Python | Nix (3.12 only, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
 | Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
 | Agent | opencode + workmux (tmux) | opencode (via `run-opencode`) + workmux (tmux) |
-| Editor | zed (Windows client + remote server), nvim | code-server (closure) + zed remote server |
+| Editor | zed (Windows client + remote server), VS Code Remote-WSL (pinned), nvim | code-server (closure) + zed remote server |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
 tells you what that costs before you carry it anywhere.
@@ -28,19 +28,46 @@ tells you what that costs before you carry it anywhere.
 
 | | |
 |---|---|
-| WSL bootstrap, one file | **~1.3 GB** (`nixos-wsl.tar.gz`, gzip) |
-| `nix-layer.tar.gz` | ~1070 MB (code-server + zed remote server + podman/sudo/nginx/openssh + workmux/gcc/nodejs) |
-| `nix-layer-nvim.tar.gz` | ~1087 MB (+ pure nvim and treesitter) |
-| `repo-layer.tar` | ~380 KB |
-| `windows-kit-*.tar.gz` | ~435 MB (Zed installer + WSL2 MSI + themes + client templates) |
+| WSL bootstrap, one file | **~1.5 GB** (`nixos-wsl.tar.gz`, gzip) |
+| `nix-layer.tar.gz` | ~1.1 GB (code-server + zed remote server + podman/sudo/nginx/openssh + workmux/gcc/nodejs) |
+| `nix-layer-nvim.tar.gz` | ~1.14 GB (+ pure nvim and treesitter) |
+| `repo-layer.tar` | ~390 KB |
+| `windows-kit-*.tar.gz` | ~612 MB (Zed + VS Code installers, WSL2 MSI, themes, client templates, the pinned `.vsix` set) |
+| `wsl-rebuild.tar.gz` | ~299 MB today (delta roots: flake inputs + VS Code server/vsix + stdenv; shrinks when a rebase makes them unnecessary) |
+| one carry tar | ~4.7 GB (`twentyx-airgap-<VERSION>.tar.gz`, all of the above) |
 
-The WSL bootstrap is a single ~1.3 GB gzip'd tarball (`nixos-wsl.tar.gz` —
+(Measured 2026-09-28, `rm -rf dist && ./scripts/transfer-bundle.sh`.)
+
+The WSL bootstrap is a single ~1.5 GB gzip'd tarball (`nixos-wsl.tar.gz` —
 the builder's own default name is `nixos.wsl`, but `wsl --import` takes the
 same bytes under any name). The binary-cache exporter shards by default;
 reassembly is order-independent because the cache is content-addressed. If
 the size ever hurts, the single biggest lever is clangd (~1.4 GB of the WSL
 closure) — removable as an offline config edit on the WSL machine itself, no
 transfer needed.
+
+## The transfer, in one shape
+
+`./scripts/transfer-bundle.sh` produces one flat `dist/`: both layers, the
+NixOS-WSL image, the always-regenerated rebuild delta, the Windows kit, the
+repo as a git bundle, the setup scripts, user-facing docs, `MANIFEST.txt`
+(versions, build identity) and `SHA256SUMS`, then packs all of it into one
+carry tar `twentyx-airgap-<VERSION>.tar.gz`. On Windows, one elevated
+command runs the whole first-time chain — `SETUP.ps1` unpacks the kit,
+imports the image, and runs `setup-wsl.sh` inside the distro (repo clone,
+offline cache import, first rebuild).
+
+Two update shapes, deliberately distinct: a **rebase** carries a rebuilt
+`nixos-wsl.tar.gz` and re-imports (home wiped, packaged defaults reapply —
+the price of a clean slate), while a **rolling** update carries the git
+bundle plus the `wsl-rebuild.tar.gz` delta (additive; ~299 MB today, most of
+it the pinned VS Code server and its extensions, and nothing at all once a
+rebase has absorbed it) and
+re-runs `setup-wsl.sh`, which fast-forwards the repo and rebuilds. Text
+changes never need a re-import; closure changes are usually cheaper as a
+rebase. The big artifacts carry drvPath stamps (`dist/.layerdrv`,
+`dist/.wlldrv`), so a closure change rebuilds exactly what it must and a
+text-only commit rebuilds nothing.
 
 ## The two layers at runtime
 
@@ -185,13 +212,15 @@ nix/runai/layer.nix           the closure -> an OCI layer tarball
 libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/transfer-bundle.sh    run OUTSIDE -> the whole dist/ in one shot (layers, tarball, kit, bundle, docs)
-scripts/export-rebuild-cache.sh  run OUTSIDE -> dist/wsl-rebuild.tar.gz (WSL offline rebuilds)
+scripts/transfer-bundle.sh    run OUTSIDE -> the whole flat dist/ + one carry tar (layers, WSL tarball, delta, kit, bundle, docs, MANIFEST/SHA256SUMS)
+scripts/export-rebuild-cache.sh  run OUTSIDE -> the WSL delta cache; always run by transfer-bundle, roots in .#wslDeltaRoots
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
-scripts/setup-wsl.sh          run INSIDE (as root) -> clone the bundle, import the cache, rebuild
-scripts/windows/UNPACK.ps1    run on WINDOWS -> extract the kit, install themes + client templates
-scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory, for CI
+scripts/setup-wsl.sh          run INSIDE (root) -> clone/ff bundle, import cache, stage CA, rebuild as the user via sudo
+scripts/windows/SETUP.ps1     run on WINDOWS -> the one-shot: import + UNPACK + setup-wsl
+scripts/windows/UNPACK.ps1    run on WINDOWS -> extract the kit, install themes + client templates + VS Code
+scripts/push-gitlab-packages.sh  run INSIDE -> all artifacts to GitLab generic packages (primary; CI fetches with a job token)
+scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory (fallback for CI)
 scripts/ssh-bridge.sh         run on WSL  -> socat bridge: Zed/SSH into a pod
 tests/                        container integration tests (podman, no cluster)
 docker/                       registry-side assemble (no npm, no node layer)
@@ -249,6 +278,22 @@ Windows (the closure's server moves only when the pins in
 `nix/packages/windows-kit.nix` + `nix/zed-client-version.nix` move together).
 The client reaches the host over plain SSH on WSL, or over
 `scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`) into a pod.
+
+## VS Code, also declared
+
+The WSL side also ships Microsoft VS Code Remote-WSL, pinned end to end:
+`nix/vscode-version.nix` holds the release (1.115.0, commit `41dd792b…`) with
+an eval-time `throw` when `pkgs.code-server.version` no longer matches, so
+the pod IDE and the Windows client cannot silently skew; the same file
+carries the installer and server-tarball hashes. The closure pre-seeds
+`~/.vscode-server/bin/<commit>` (activation) and installs the pinned
+extension set (`nix/vscode-extensions.nix`) with the server's own CLI on a
+stamped oneshot; `nixos-vscode-server` patches the bundled node for NixOS.
+The Windows kit ships the matching installer and a settings template with
+updates **off** — a newer client would demand a server the gap cannot
+download. Remote machine settings pin `ruff.path` and `nix.serverPath` to
+the same closure binaries Zed and nvim use, so all three editors share one
+language-server set.
 
 ## Status
 

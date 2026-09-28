@@ -42,7 +42,7 @@ Also build the Windows-side kit while connected — it is what makes the
 Windows half of the gap turnkey:
 
 ```bash
-nix build .#windows-kit       # one tar.gz: Zed (release-matched), themes, templates, WSL2 MSI
+nix build .#windows-kit       # one tar.gz: Zed (release-matched), VS Code, themes, templates, WSL2 MSI
 ```
 
 ## 1. The WSL machine (NixOS inside the gap)
@@ -76,58 +76,90 @@ dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /nores
 `wsl --install --no-distribution` does the same two things and reboots for
 you, *without* installing Ubuntu — we bring our own distro.)
 
-After the reboot, still Administrator PowerShell:
+After the reboot, still Administrator PowerShell, from the **extracted
+transfer folder** (the carry tar `twentyx-airgap-<VERSION>.tar.gz` is flat
+inside — see §3):
 
 ```powershell
 wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
-# WSL2 itself: on an internet-less Windows, install the MSI from the kit
-# (windows-kit result). On a connected one, `wsl --update` does the same.
-msiexec /i wsl.2.9.12.0.x64.msi
-wsl --import twentyx C:\wsl\nixos C:\twentyx\nixos-wsl.tar.gz --version 2
-wsl -d twentyx                   # you are now inside the NixOS machine
+# No WSL at all? The kit carries WSL2 itself: extract the kit tar and install
+# its MSI (on a connected Windows, `wsl --update` does the same).
+tar -xf .\windows-kit-<ver>.tar.gz
+msiexec /i .\windows-kit\wsl.2.9.12.0.x64.msi
 ```
 
-Put `C:\wsl\nixos` on a drive with tens of GB free — the VM disk lives there
-and grows. `wsl --import` registers the tarball as a distro named `twentyx`;
-the name is what every `wsl -d` command refers to. Then, from `C:\twentyx`:
+Then one command does the whole chain:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1   # Windows side
-wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh       # Linux side
+powershell -ExecutionPolicy Bypass -File .\SETUP.ps1
+```
+
+`SETUP.ps1` imports `nixos-wsl.tar.gz` as the `twentyx` distro (skipped when
+it is already registered), runs `UNPACK.ps1` (kit, Zed themes/settings,
+WezTerm, VS Code) and then `setup-wsl.sh` as root inside the distro (clone
+the repo bundle, import the offline rebuild cache); the final
+`nixos-rebuild` runs as the user via sudo, never as root. Every knob is a
+parameter:
+
+```powershell
+.\SETUP.ps1 -Distro twentyx -InstallDir C:\wsl\nixos -User jensen -Base <extracted folder>
+```
+
+Put `C:\wsl\nixos` (`-InstallDir`) on a drive with tens of GB free — the VM
+disk lives there and grows. The distro name is what every `wsl -d` command
+refers to.
+
+**Manual equivalent** (the fallback) — `wsl --import` + the two scripts:
+
+```powershell
+wsl --import twentyx C:\wsl\nixos .\nixos-wsl.tar.gz --version 2
+powershell -ExecutionPolicy Bypass -File .\UNPACK.ps1
+wsl -d twentyx -u root -- bash /mnt/c/<extracted folder>/setup-wsl.sh jensen
 ```
 
 `UNPACK.ps1` extracts the kit and installs the themes/templates (never
 overwriting a personal file); `setup-wsl.sh` clones the repo bundle, imports
-the offline rebuild cache and runs the first `nixos-rebuild`. Both are
-idempotent. WSL details that matter (first-boot gotchas, the no-WWW
-rehearsal): see [`wsl/README.md`](wsl/README.md).
+the offline rebuild cache and runs the first `nixos-rebuild` as the user via
+sudo. Both are idempotent.
+
+Sudo asks for a password once? It is locked by design; the imported image
+carries passwordless sudo for wheel, so the rebuild never needs one. If you
+see a prompt you are on an older image — log in as the user and run the
+rebuild from your own shell once:
+`sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl`.
+
+WSL details that matter (first-boot gotchas, the no-WWW rehearsal): see
+[`wsl/README.md`](wsl/README.md).
 
 ### Packed vs extracted (the one table)
 
 | Artifact | Travels as | Becomes |
 |---|---|---|
+| `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (the page replaced `START-HERE.txt`; checksums via `sha256sum -c`) |
 | `nixos-wsl.tar.gz` | stays packed | consumed by `wsl --import` — never extracted by hand |
-| `windows-kit-*.tar.gz` | stays packed | extracted by `UNPACK.ps1`; themes/templates installed |
+| `windows-kit-*.tar.gz` | stays packed | extracted by `UNPACK.ps1`; Zed/VS Code, themes/templates installed |
 | `wsl-rebuild.tar.gz` | packed until inside | extracted to `/var/cache/nix-transfer` by `setup-wsl.sh` |
 | `twentyx-airgap.bundle` | stays packed | `git clone`d — a bundle is a git remote, not an archive |
 | `nix-layer*.tar.gz`, `repo-layer.tar` | stay packed | consumed by `crane append` / CI — never opened by hand |
-| `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly |
+| `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly (`SETUP.ps1` chains the other two) |
 
 **Every later change** — edit in the WSL-side repo, commit, rebuild:
 
 ```bash
-# inside the distro (the repo lives on the durable home; the flake reads the
-# GIT TREE, so `git add` new files before rebuilding)
-wsl -d twentyx -u root -- nixos-rebuild switch --flake /home/jensen/twentyx-airgap#wsl
+# inside the distro, as the user (the repo lives on the durable home; the
+# flake reads the GIT TREE, so stage new files before rebuilding)
+rb                          # git add -A + sudo nixos-rebuild switch --flake <repo>#wsl
+# spelled out: sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl
 ```
 
 A config *edit* (not a new package) rebuilds offline in seconds — `writeText`
 and friends need no network. Adding a package is what needs a transfer.
 
 Daily drivers on WSL: Zed from Windows over its WSL remote (server ships in
-the closure), `opencode`, `runai` CLI once pinned — see
-`nix/packages/runai-cli.nix` for the recipe; the binary the RunAI UI offers is
-the right one (it matches the cluster's server version).
+the closure), VS Code Remote-WSL (kit client, pre-seeded server + extensions),
+`opencode`, `runai` CLI once pinned — see `nix/packages/runai-cli.nix` for
+the recipe; the binary the RunAI UI offers is the right one (it matches the
+cluster's server version).
 
 ## 2. Build the pod layers (connected machine)
 
@@ -144,13 +176,15 @@ carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/nix-layer.tar.gz` (+`-nvim`) | ~1070 / ~1087 MB | Artifactory → CI `crane append` |
+| `dist/twentyx-airgap-<VERSION>.tar.gz` | the whole flat folder | the one file carried in; extract, then `SETUP.ps1` |
+| `dist/README.md`, `dist/MANIFEST.txt`, `dist/SHA256SUMS` | KB | the Windows-side page, versions, `sha256sum -c` |
+| `dist/nix-layer.tar.gz` (+`-nvim`) | ~1.12 / ~1.14 GB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
-| `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.3 GB | `wsl --import` |
-| `dist/windows-kit-*.tar.gz` | ~435 MB | Windows: `UNPACK.ps1` (Zed, themes, templates, WSL2 MSI) |
-| `dist/wsl-rebuild.tar.gz` | ~107 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
-| `dist/twentyx-airgap.bundle` | ~276 KB | `git clone` inside the distro (real history) |
-| `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly — see §1 |
+| `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.5 GB | `wsl --import` |
+| `dist/windows-kit-*.tar.gz` | ~612 MB | Windows: Zed + VS Code + WSL2 MSI, themes, templates (`UNPACK.ps1`) |
+| `dist/wsl-rebuild.tar.gz` | ~299 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
+| `dist/twentyx-airgap.bundle` | ~308 KB | `git clone` inside the distro (real history) |
+| `dist/SETUP.ps1`, `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly (`SETUP.ps1` chains all three) — see §1 |
 
 The bases themselves never cross the gap (they are in the airgap registry and
 `crane` cross-mounts them) — see [`docker/BASE-IMAGES.md`](docker/BASE-IMAGES.md)
@@ -178,6 +212,15 @@ never pulled or unpacked.
 - **Base**: any internal flavor; `vscode-*` bases hand their ENTRYPOINT back
   automatically.
 
+### Where cluster-specific config goes
+
+The mount above is the pod's half of the contract; the WSL side has the
+parallel file story (gitignored `ca-bundle.crt` next to the flake, your own
+durable `~/.config` files). The full map — every setting, its lifetime, who
+consumes it, which changes need a transfer, and how to fold an inner
+(`tenx`-style) repo build into this toolchain — is
+[`docs/INNER-CONFIG.md`](docs/INNER-CONFIG.md).
+
 ## 6. First session in a pod
 
 ```bash
@@ -190,7 +233,7 @@ sudo podman images                                    # rootful podman, vfs prew
 Editors: `code-server` is in the closure and wins over the base's copy;
 a `vscode-*` workspace starts it via the base ENTRYPOINT. Zed remote connects
 through `scripts/ssh-bridge.sh` (WSL side) — see README "Zed remote, declared".
-The `-nvim` flavor adds pure nvim + treesitter (~1087 MB layer; its LSPs come
+The `-nvim` flavor adds pure nvim + treesitter (~1.14 GB layer; its LSPs come
 from the shared Nix-declared set that Zed also reads); plain ships `nano` as
 `EDITOR`.
 

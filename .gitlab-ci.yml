@@ -1,12 +1,14 @@
 # Runs INSIDE the airgap. Assembles images without ever pulling a pytorch base.
 #
 # This pipeline does not build the toolchain. The closure is computed and
-# built outside, carried in as two tarballs, and pushed to Artifactory once
-# per transfer. CI's job is to fetch them, tar this checkout as the repo
-# layer, and append.
+# built outside, carried in as two tarballs, and published to the project's
+# GitLab generic package registry (scripts/push-gitlab-packages.sh) once per
+# transfer; Artifactory remains the fallback. CI's job is to fetch them, tar
+# this checkout as the repo layer, and append.
 #
-#   nix-layer.tar.gz       from the transfer, via Artifactory   monthly
-#   repo-layer.tar         plain tar of this checkout           every commit
+#   nix-layer.tar.gz       from the transfer, GitLab packages
+#                          first, Artifactory on failure             monthly
+#   repo-layer.tar         plain tar of this checkout             every commit
 #
 # The pytorch bases are never pulled, so this runs in a small pod and does not
 # hit the ephemeral-storage limit that kills `FROM base-pytorch`.
@@ -43,16 +45,24 @@ assemble:
     # create the parent directory.
     - mkdir -p dist
     - |
-      # The layers push-artifactory.sh put in Artifactory. The version path
-      # derives from VERSION, so CI can never skew from push-artifactory.sh.
+      # The layers are published to the project's generic package registry by
+      # scripts/push-gitlab-packages.sh; Artifactory is the fallback. The
+      # version path derives from VERSION, so CI can never skew from the
+      # publisher.
       LAYER_BASE_URL="$ARTIFACTORY_URL/${ARTIFACTORY_GENERIC_REPO:-generic-local}/airgap/$(cat VERSION)"
       # The plain layer is a hard requirement; the nvim flavor is optional
       # (a transfer without it must not fail CI -- assemble.sh copes).
-      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-        -o dist/nix-layer.tar.gz "$LAYER_BASE_URL/nix-layer.tar.gz"
-      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-        -o dist/nix-layer-nvim.tar.gz "$LAYER_BASE_URL/nix-layer-nvim.tar.gz" ||
-        echo "note: nix-layer-nvim.tar.gz not in Artifactory -- plain flavor only"
+      curl -fSL --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-airgap/$(cat VERSION)/nix-layer.tar.gz" \
+        -o dist/nix-layer.tar.gz ||
+        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+          "$LAYER_BASE_URL/nix-layer.tar.gz" -o dist/nix-layer.tar.gz
+      curl -fSL --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-airgap/$(cat VERSION)/nix-layer-nvim.tar.gz" \
+        -o dist/nix-layer-nvim.tar.gz ||
+        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+          "$LAYER_BASE_URL/nix-layer-nvim.tar.gz" -o dist/nix-layer-nvim.tar.gz ||
+        echo "note: nix-layer-nvim.tar.gz not in GitLab packages or Artifactory -- plain flavor only"
     # Built here rather than carried: it is ~380 KB of this very checkout, and
     # rebuilding it is what makes a script change a one-commit deploy.
     - ./docker/mklayer.sh dist/repo-layer.tar

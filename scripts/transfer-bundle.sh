@@ -1,52 +1,73 @@
 #!/usr/bin/env bash
-# Transfer bundle: one directory, everything that crosses the gap.
+# Transfer bundle: one flat directory, then one carry tar, everything that
+# crosses the gap.
 #
 #   ./scripts/transfer-bundle.sh            # assembles/refreshes dist/
 #
-# Layout when done:
+# Layout when done (flat -- SETUP.ps1/UNPACK.ps1 expect artifacts at the top;
+# the carry tar has the same layout inside):
 #
 #   dist/
-#     nix-layer.tar.gz                  RunAI pod toolchain closure (plain)
-#     nix-layer-nvim.tar.gz             same + nvim flavor
-#     repo-layer.tar                    this repo's text layer
-#     nixos-wsl.tar.gz                  the NixOS-WSL rootfs for wsl --import
-#     windows-kit/windows-kit-*.tar.gz  one archive: Zed + WSL2 MSI, themes,
-#                                       client templates (Zed settings, WezTerm)
-#     twentyx-airgap.bundle             the repo as a git bundle: the WSL side
-#                                       clones it and has the real history
-#     UNPACK.ps1 / setup-wsl.sh         one-shot, idempotent setup: Windows
-#                                       side / inside the distro as root
-#     docs/                             user-facing docs (README, ARCHITECTURE,
-#                                       MANUAL, wsl/*, docker/*)
-#     START-HERE.txt                    the short page for other users
+#     twentyx-airgap-<VERSION>.tar.gz  the one file you carry
+#     README.md                        the page for other users
+#     MANIFEST.txt                     versions + build identity (sourceable)
+#     SHA256SUMS                       `sha256sum -c` compatible
+#     nix-layer.tar.gz                 RunAI pod toolchain closure (plain)
+#     nix-layer-nvim.tar.gz            same + nvim flavor
+#     repo-layer.tar                   this repo's text layer
+#     nixos-wsl.tar.gz                 the NixOS-WSL rootfs for wsl --import
+#     wsl-rebuild.tar.gz               delta cache for an EXISTING distro
+#     windows-kit-<zedVer>.tar.gz      Zed + VS Code + WSL2 MSI, themes,
+#                                      client templates (extract on Windows)
+#     twentyx-airgap.bundle            the repo as a git bundle (real history)
+#     SETUP.ps1 / UNPACK.ps1           Windows one-shot / kit unpacker
+#     setup-wsl.sh                     Linux-side one-shot (SETUP.ps1 runs it)
+#     docs/                            user-facing docs
+#
+# Staleness is guarded by derivation paths, not mtimes: dist/.wlldrv and
+# dist/.layerdrv record what each big artifact was built from, so a closure
+# change rebuilds exactly that artifact and a text-only commit rebuilds none.
+# The definitive reset is still one line:
+#
+#   rm -rf dist && ./scripts/transfer-bundle.sh
 #
 # Nothing needs root anywhere in this script: the NixOS-WSL tarball builder
 # self-elevates via a user namespace and the output is owned by whoever runs
-# it.
+# it. SKIP_CACHE=1 skips the (deliberately always-run) delta export.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT=dist
+VERSION="$(cat VERSION)"
+say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 mkdir -p "$OUT"
 
-say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
-
 # ── 1. the RunAI layers ───────────────────────────────────────────────────
-if [ ! -f "$OUT/nix-layer.tar.gz" ]; then
+# Both flavors, rebuilt together when either closure changes. build-layers.sh
+# builds in the persistent chroot store when it exists (NOTES.md §9).
+want_layers="$(nix eval --raw .#runai-layer.drvPath)
+$(nix eval --raw .#runai-layer-nvim.drvPath)"
+if [ ! -f "$OUT/nix-layer.tar.gz" ] || [ ! -f "$OUT/nix-layer-nvim.tar.gz" ] \
+    || [ "$(cat "$OUT/.layerdrv" 2>/dev/null || true)" != "$want_layers" ]; then
     ./scripts/build-layers.sh "$OUT"
+    printf '%s' "$want_layers" > "$OUT/.layerdrv"
 fi
 
 # ── 2. the NixOS-WSL root tarball ─────────────────────────────────────────
-# An existing tarball is not enough: if it predates a builder change it
-# must be rebuilt. The content probe is the guard — a healthy tarball
-# always carries the init shim; a stale one (pre-activation) does not.
+# Two guards, because existence alone is not enough: the content probe (a
+# healthy tarball always carries the init shim; a stale pre-activation one
+# does not) and the drvPath stamp (a closure change must rebuild it even
+# though the old file is a valid tarball).
 #
 # The `{ ... || true; }` group is load-bearing, the same SIGPIPE trap as
 # libexec/run-opencode: `grep -m1 -q` exits on first match, tar dies of
 # SIGPIPE (141), and pipefail turns a healthy probe into "stale" — which
 # rebuilt the 1.3 GB tarball on every run. The guard absorbs the producer's
 # 141; the decision stays with grep's own status.
-if [ ! -f "$OUT/nixos-wsl.tar.gz" ] || ! { tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/dev/null || true; } | grep -m1 -q '^\./bin/init$'; then
+want_wsl="$(nix eval --raw .#nixosConfigurations.wsl.config.system.build.toplevel.drvPath)"
+if [ ! -f "$OUT/nixos-wsl.tar.gz" ] \
+    || [ "$(cat "$OUT/.wlldrv" 2>/dev/null || true)" != "$want_wsl" ] \
+    || ! { tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/dev/null || true; } | grep -m1 -q '^\./bin/init$'; then
     rm -f "$OUT/nixos-wsl.tar.gz"
     say "building the NixOS-WSL tarball"
     # No --no-link here: the builder is invoked THROUGH ./result below, and a
@@ -56,28 +77,41 @@ if [ ! -f "$OUT/nixos-wsl.tar.gz" ] || ! { tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/d
     # output file is owned by the invoking user. -f in case the target
     # exists (stale or root-owned from older runs).
     ./result/bin/nixos-wsl-tarball-builder "$OUT/nixos-wsl.tar.gz"
+    printf '%s' "$want_wsl" > "$OUT/.wlldrv"
 fi
 
-# ── 3. the Windows kit ────────────────────────────────────────────────────
+# ── 3. the offline rebuild delta ──────────────────────────────────────────
+# ALWAYS regenerated: the earlier shape kept a stale one (it only rebuilt
+# artifacts when missing), and a delta that lags the closure is worse than
+# no delta — it makes a rolling update fail halfway. SKIP_CACHE=1 is the
+# deliberate escape hatch; see export-rebuild-cache.sh for the root policy.
+if [ -z "${SKIP_CACHE:-}" ]; then
+    say "exporting the offline rebuild cache"
+    ./scripts/export-rebuild-cache.sh
+fi
+
+# ── 4. the Windows kit ────────────────────────────────────────────────────
 say "collecting the windows kit"
 # One tar.gz: no bare .exe/.msi crosses the gap (email filters, USB scanners,
 # transfer policies). Windows extracts it with its built-in tar.exe.
 KIT="$(nix build .#windows-kit --no-link --print-out-paths)"
-mkdir -p "$OUT/windows-kit"
-# strip the store-hash prefix: ship it as a clean windows-kit-<ver>.tar.gz
 KITNAME="$(basename "$KIT")"
-cp -f "$KIT" "$OUT/windows-kit/${KITNAME#*-}"
+# Strip the store-hash prefix and copy FLAT: the old nested windows-kit/ dir
+# is what made UNPACK.ps1's lookup half-work.
+cp -f "$KIT" "$OUT/${KITNAME#*-}"
 
-# ── 4. the user-facing docs + the short one ───────────────────────────────
+# ── 5. the user-facing docs + the short page ──────────────────────────────
 # User-facing only: NOTES.md/TODO.md are machine-specific internals (store
 # repair, cluster placeholders, next steps) and do not cross the gap.
 say "carrying the documentation"
 # Wiped first: a shipped copy from an older run must never survive (NOTES.md/
-# TODO.md used to be in here), the same always-regenerate rule as START-HERE.
+# TODO.md used to be in here), the same always-regenerate rule as README.md.
 rm -rf "$OUT/docs"
 mkdir -p "$OUT/docs"
 cp README.md ARCHITECTURE.md MANUAL.md "$OUT/docs/"
-# The wsl/ tree is part of the WSL story; the pod tree gets its own.
+# docs/ is shipped wholesale (INNER-CONFIG.md lives there); the per-tree
+# readmes get flattened names so Windows tooling cannot trip on the tree.
+cp docs/*.md "$OUT/docs/"
 cp wsl/README.md "$OUT/docs/wsl-README.md"
 cp wsl/FIRST-BOOT.md "$OUT/docs/wsl-FIRST-BOOT.md"
 cp wsl/SMOKE-TEST.md "$OUT/docs/wsl-SMOKE-TEST.md"
@@ -85,188 +119,19 @@ cp wsl/SMOKE-TEST.md "$OUT/docs/wsl-SMOKE-TEST.md"
 mkdir -p "$OUT/docs/docker"
 cp docker/README.md docker/BASE-IMAGES.md "$OUT/docs/docker/"
 
-# Always regenerated: a shipped copy from an older run must never survive an
-# image/doc change. `if [ ! -f ]` here shipped stale instructions forever.
-cat > "$OUT/START-HERE.txt" <<'EOF'
-START HERE — the airgap toolchain, in one page
-==============================================
+# The short page: a repo file, not a heredoc, so it is reviewable and
+# diffable like everything else. Copied to dist/README.md so the folder and
+# the carry tar open on instructions, not on a directory listing.
+cp wsl/dist-readme.md "$OUT/README.md"
 
-What you got: a Linux workstation (NixOS inside WSL2) and the pod image
-for the RunAI GPU cluster, built to work with the network unplugged.
-Nothing in here downloads anything at runtime — everything needed was
-pinned and verified before crossing the gap.
-
-────────────────────────────────────────────────────────────────────
-FRESH START  (recommended — this folder is a complete, current bundle)
-────────────────────────────────────────────────────────────────────
-
-Everything below assumes C:\twentyx. A fresh import WIPES the old distro's
-home — that is the point: the packaged defaults (Zed LSP pins, btop theme,
-WezTerm/kit settings) get applied cleanly instead of being shadowed by
-half-configured leftovers.
-
-PowerShell (Administrator):
-
-  wsl --unregister twentyx
-  wsl --import twentyx C:\wsl\nixos nixos-wsl.tar.gz --version 2
-  wsl -d twentyx --cd /
-
-Two idempotent scripts do the mechanical parts (neither overwrites a
-personal file; details in docs\MANUAL.md):
-
-  # Windows side: extract the kit, install Zed themes + client templates
-  powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1
-
-  # Linux side, as root: clone the repo bundle into /home/jensen, import the
-  # offline rebuild cache, run the first nixos-rebuild (a no-op switch)
-  wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh
-
-Verify the repo landed (inside, as jensen):
-
-  cd ~/twentyx-airgap && git log --oneline -3
-
-Windows-side installs (windows-kit\windows-kit\, if UNPACK.ps1 did not):
-  Zed-x86_64-*-setup.exe     pinned to the closure's remote server
-  themes\*.json              copy into %APPDATA%\Zed\themes\
-  zed-client-settings.json   copy/merge into %APPDATA%\Zed\settings.json
-  zed-client-settings.personal-example.json
-                             a fuller client config (vim mode, which-key,
-                             Catppuccin, right-docked panels) to copy
-                             INSTEAD if you want that exact setup
-  wezterm.lua                copy to %USERPROFILE%\.wezterm.lua
-  wsl.*.x64.msi              only if WSL2 is missing (DISM lines + reboot)
-  (VS Code is NOT in the kit any more — Zed's WSL remote covers editing;
-   removing it cut ~500 MB from the image and ~220 MB from the kit.)
-
-EVERYDAY LOOP (after the one-time steps):
-
-  # edit/commit in ~/twentyx-airgap — the flake reads the GIT TREE, so
-  # `git add` new files before rebuilding. `rb` does exactly that (stage
-  # everything, then switch the system); it is the same command as on the
-  # connected machine:
-  rb
-
-  # the explicit form of the same thing:
-  wsl -d twentyx -u root -- nixos-rebuild switch --flake /home/jensen/twentyx-airgap#wsl
-
-No re-import, no transfer — confirm the offline promise once with the
-no-WWW rehearsal in docs\wsl-README.md.
-
-IF THE REBUILD FAILS
-  It names a missing store path. Send that exact path: it gets added to
-  wsl-rebuild.tar.gz (a 107 MB cache), never a 1.3 GB re-import.
-
-TEST EVERYTHING
-  docs\wsl-SMOKE-TEST.md is the checklist. For anything that fails, send
-  the command and its output (plus /var/log/bootlog.txt — NOT the old
-  airgap-bootlog.txt name — for anything boot- or session-related).
-
-────────────────────────────────────────────────────────────────────
-YOUR NOTES, ANSWERED  (2026-09-26 evening)
-────────────────────────────────────────────────────────────────────
-
-fish startup error (00-env.fish: "Expected a string, but found a
-redirection")?  A REAL bug in bootstrap, now fixed: the pod-side generator
-embedded a bash heredoc inside the FISH drop-in, so fish refused the whole
-file (no PATH, no env) and podman's storage.conf was never written. It bit
-your host because that generator had been run against the real home during a
-rehearsal (the scratch files are in /tmp/opencode: gen.sh, heredoc-test.fish).
-The polluted file has been removed, bootstrap writes storage.conf from bash
-now, and the container test asserts `fish -n` on the generated drop-in.
-
-Windows configs, version controlled?  Now yes:
-  nix/packages/windows/zed-client-settings.json and .../wezterm.lua are
-  repo files, copied into windows-kit on every build. Themes too (pinned
-  by hash to immutable commits): Tokyo Night, Catppuccin, Kanagawa,
-  Rose Pine, Nord, Dracula, Eldritch. Gruvbox ships inside Zed itself.
-  Your live copies on this laptop are also already updated (Zed settings:
-  auto_update off, telemetry off, extensions declared; WezTerm: kitty
-  keyboard on).
-
-sha sidecars: gone. Nothing writes or checks them any more.
-
-Zed still downloaded stuff / auto-updated itself?  Both explained from
-your own logs:
-  - 19:41 the client auto-updated to 1.21.0 and fetched that version's
-    server. auto_update is now OFF in your settings; if it ever applies a
-    pending update, reinstall the kit installer (it is pinned to 1.17.2,
-    the version whose remote server this closure ships).
-  - Node.js + basedpyright + ruff downloads at 16:51 came from the
-    packaged ~/.config/zed/settings.json being SHADOWED by a real
-    settings.json in your home. A fresh import starts without that file,
-    so the pins apply. On the current distro: check
-    `ls -l ~/.config/zed/settings.json` — symlink = ours (good), real
-    file = yours (merge the lsp/languages blocks from the packaged
-    default).
-  - json-language-server npm ENOTFOUND: Zed's built-in JSON support
-    npm-installs vscode-langservers-extracted. That package is in the
-    closure now and pinned in the settings, alongside yaml/taplo/bash.
-  - Prettier was being installed on format for JSON/JS/HTML/Markdown;
-    `"prettier": {"allowed": false}` in the packaged settings — nothing
-    here uses it.
-
-/var/log/airgap-bootlog.txt missing: the file is /var/log/bootlog.txt
-(and C:\twentyx\bootlog.txt). The old name in this file was stale; fixed.
-
-opencode slow to open: it ran on the old distro before this round's fixes
-(no PATH wrap, no pinned LSPs). Re-test after the fresh start; if it still
-stalls, send ~/.local/share/opencode/log/*.log — that names the step.
-
-Zed agent: the packaged default has opencode over ACP, and Terminal
-Threads (agent panel -> New Thread -> Terminal) start opencode immediately
-via agent.terminal_init_command -- the plain TUI, same binary.
-
-Python 3.12 only: deliberate (one interpreter; uv builds pinned 3.11
-venvs by itself). Adding 3.11 is a closure change and a new transfer.
-
-────────────────────────────────────────────────────────────────────
-HISTORY (why things look the way they do)
-────────────────────────────────────────────────────────────────────
-
-BUILD #3 — first boot fixed: the imported distro's "/" was mode 0700
-(mktemp root + tar ./ entry + WSL import). Every non-root process got
-EACCES traversing absolute paths; root bypassed it via DAC_OVERRIDE,
-which is why every dbus fix looked right but wasn't. The builder now
-enforces "every directory a+rx" for the whole tree and FAILS the build on
-violation. dbus implementation reverted to the NixOS default; the
-journal-chmod unit removed.
-
-POLISH ROUND — nvim LSP argv fixed (ruff server, taplo lsp stdio,
-yaml-language-server --stdio, basedpyright-langserver --stdio,
-bash-language-server start), completion per attached client ("invalid
-client ID" gone), nixd settings object; btop tokyo-night; Zed pins;
-WezTerm kitty keyboard protocol (shift+enter).
-
-DEEP DIVE — the Zed remote-server lookup is EXACT-MATCH on the client's
-full version string (build metadata included); the shim is generated from
-nix/zed-client-version.nix (the kit installer's build). The ".gz" in
-client logs is a PID-suffixed temp upload, not the name.
-
-THIS ROUND — LSPs declared once (nix/modules/lsp.nix) and routed to
-everything, opencode wrapped with them on PATH, JSON LSP added; VS Code
-removed (kit + image); Windows templates + themes in the kit; repo now
-ships as a git bundle.
-
-SYNC ROUND (2026-09-27) — the WSL side now mirrors the connected machine's
-daily setup: workmux (worktrees + tmux for parallel agents) with its
-opencode status plugin, the full tmux config on a static Tokyo Night theme
-(including extended-keys, so Ctrl-hjkl works with the kit's WezTerm),
-opencode skills vendored from the pinned matt-skills input, yazi /
-lazydocker / podman-compose / gcc / nodejs / bubblewrap, and `rb` for the
-one-command offline rebuild. Passwordless sudo for wheel (the password is
-locked anyway). Cluster facts in .gitlab-ci.yml are now clearly CI-variable
-defaults, with the Artifactory path derived from VERSION.
-────────────────────────────────────────────────────────────────────
-EOF
-
-# ── 5. the one-shot setup scripts ─────────────────────────────────────────
-# Both are idempotent and non-destructive: UNPACK.ps1 runs on Windows (extract
-# the kit, install themes/templates), setup-wsl.sh runs inside the distro as
-# root (clone the bundle, import the cache, rebuild). See MANUAL.md.
+# ── 6. the one-shot setup scripts ─────────────────────────────────────────
+# Idempotent and non-destructive: SETUP.ps1 drives the Windows side (import +
+# UNPACK.ps1) and then setup-wsl.sh inside the distro (clone the bundle,
+# import the cache, rebuild). See MANUAL.md.
 say "carrying the setup scripts"
-cp scripts/windows/UNPACK.ps1 scripts/setup-wsl.sh "$OUT/"
+cp scripts/windows/UNPACK.ps1 scripts/windows/SETUP.ps1 scripts/setup-wsl.sh "$OUT/"
 
-# ── 6. the repo itself, as a git bundle ───────────────────────────────────
+# ── 7. the repo itself, as a git bundle ───────────────────────────────────
 # The WSL side clones this (`git clone /mnt/c/twentyx/twentyx-airgap.bundle`)
 # and has the real history -- commits, diffs, bisect -- not a tar of the
 # working tree. Committed state only, text only, a few hundred KB.
@@ -277,7 +142,56 @@ cp scripts/windows/UNPACK.ps1 scripts/setup-wsl.sh "$OUT/"
 say "bundling the repo"
 git bundle create "$OUT/twentyx-airgap.bundle" --branches --tags >/dev/null
 
-# ── 7. the bundle at a glance ─────────────────────────────────────────────
+# ── 8. manifest + checksums ───────────────────────────────────────────────
+# The manifest is shell-sourceable (setup-wsl.sh may use VSCODE_COMMIT etc.);
+# the checksums are in a second file so `sha256sum -c SHA256SUMS` stays exact.
+say "writing MANIFEST.txt + SHA256SUMS"
+META="$(nix eval --json --impure --expr "$(cat <<'EXPR'
+let
+  f = builtins.getFlake (toString ./.);
+  pkgs = import "${f.inputs.nixpkgs}" { };
+  vscode = import (toString ./. + "/nix/vscode-version.nix") { inherit pkgs; };
+in {
+  opencode = pkgs.opencode.version;
+  vscode = vscode.version;
+  vscodeCommit = vscode.commit;
+  zed = pkgs.zed-editor.version;
+}
+EXPR
+)")"
+{
+    echo "# twentyx-airgap transfer manifest -- generated by scripts/transfer-bundle.sh"
+    echo "# KEY=value lines are shell-sourceable; file hashes are in SHA256SUMS."
+    echo "VERSION=$VERSION"
+    echo "OPENCODE_VERSION=$(jq -r .opencode <<<"$META")"
+    echo "VSCODE_VERSION=$(jq -r .vscode <<<"$META")"
+    echo "VSCODE_COMMIT=$(jq -r .vscodeCommit <<<"$META")"
+    echo "ZED_VERSION=$(jq -r .zed <<<"$META")"
+    echo "NIXPKGS_REV=$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+    echo "GIT_REV=$(git rev-parse HEAD)"
+    echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)"
+    echo "GIT_DIRTY=$([ -n "$(git status --porcelain)" ] && echo yes || echo no)"
+    echo "BUILT_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+} > "$OUT/MANIFEST.txt"
+
+# Everything except the stamps and the carry tar itself (which cannot hash
+# itself); hidden files are internal build stamps and do not ship.
+(
+    cd "$OUT"
+    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name 'twentyx-airgap-*.tar.gz' -print0 \
+        | sort -z | xargs -0 sha256sum
+) > "$OUT/SHA256SUMS"
+
+# ── 9. one flat carry tar ─────────────────────────────────────────────────
+# Written to /tmp first: packing a directory into a file inside itself is a
+# trap (tar would archive the partial file, or refuse it). Stamps excluded.
+say "packing $OUT/twentyx-airgap-$VERSION.tar.gz"
+rm -f "$OUT"/twentyx-airgap-*.tar.gz
+TMP_OUTER="$(mktemp /tmp/twentyx-airgap-XXXXXX.tar.gz)"
+tar -C "$OUT" -czf "$TMP_OUTER" --sort=name --exclude='./.*' .
+mv -f "$TMP_OUTER" "$OUT/twentyx-airgap-$VERSION.tar.gz"
+
+# ── 10. the bundle at a glance ────────────────────────────────────────────
 cd "$OUT"
 say "bundle contents:"
-du -h nix-layer.tar.gz nix-layer-nvim.tar.gz repo-layer.tar nixos-wsl.tar.gz twentyx-airgap.bundle windows-kit 2>/dev/null | sort -k2
+du -h ./* 2>/dev/null | sort -k2

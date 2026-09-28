@@ -33,10 +33,45 @@ let
   haveCaBundle = builtins.pathExists caBundle;
 
   # ── Windows-side assets ─────────────────────────────────────────────────
-  # The kit (Zed installer, themes, client settings templates, WSL2 MSI) is
-  # built by .#windows-kit; the WSL side itself needs nothing from it: Zed's
-  # WSL remote covers editing from Windows, and its server ships in this
-  # closure.
+  # The kit (Zed installer, themes, client settings templates, WSL2 MSI,
+  # VS Code) is built by .#windows-kit; the WSL side itself needs nothing from
+  # it: Zed's WSL remote covers editing from Windows, and its server ships in
+  # this closure.
+
+  # ── VS Code (Microsoft, Remote-WSL) ─────────────────────────────────────
+  # The Windows client is Microsoft VS Code, and its Remote-WSL extension
+  # demands a server for the client's exact commit (`code --version`), which
+  # cannot be downloaded here. nix/vscode-version.nix pins the release whose
+  # Windows installer the kit ships and whose Linux server is pre-seeded
+  # below; nix/vscode-extensions.nix pins the .vsix set, with engine ranges
+  # checked against that release's version.
+  vscode = import ../vscode-version.nix { inherit pkgs; };
+  vscodeExtensions = import ../vscode-extensions.nix { inherit pkgs; };
+  vscodeServerTar = pkgs.fetchurl {
+    inherit (vscode.server) url name hash;
+  };
+  vscodeServerDir = "/home/${username}/.vscode-server/bin/${vscode.commit}";
+
+  # Remote (WSL-side) machine settings: the language-server pins, pointing at
+  # the SAME closure binaries Zed and nvim use, plus the schema fetches that
+  # must stay off. Client-level settings (updater off, telemetry) travel with
+  # the Windows kit instead -- see nix/packages/windows/vscode-settings.json.
+  vscodeRemoteSettings = (pkgs.formats.json { }).generate "vscode-remote-settings.json" {
+    "ruff.path" = [ "${pkgs.ruff}/bin/ruff" ];
+    "nix.enableLanguageServer" = true;
+    "nix.serverPath" = "${pkgs.nixd}/bin/nixd";
+    "json.schemaDownload.enable" = false;
+    "yaml.schemaStore.enable" = false;
+    "extensions.autoUpdate" = false;
+    "extensions.autoCheckUpdates" = false;
+    "telemetry.telemetryLevel" = "off";
+  };
+
+  # The .vsix set as one list and one stamp. The stamp makes the seeding
+  # service a no-op after its first successful run, and makes it run again
+  # only when a transfer changes the set.
+  vsixPaths = map (e: "${e.src}") vscodeExtensions;
+  vsixStamp = builtins.hashString "sha256" (lib.concatStringsSep "\n" vsixPaths);
 
   # WSL-registry files the upstream tarballBuilder installs into the tarball.
   # wsl-distribution.conf is what makes `wsl --import` register the distro
@@ -66,6 +101,17 @@ let
   '';
 in
 {
+  imports = [
+    # Remote-WSL support for the Microsoft server: a user service that patches
+    # the bundled node of each server install (interpreter + RPATH, plus the
+    # vsce-sign libssl fix) as it appears. Without it the server's node cannot
+    # exec on NixOS, and patching after first connect is a race the client
+    # loses.
+    inputs.nixos-vscode-server.nixosModules.default
+  ];
+
+  services.vscode-server.enable = true;
+
   wsl = {
     enable = true;
     defaultUser = username;
@@ -162,6 +208,11 @@ in
     # password logins outright.
     hashedPassword = "*";
     shell = pkgs.bash; # login shell stays bash; fish is exec'd interactively
+    # The VS Code server-patching service is a USER unit (nixos-vscode-server),
+    # and the patch must be in place before the first Remote-WSL connect: a
+    # user manager started at boot does that, one started by the session races
+    # the client.
+    linger = true;
     extraGroups = [
       "wheel"
       "podman"
@@ -230,6 +281,73 @@ in
   services.openssh = {
     enable = true;
     settings.PasswordAuthentication = false;
+  };
+
+  # ── VS Code (Remote-WSL): pre-seed server + extensions + pins ──────────
+  # The server tarball is pinned in nix/vscode-version.nix. The activation
+  # extracts it into the user's home only when absent (the $HOME layering
+  # rule: real files are the user's; this is a packaged default), and writes
+  # the remote machine settings carrying the LSP pins.
+  system.activationScripts.vscodeServerSeed = lib.stringAfter [ "users" ] ''
+    commit="${vscode.commit}"
+    home="/home/${username}"
+    seed="$home/.vscode-server/bin/$commit"
+    if [ ! -x "$seed/bin/code-server" ]; then
+      # Absent or incomplete (a failed earlier extraction leaves the empty
+      # dir): re-extract. Only our own packaged default is ever touched --
+      # a working server at this commit is left alone.
+      rm -rf "$seed"
+      mkdir -p "$seed"
+      # tar is NOT on the activation PATH -- measured: the first image
+      # shipped an empty seed directory because the extraction silently
+      # failed. Name the closure binaries explicitly; gzip rides along for
+      # -z.
+      PATH="${pkgs.gnutar}/bin:${pkgs.gzip}/bin:$PATH" \
+        ${pkgs.gnutar}/bin/tar -xzf ${vscodeServerTar} -C "$seed" --strip-components=1
+      # The tarball builder's user namespace maps only uid 0, so chown to the
+      # real user returns EINVAL there; systemd-tmpfiles `z` re-owns the home
+      # on the first real boot. Never fail an activation on it.
+      chown -R ${username}:users "$home/.vscode-server" 2>/dev/null || true
+    fi
+    settings="$home/.vscode-server/data/Machine/settings.json"
+    if [ ! -e "$settings" ]; then
+      install -d "$home/.vscode-server/data/Machine"
+      install -m 0644 ${vscodeRemoteSettings} "$settings"
+    fi
+  '';
+
+  # The extensions are installed with the server's own CLI, which keeps the
+  # extensions.json bookkeeping correct. Oneshot as the user; the stamp makes
+  # it a no-op once the set is installed, and re-runs it after a transfer
+  # that changes the set. The auto-fix service patches node in parallel --
+  # either order works (nix-ld covers the unpatched window).
+  systemd.services.vscode-extensions = {
+    description = "Seed pinned VS Code extensions into ~/.vscode-server";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "systemd-tmpfiles-setup.service" ];
+    unitConfig.ConditionPathExists = "${vscodeServerDir}/bin/code-server";
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      User = username;
+      Group = "users";
+    };
+    path = [
+      pkgs.coreutils
+      pkgs.bash
+    ];
+    script = ''
+      set -euo pipefail
+      stamp="$HOME/.vscode-server/.airgap-vsix"
+      want="${vsixStamp}"
+      if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+        exit 0
+      fi
+      for vsix in ${lib.concatStringsSep " " vsixPaths}; do
+        ${vscodeServerDir}/bin/code-server --install-extension "$vsix" --force
+      done
+      printf '%s\n' "$want" > "$stamp"
+    '';
   };
   # ── git: neutral settings, system scope ────────────────────────────────
   # Same file the repo layer ships into pods (docker/mklayer.sh) — keep the

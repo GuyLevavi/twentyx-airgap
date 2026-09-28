@@ -48,12 +48,21 @@ Three artifact classes, three mechanisms:
 | Artifact | Made by | Lands in |
 |---|---|---|
 | Binary-cache chunks | `scripts/nix-export.sh` (outside) → `nix-import.sh` (inside) | the WSL Nix store |
-| Layer tarballs | `scripts/build-layers.sh` → `push-artifactory.sh` | registry, appended onto base images by CI |
+| Layer tarballs | `scripts/build-layers.sh` → `push-gitlab-packages.sh` (Artifactory fallback) | GitLab generic packages, appended onto base images by CI |
 | The WSL root tarball | `nix build .#wsl-tarball` | `wsl --import` on Windows |
 
+`scripts/transfer-bundle.sh` assembles all of them into one flat `dist/` and
+packs the single file that physically crosses the gap:
+`twentyx-airgap-<VERSION>.tar.gz`, with a `MANIFEST.txt` (versions, git rev)
+and `SHA256SUMS`. Windows extracts it and runs one script — `SETUP.ps1`
+imports the rootfs, unpacks the kit, and runs `setup-wsl.sh` inside the
+distro.
+
 Chunks are content-addressed, so they transfer in any order and reassemble by
-hash. There is deliberately no signing and no checksum sidecars: Nix verifies
-per store path, which is stronger than a tarball signature anyway.
+hash. There is deliberately no signing: Nix verifies per store path, which is
+stronger than a tarball signature anyway. The `SHA256SUMS` in the transfer
+folder is a post-copy convenience (`sha256sum -c`), not the trust anchor —
+the store path hash is what the pod trusts.
 
 ## How the pod image is assembled (and why not Dockerfile)
 
@@ -104,7 +113,10 @@ The `$HOME` rule to remember: **a symlink into `/nix/store` is ours, a real
 file is the user's.** Packaged defaults are per-file symlinks; the user's PVC
 files shadow them; and because overlayfs merges directories across layers,
 the 380 KB repo layer can override individual defaults per commit — a
-fleet-wide config change without a transfer.
+fleet-wide config change without a transfer. Zed's default is the worked
+example: `home.nix` composes it at eval time from the tracked personal file
+plus dynamic store-path pins, because a pin hardcoded in a static file goes
+stale the moment nixpkgs moves.
 
 Cluster-specific files (internal CA, pip.conf) are never baked in: they arrive
 at `/opt/airgap-env` (ConfigMap mount) or `/data/.airgap-env` (PVC), and
@@ -120,12 +132,18 @@ changes (generated files: starship, tmux, fish, …) rebuild in seconds without
 any fetch; only adding a package needs a transfer — which is the whole
 economic model: cheap text pushes, rare fat transfers.
 
+The Windows side is one script (`SETUP.ps1`): rootfs import, the kit (Zed and
+Microsoft VS Code — both pinned, with the VS Code Remote-WSL server
+pre-seeded into the distro's home), then the Linux half. Updaters stay off on
+both editors: the pre-seeded server matches the kit client's exact commit,
+and a rebuilt server is a transfer.
+
 ## Reading order
 
 | # | File | What you will learn |
 |---|---|---|
 | 1 | `flake.nix` | the two targets, pinned inputs, what each flake output is |
-| 2 | `nix/modules/home.nix` | the shared config, session env, zed-remote, EDITOR gating |
+| 2 | `nix/modules/home.nix` | the shared config, session env, the composed Zed defaults, EDITOR gating |
 | 3 | `nix/modules/tools.nix` | the package list, why each group exists, closure-cost comments |
 | 4 | `nix/modules/shell.nix` + `nvim.nix` | generated shell + editor configs |
 | 5 | `nix/hosts/wsl.nix` | the WSL system: substituters, nix-ld, sshd, podman, CA |
@@ -134,7 +152,7 @@ economic model: cheap text pushes, rare fat transfers.
 | 8 | `libexec/common.sh` | identity chain, HOME resolution, env-injection contract |
 | 9 | `libexec/entrypoint` → `bootstrap` → `run-opencode` → `doctor` | the pod boot chain, in that order |
 | 10 | `agent/plugins/preload.ts` + `agent/restore-preload.sh` | the child-restore half of the preload split |
-| 11 | `scripts/` (build-layers, nix-export, nix-import, push-artifactory, ssh-bridge) | the transfer flows |
+| 11 | `scripts/` (transfer-bundle, build-layers, nix-export, nix-import, push-gitlab-packages, ssh-bridge) | the transfer flows |
 | 12 | `tests/test-container.sh` | the problematic pod, reproduced locally |
 | 13 | `NOTES.md` | why things are the way they are — the failures behind the comments |
 

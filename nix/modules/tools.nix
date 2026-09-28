@@ -13,14 +13,36 @@ let
   # One declaration for every editor — see nix/modules/lsp.nix.
   lspPackages = import ./lsp.nix { inherit pkgs; };
 
+  # nixpkgs patchelf's bun (it must, to point PT_INTERP at the store), and
+  # patchelf's header sort moves PT_GNU_STACK to the front of the table.
+  # `bun build --compile` recycles the PT_GNU_STACK *slot* for its payload,
+  # so the compiled opencode lists its highest-vaddr PT_LOAD first. Linux
+  # <= 6.6 (WSL2's kernel; RHEL 8/9 cluster nodes at 4.18/5.14) then never
+  # maps the BSS and SIGSEGVs in ld.so before main. The tool is both the fix
+  # and the guard: postFixup reorders the LOADs by address and fails the
+  # build if the result is still unsafe. Full story in the script header.
+  fixPhdrOrder = pkgs.runCommand "fix-phdr-order" {
+    nativeBuildInputs = [ pkgs.python3 ];
+  } ''
+    install -Dm755 ${../scripts/fix-phdr-order.py} $out/bin/fix-phdr-order
+    patchShebangs $out/bin/fix-phdr-order
+  '';
+
+  opencodeFixed = pkgs.opencode.overrideAttrs (old: {
+    nativeBuildInputs = old.nativeBuildInputs ++ [ fixPhdrOrder ];
+    postFixup = (old.postFixup or "") + ''
+      fix-phdr-order $out/bin/.opencode-wrapped
+    '';
+  });
+
   # opencode ships only ripgrep on its PATH (nixpkgs opencode/package.nix),
   # so its `lsp` config would fall back to runtime downloads — a hang in the
   # gap. Re-wrap the existing binary with the shared servers on PATH; the
   # symlinkJoin avoids an overrideAttrs source rebuild. Same shape as
   # /etc/nixos home/programs.nix.
   opencodeWithLsp = pkgs.symlinkJoin {
-    name = "opencode-${pkgs.opencode.version}";
-    paths = [ pkgs.opencode ];
+    name = "opencode-${opencodeFixed.version}";
+    paths = [ opencodeFixed ];
     nativeBuildInputs = [ pkgs.makeWrapper ];
     postBuild = ''
       wrapProgram $out/bin/opencode \
@@ -103,10 +125,11 @@ in
       # ── agent ──────────────────────────────────────────────────────────
       # opencode from nixpkgs is built from source (bun --compile): autoupdate
       # is disabled by the wrapper and the models.dev catalog is baked in at
-      # build time, so it runs fully offline. One caveat that cannot be seen
+      # build time, so it runs fully offline. Two caveats that cannot be seen
       # from here: the compiled binary targets x86-64-v3 (AVX2) and will SIGILL
       # on pre-Haswell cluster nodes -- if a node ever dies this way, the fix
-      # is a local overlay building the --baseline variant, not a downgrade.
+      # is a local overlay building the --baseline variant, not a downgrade --
+      # and its ELF headers need the kernel<=6.6 repair from opencodeFixed.
       # Shipped wrapped so its LSPs spawn the shared closure binaries by name.
       opencodeWithLsp
 
@@ -231,6 +254,12 @@ in
       statix
       deadnix
       nix-tree # how you will answer "why is this closure 700 MB"
+
+      # nvim's :checkhealth wants tree-sitter-cli; on the airgap machine the
+      # health check is the only parser-diagnosis route, and a fetch it
+      # cannot do is exactly what it is there to flag. WSL only -- a pod's
+      # nvim flavor ships its grammars prebuilt and carries no Nix.
+      tree-sitter
 
       # Obsidian-style markdown LSP (wikilinks, backlinks, daily notes) for
       # the vault. Zed's extension resolves the binary from PATH first, so

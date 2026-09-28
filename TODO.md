@@ -5,7 +5,20 @@ machine; steps marked **[gap]** can only happen inside the airgapped
 environment. Nothing here is optional hand-waving — each item is the exact
 command or decision.
 
-## State (2026-09-27, after `791a598` — the debloat merge)
+## State (2026-09-28 — round in the working tree, after `0125acf`)
+
+- Round 2026-09-28 (uncommitted working tree): the first-remote-test fixes.
+  opencode gets the kernel<=6.6 program-header repair (`opencodeFixed`), the
+  Zed settings are composed so the LSP pins cannot be shadowed by the tracked
+  personal file, tmux spawns fish directly, and VS Code returns to the WSL
+  side pinned end to end (client installer ↔ server commit ↔ extension
+  engines ↔ a code-server lockstep `throw`). The transfer is re-shaped: flat
+  `dist/`, one outer carry tar, `MANIFEST.txt` + `SHA256SUMS`, drvPath
+  staleness stamps, always-regenerated delta, `SETUP.ps1`. Container test:
+  21 checks (2 new — PT_LOAD order, the Zed pins). Mechanisms: NOTES.md §12;
+  user-facing index: `wsl/dist-readme.md` -> `dist/README.md`.
+
+### Previous state (2026-09-27, after `791a598` — the debloat merge)
 
 - The debloat branch is merged (rebased, fast-forward): closures trimmed
   (nvim ruby/python/wayland off, fish python off, idle tools out), fixes in
@@ -60,9 +73,10 @@ command or decision.
 
 By decision (2026-09-27): every cluster fact is a CI variable set on the
 airgap's GitLab (project/group variables beat `.gitlab-ci.yml`). The file
-only carries readable defaults, and the Artifactory path now derives from
-`VERSION` — it can no longer skew from `push-artifactory.sh`. Artifactory
-stays as the in-gap layer transport for now.
+only carries readable defaults, and the versioned paths derive from `VERSION`
+— they can no longer skew from the publisher. Since 2026-09-28 the primary
+in-gap layer transport is GitLab generic packages
+(`push-gitlab-packages.sh`); Artifactory stays as the fallback.
 
 - [ ] **[gap]** Set the real values in the airgap GitLab: `BASE_REGISTRY`,
       `BASE_TAG` (pin per transfer — digest or date-stamped tag; `latest`
@@ -70,18 +84,24 @@ stays as the in-gap layer transport for now.
       `ARTIFACTORY_TOKEN`.
 - [ ] **[gap]** Pin the CI lint image (`koalaman/shellcheck-alpine:stable`
       → digest) when it goes through the internal mirror.
+- [ ] **[gap]** Before the first generic-package push, check the GitLab
+      instance's max package size (Admin > Settings > Preferences,
+      `max_package_size`) — it may cap below the multi-GB layer size. The
+      header of `scripts/push-gitlab-packages.sh` has the details; if a layer
+      does not fit, keep `push-artifactory.sh` as the publisher (the CI
+      fallback path is already wired).
 
 ## 2. First transfer (NOTES.md §5 — deliberately small)
 
 - [ ] **Outside**, assemble everything in one shot (both tracks — layers, WSL
-      tarball, git bundle, kit, docs, scripts):
+      tarball, git bundle, kit, docs, scripts), then carry the one outer tar:
 
       ```bash
-      ./scripts/transfer-bundle.sh       # -> dist/, then carry dist/ to C:\twentyx
+      ./scripts/transfer-bundle.sh       # -> dist/ + dist/twentyx-airgap-<VERSION>.tar.gz
       ```
 
       Layers only — the script always builds both flavors; for the first
-      transfer carry only the plain one — `assemble.sh` copes without
+      transfer publish only the plain one — `assemble.sh` copes without
       `nix-layer-nvim.tar.gz`:
 
       ```bash
@@ -92,8 +112,20 @@ stays as the in-gap layer transport for now.
       store hash; `nix/hosts/wsl.nix` already degrades to `require-sigs = false`
       when `cache-pubkey` is absent.
 
-- [ ] Carry `dist/nix-layer.tar.gz` across physically.
-- [ ] **[gap]** Push to Artifactory:
+- [ ] Carry `dist/twentyx-airgap-<VERSION>.tar.gz` across physically (it
+      contains `nix-layer.tar.gz`).
+- [ ] **[gap]** Publish the transfer artifacts — GitLab generic packages is
+      the primary path now, Artifactory the fallback. Run it after this
+      round is reviewed/committed, so the published layers match the repo:
+
+      ```bash
+      export GITLAB_TOKEN=... GITLAB_PROJECT=<id|group/project>   # or the CI env
+      ./scripts/push-gitlab-packages.sh dist
+      ```
+
+      then delete stale `twentyx-airgap` package versions in GitLab — the
+      registry accumulates, and CI fetches exactly `<VERSION>`. Artifactory
+      stays available:
 
       ```bash
       export ARTIFACTORY_URL=https://artifactory.internal/artifactory   # real URL
@@ -158,20 +190,25 @@ first connect to a real pod.
 - [x] First artifact built and imported on the real machine (2026-09-26):
       `C:\WSL\nixos\ext4.vhdx`, first boot fixed (NOTES.md §11). Everything
       needed for a fresh machine ships in `C:\twentyx`.
-- [ ] Fresh import on a new machine (skip if keeping the current distro):
+- [ ] Fresh import on a new machine (skip if keeping the current distro).
+      Extract the outer tar on Windows, then from an elevated PowerShell:
 
       ```powershell
-      powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1   # Windows: kit, themes, templates
-      wsl --import twentyx C:\WSL\nixos C:\twentyx\nixos-wsl.tar.gz --version 2
+      powershell -ExecutionPolicy Bypass -File .\SETUP.ps1
       ```
 
-      then inside, as root:
+      SETUP.ps1 is the whole chain now: `wsl --import` (skipped when the
+      distro exists), UNPACK.ps1 (kit: Zed + VS Code + themes + templates),
+      then `setup-wsl.sh` as root inside the distro (clone the bundle, import
+      the delta, rebuild as the user via sudo). It takes `-Base <dir>`, so it
+      no longer assumes `C:\twentyx`. Put `ca-bundle.crt` and `wsl-username`
+      in the transfer first — both are gitignored; `setup-wsl.sh` copies and
+      `git add -f`s them so the flake source tree sees them.
 
-      ```bash
-      wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh
-      ```
-
-- [ ] Prove the offline loop (now scripted; `setup-wsl.sh` runs steps 2–3):
+- [ ] Rolling update on the existing distro (the cheap path, never tested
+      end to end yet): carry `twentyx-airgap.bundle` + the ALWAYS-regenerated
+      `wsl-rebuild.tar.gz`, re-run `setup-wsl.sh`, and rebuild with the
+      network down. The manual equivalent, if you want to see each step:
 
       ```bash
       ./scripts/export-rebuild-cache.sh    # outside -> dist/wsl-rebuild.tar.gz
@@ -181,11 +218,21 @@ first connect to a real pod.
       #   nixos-rebuild switch --flake /home/jensen/twentyx-airgap#wsl   # network down
       ```
 
-- [ ] Copy the kit's themes into `%APPDATA%\Zed\themes\` and
-      zed-client-settings.json into `%APPDATA%\Zed\settings.json` (UNPACK.ps1
-      does both; a real settings file wins and gets a `.example` beside it),
-      keeping Zed auto-update off (the closure's server moves only when the
-      kit installer + nix/zed-client-version.nix move together).
+      A missing store path names the next delta root — add it to
+      `wslDeltaRoots` in `flake.nix` (or the list in
+      `scripts/export-rebuild-cache.sh`) and re-export.
+
+- [ ] First boot after the import: confirm `nixos-vscode-server`'s node patch
+      actually ran before the first Remote-WSL connect (`linger = true` +
+      service ordering). If the client uploads its own server or node cannot
+      exec, the user service's journal names the step; the auto-fix is what
+      keeps the pre-seeded server usable on NixOS.
+
+- [ ] Copy the kit's Zed themes/settings **and** the VS Code installer +
+      settings into place (SETUP.ps1 / UNPACK.ps1 do all of it; a real
+      settings file wins and gets a `.example` beside it). Keep Zed and VS
+      Code auto-update off: the closure's Zed server and the pre-seeded VS
+      Code server move only when the kit + pins move together.
 - [ ] Install the runai CLI for the bridge client side. Preferred: the exact
       Linux executable the RunAI UI offers (it matches your cluster's server
       version). Make it a pinned, declared derivation instead of a stray
@@ -203,6 +250,11 @@ first connect to a real pod.
 ## 6. After the first transfer
 
 - [ ] Move to `-nvim` flavor and all four base variants if needed.
+- [ ] On the next nixpkgs bump: the lockstep `throw` in
+      `nix/vscode-version.nix` forces the VS Code re-pin (version + commit +
+      both hashes). While re-pinning, re-check every `engines.vscode` range
+      and the extension list in `nix/vscode-extensions.nix` against the new
+      release — the file records the ranges verified 2026-09.
 - [ ] `/tmp/airgap-test-store` served as the donor and fallback during the
       store repair (NOTES.md §9). Keep it as the throwaway build store —
       do not retire it while it is the only place that can rebuild if the

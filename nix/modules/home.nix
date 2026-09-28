@@ -241,115 +241,103 @@ in
       # with the pins in effect nothing appears under
       # ~/.local/share/zed/{node,languages} and the nix binaries serve.
       # The servers themselves come from nix/modules/lsp.nix (the same list
-      # fish, nvim and the opencode PATH see); bootstrap never clobbers a real
-      # settings.json on the PVC — merge the lsp/languages blocks into yours
-      # by hand if you already configured Zed (check with
-      # `ls -l ~/.config/zed/settings.json`: a symlink is ours, a real file is
-      # yours and wins).
+      # fish, nvim and the opencode PATH see).
       #
-      # PER-MACHINE personal config: a gitignored `zed-settings.json` next to
-      # the flake (same pattern as wsl-username / ca-bundle.crt) replaces
-      # this packaged default entirely -- one team member's fonts/themes do
-      # not ship to everyone. The airgap blocks below (languages wiring,
-      # telemetry off) are safe to lose only on a machine that carries the
-      # personal file deliberately; pods read the same packaged default, so
-      # a builder's personal file leaks into the layer only where the file
-      # exists. On a pod, the durable per-user route is a real
-      # settings.json on the PVC -- it shadows this default forever.
+      # The personal look lives in the tracked zed-settings.json next to the
+      # flake, but the pins CANNOT live in a static file: store paths move
+      # when nixpkgs moves, and a hardcoded /nix/store path would silently
+      # point at something the next transfer does not carry. So the shipped
+      # settings are composed here -- personal file first, dynamic pins over
+      # it -- and are a per-file symlink like every other packaged default.
+      # bootstrap never clobbers a real settings.json on the PVC; merge the
+      # lsp/languages blocks into yours by hand if you already configured
+      # Zed (check with `ls -l ~/.config/zed/settings.json`: a symlink is
+      # ours, a real file is yours and wins).
       (
         let
           zedSettingsFile = ../../zed-settings.json;
+          # Strict JSON (builtins.fromJSON): no comments in that file.
+          personal =
+            if builtins.pathExists zedSettingsFile
+            then builtins.fromJSON (builtins.readFile zedSettingsFile)
+            else { };
+          airgap = {
+            agent_servers = {
+              "OpenCode" = {
+                "type" = "custom";
+                "command" = "opencode";
+                "args" = [ "acp" ];
+              };
+            };
+            # Pin every language server to its closure path.
+            lsp = {
+              nixd.binary.path = "${pkgs.nixd}/bin/nixd";
+              basedpyright.binary.path = "${pkgs.basedpyright}/bin/basedpyright-langserver";
+              ruff.binary.path = "${pkgs.ruff}/bin/ruff";
+              # Zed's built-in JSON support npm-installs
+              # vscode-langservers-extracted by default; this is the
+              # closure build of the same server.
+              json-language-server.binary.path = "${pkgs.vscode-langservers-extracted}/bin/vscode-json-language-server";
+              bash-language-server = {
+                binary.path = "${pkgs.bash-language-server}/bin/bash-language-server";
+                binary.arguments = [ "start" ];
+              };
+              yaml-language-server = {
+                binary.path = "${pkgs.yaml-language-server}/bin/yaml-language-server";
+                binary.arguments = [ "--stdio" ];
+                # yaml-language-server fetches schemas from schemastore.org
+                # for every YAML file by default -- a hang per file behind
+                # the gap. Validation still works from inlined $schema and
+                # the settings below.
+                settings.yaml.schemaStore.enable = false;
+              };
+              # TOML: the toml extension is syntax-only now; Tombi is Zed's
+              # TOML server (taplo remains nvim's).
+              tombi = {
+                binary.path = "${pkgs.tombi}/bin/tombi";
+                binary.arguments = [ "lsp" ];
+              };
+            };
+            # Prettier is downloaded through node when a language that
+            # defaults to it (JSON/JS/TS/HTML/Markdown) is formatted.
+            # Nothing in this toolchain uses it; the language servers
+            # format instead. Measured: "Installing default prettier and
+            # plugins" in the client log.
+            prettier.allowed = false;
+            languages = {
+              Nix.language_servers = [
+                "nixd"
+                "!nil"
+              ];
+              Python = {
+                language_servers = [
+                  "basedpyright"
+                  "!pyright"
+                  "ruff"
+                ];
+                formatter.language_server.name = "ruff";
+              };
+            };
+            # Terminal Threads (agent panel -> New Thread -> Terminal):
+            # the TUI, not ACP -- starts opencode in the shell the thread
+            # creates. The agent_servers entry above stays for the panel.
+            agent.terminal_init_command = "opencode";
+            auto_update = false;
+            telemetry = {
+              metrics = false;
+              diagnostics = false;
+            };
+          };
+          # Personal keys win; `agent` is merged so the personal panel
+          # styling and our terminal_init_command coexist; `lsp` is ours
+          # outright (a stale personal lsp block was the bug this fixes).
+          merged = airgap // personal // {
+            agent = airgap.agent // (personal.agent or { });
+            lsp = airgap.lsp;
+          };
         in
         {
-          ".config/zed/settings.json".text =
-            if builtins.pathExists zedSettingsFile
-            then builtins.readFile zedSettingsFile
-            else
-              ''
-                // Packaged default from the airgap closure. Zed reads JSONC. If
-                // you keep your own settings.json (real file on the PVC), merge
-                // the agent_servers and languages blocks into it -- this
-                // default will not overwrite.
-                {
-                  "agent_servers": {
-                    "OpenCode": {
-                      "type": "custom",
-                      "command": "opencode",
-                      "args": ["acp"]
-                    }
-                  },
-                  // Pin every language server to its closure path. Without
-                  // this Zed falls back to fetching its own server at runtime
-                  // (measured in the WSL remote session), which is exactly the
-                  // runtime fetch an airgap cannot afford.
-                  "lsp": {
-                    "nixd": {
-                      "binary": { "path": "${pkgs.nixd}/bin/nixd" }
-                    },
-                    "basedpyright": {
-                      "binary": { "path": "${pkgs.basedpyright}/bin/basedpyright-langserver" }
-                    },
-                    "ruff": {
-                      "binary": { "path": "${pkgs.ruff}/bin/ruff" }
-                    },
-                    // Zed's built-in JSON support npm-installs
-                    // vscode-langservers-extracted by default; this is the
-                    // closure build of the same server.
-                    "json-language-server": {
-                      "binary": { "path": "${pkgs.vscode-langservers-extracted}/bin/vscode-json-language-server" }
-                    },
-                    "bash-language-server": {
-                      "binary": {
-                        "path": "${pkgs.bash-language-server}/bin/bash-language-server",
-                        "arguments": ["start"]
-                      }
-                    },
-                    "yaml-language-server": {
-                      "binary": {
-                        "path": "${pkgs.yaml-language-server}/bin/yaml-language-server",
-                        "arguments": ["--stdio"]
-                      },
-                      // yaml-language-server fetches schemas from
-                      // schemastore.org for every YAML file by default -- a
-                      // hang per file behind the gap. Validation still works
-                      // from inlined $schema and the settings below.
-                      "settings": { "yaml": { "schemaStore": { "enable": false } } }
-                    },
-                    // TOML: the toml extension is syntax-only now; Tombi is
-                    // Zed's TOML server (taplo remains nvim's).
-                    "tombi": {
-                      "binary": {
-                        "path": "${pkgs.tombi}/bin/tombi",
-                        "arguments": ["lsp"]
-                      }
-                    }
-                  },
-                  // Prettier is downloaded through node when a language that
-                  // defaults to it (JSON/JS/TS/HTML/Markdown) is formatted.
-                  // Nothing in this toolchain uses it; the language servers
-                  // format instead. Measured: "Installing default prettier
-                  // and plugins" in the client log.
-                  "prettier": { "allowed": false },
-                  "languages": {
-                    "Nix": {
-                      "language_servers": ["nixd", "!nil"]
-                    },
-                    "Python": {
-                      "language_servers": ["basedpyright", "!pyright", "ruff"],
-                      "formatter": { "language_server": { "name": "ruff" } }
-                    }
-                  },
-                  // Terminal Threads (agent panel -> New Thread -> Terminal):
-                  // the TUI, not ACP -- starts opencode in the shell the
-                  // thread creates. The ACP entry above stays for the panel.
-                  "agent": { "terminal_init_command": "opencode" },
-                  "auto_update": false,
-                  "telemetry": {
-                    "metrics": false,
-                    "diagnostics": false
-                  }
-                }
-              '';
+          ".config/zed/settings.json".text = builtins.toJSON merged + "\n";
         }
       )
 
