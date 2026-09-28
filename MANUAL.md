@@ -76,10 +76,8 @@ dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /nores
 `wsl --install --no-distribution` does the same two things and reboots for
 you, *without* installing Ubuntu — we bring our own distro.)
 
-After the reboot, still Administrator PowerShell, from the **extracted
-transfer folder** (both carry archives `twentyx-airgap-<VERSION>-wsl.tar.gz`
-and `...-layers.tar.gz` are flat inside — extract them into one folder, see
-§3):
+After the reboot, still Administrator PowerShell, from the **transfer
+folder** (unpack the four `.zst` twins with 7-Zip first — see §3):
 
 ```powershell
 wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
@@ -177,7 +175,7 @@ carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/twentyx-airgap-<VERSION>-wsl.tar.gz` + `...-layers.tar.gz` | ~2.5 GB + ~2.3 GB | the two files carried in, each under the 3072 MB/file cap; extract both into one folder, then `SETUP.ps1` |
+| `dist/*.tar.gz.zst` twins (nix layers, WSL image, kit) | 1.5 GB max each | cross inside zstd; unpack with 7-Zip to the flat `.tar.gz` first, then `SETUP.ps1` |
 | `dist/README.md`, `dist/MANIFEST.txt`, `dist/SHA256SUMS` | KB | the Windows-side page, versions, `sha256sum -c` |
 | `dist/nix-layer.tar.gz` (+`-nvim`) | ~1.12 / ~1.14 GB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |

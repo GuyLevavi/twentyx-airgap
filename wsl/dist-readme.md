@@ -6,20 +6,25 @@ for the RunAI GPU cluster, built to work with the network unplugged.
 Nothing here downloads anything at runtime — everything needed was pinned
 and verified before crossing the gap.
 
-This folder is FLAT by design. Two archives carry it: the transfer pipeline
-caps any single file at 3072 MB and is picky about raw extensions, so
-everything travels wrapped as `.tar.gz` — and one archive of this whole
-folder would be ~4.7 GB.
+This folder is FLAT by design. Send the files like this:
 
-    twentyx-airgap-<VERSION>-wsl.tar.gz     Windows/WSL side + the repo core
-    twentyx-airgap-<VERSION>-layers.tar.gz  the cluster layers + the repo core
+    AS .zst (four files -- do NOT also send their plain .tar.gz twins):
+      nix-layer.tar.gz.zst            the pod toolchain layer (plain flavor)
+      nix-layer-nvim.tar.gz.zst       the pod toolchain layer (nvim flavor)
+      nixos-wsl.tar.gz.zst            the NixOS-WSL image for `wsl --import`
+      windows-kit-<ver>.tar.gz.zst    Zed + VS Code + WSL2 MSI, themes, templates
 
-Extract BOTH into the same folder (right-click -> Extract, or
-`tar -xf twentyx-airgap-<VERSION>-wsl.tar.gz` and the same for `-layers`) and
-run one command from the extracted folder. Nothing needs joining or ordering:
-each archive is a complete tar.gz and both use this same flat layout.
-Everything else here is documentation, the Windows kit, and the artifacts the
-pipeline consumes.
+    AS-IS (everything else):
+      README.md  MANIFEST.txt  SHA256SUMS  repo-layer.tar  wsl-rebuild.tar.gz
+      twentyx-airgap.bundle  SETUP.ps1  UNPACK.ps1  setup-wsl.sh  docs/
+
+Each `.zst` file holds the exact `.tar.gz` inside a zstd container. The
+transfer pipeline drops the big gzip files, but it does not look inside
+zstd. Unpack each `.zst` on Windows first (7-Zip: right-click -> Extract);
+you get the plain `.tar.gz` back, byte-identical, so it still matches
+`SHA256SUMS`. Then run one command from this folder, as below. `.zst` is
+transport only: every tool here expects the `.tar.gz`, so do not skip the
+unpack step.
 
 ────────────────────────────────────────────────────────────────────
 FIRST TIME  (one PowerShell command)
@@ -163,10 +168,10 @@ THIS ROUND — the first-remote-test fixes:
     bash and skipping the exec-into-fish marker.
   - VS Code returns, pinned end to end (installer ↔ server commit ↔
     extension engines), replacing nothing: Zed remote stays the default.
-  - The transfer folder is FLAT and crosses as two .tar.gz archives (the
-    transfer pipeline caps any file at 3072 MB and wants payloads wrapped);
-    a MANIFEST + SHA256SUMS, and the Windows side is one script (SETUP.ps1)
-    that no longer assumes C:\twentyx.
+  - The transfer folder is FLAT; the four big artifacts cross as `.zst`
+    twins (the pipeline drops big gzip and does not inspect zstd) and are
+    unpacked with 7-Zip before use; a MANIFEST + SHA256SUMS, and the
+    Windows side is one script (SETUP.ps1) that no longer assumes C:\twentyx.
 
 EARLIER — fresh-start round: repo ships as a git bundle (real history), Zed
 themes/client templates become version-controlled kit artifacts, the

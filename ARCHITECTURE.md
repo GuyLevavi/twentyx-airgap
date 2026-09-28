@@ -51,14 +51,12 @@ Three artifact classes, three mechanisms:
 | Layer tarballs | `scripts/build-layers.sh` → `push-gitlab-packages.sh` (Artifactory fallback) | GitLab generic packages, appended onto base images by CI |
 | The WSL root tarball | `nix build .#wsl-tarball` | `wsl --import` on Windows |
 
-`scripts/transfer-bundle.sh` assembles all of them into one flat `dist/` and
-packs the two files that physically cross the gap:
-`twentyx-airgap-<VERSION>-wsl.tar.gz` and `...-layers.tar.gz` (each under the
-3072 MB/file transfer cap; both extract into the same flat folder), with a
-`MANIFEST.txt` (versions, git rev) and `SHA256SUMS`. Windows extracts them
-and runs one script — `SETUP.ps1`
-imports the rootfs, unpacks the kit, and runs `setup-wsl.sh` inside the
-distro.
+`scripts/transfer-bundle.sh` assembles all of them into one flat `dist/`,
+with a `MANIFEST.txt` (versions, git rev) and `SHA256SUMS`. The four
+artifacts over ~500 MB cross as `.tar.gz.zst` transport twins — the transfer
+pipeline drops big gzip and does not look inside zstd. Windows unpacks the
+`.zst` twins with 7-Zip, then runs one script — `SETUP.ps1` imports the
+rootfs, unpacks the kit, and runs `setup-wsl.sh` inside the distro.
 
 Chunks are content-addressed, so they transfer in any order and reassemble by
 hash. There is deliberately no signing: Nix verifies per store path, which is

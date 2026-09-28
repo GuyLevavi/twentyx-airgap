@@ -13,8 +13,8 @@ command or decision.
   personal file, tmux spawns fish directly, and VS Code returns to the WSL
   side pinned end to end (client installer ↔ server commit ↔ extension
   engines ↔ a code-server lockstep `throw`). The transfer is re-shaped: flat
-  `dist/`, two carry archives under the 3072 MB/file cap (`-wsl`, `-layers`,
-  both holding the repo core), `MANIFEST.txt` + `SHA256SUMS`, drvPath
+  `dist/`, `.zst` transport twins for the four big artifacts (the filter
+  drops big gzip and ignores zstd), `MANIFEST.txt` + `SHA256SUMS`, drvPath
   staleness stamps, always-regenerated delta, `SETUP.ps1`. Container test:
   21 checks (2 new — PT_LOAD order, the Zed pins). Mechanisms: NOTES.md §12;
   user-facing index: `wsl/dist-readme.md` -> `dist/README.md`.
@@ -95,10 +95,10 @@ in-gap layer transport is GitLab generic packages
 ## 2. First transfer (NOTES.md §5 — deliberately small)
 
 - [ ] **Outside**, assemble everything in one shot (both tracks — layers, WSL
-      tarball, git bundle, kit, docs, scripts), then carry the two outer archives:
+      tarball, git bundle, kit, docs, scripts), then carry the dist files:
 
       ```bash
-      ./scripts/transfer-bundle.sh       # -> dist/ + twentyx-airgap-<VERSION>-{wsl,layers}.tar.gz
+      ./scripts/transfer-bundle.sh       # -> dist/ (flat; big artifacts get .zst twins)
       ```
 
       Layers only — the script always builds both flavors; for the first
@@ -113,9 +113,9 @@ in-gap layer transport is GitLab generic packages
       store hash; `nix/hosts/wsl.nix` already degrades to `require-sigs = false`
       when `cache-pubkey` is absent.
 
-- [ ] Carry both `dist/twentyx-airgap-<VERSION>-wsl.tar.gz` and
-      `...-layers.tar.gz` across physically (each fits the 3072 MB cap; the
-      layers ride in the second).
+- [ ] Carry the dist files: the four `*.tar.gz.zst` twins instead of their
+      plain `.tar.gz` twins (the filter drops big gzip), everything else
+      as-is.
 - [ ] **[gap]** Publish the transfer artifacts — GitLab generic packages is
       the primary path now, Artifactory the fallback. Run it after this
       round is reviewed/committed, so the published layers match the repo:

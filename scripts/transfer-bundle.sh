@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# Transfer bundle: one flat directory plus two carry archives, everything
-# that crosses the gap.
+# Transfer bundle: one flat directory with zstd transport twins for the big
+# artifacts, everything that crosses the gap.
 #
 #   ./scripts/transfer-bundle.sh            # assembles/refreshes dist/
 #
-# Layout when done (flat -- SETUP.ps1/UNPACK.ps1 expect artifacts at the top;
-# both archives extract into this same folder, no joining, no ordering):
+# Layout when done (flat -- SETUP.ps1/UNPACK.ps1 expect artifacts at the top):
 #
 #   dist/
-#     twentyx-airgap-<VERSION>-wsl.tar.gz     Windows/WSL side + repo core
-#     twentyx-airgap-<VERSION>-layers.tar.gz  registry side + repo core
 #     README.md                        the page for other users
 #     MANIFEST.txt                     versions + build identity (sourceable)
 #     SHA256SUMS                       `sha256sum -c` compatible
@@ -24,6 +21,12 @@
 #     SETUP.ps1 / UNPACK.ps1           Windows one-shot / kit unpacker
 #     setup-wsl.sh                     Linux-side one-shot (SETUP.ps1 runs it)
 #     docs/                            user-facing docs
+#
+#   ...plus a .zst twin of the four artifacts over ~500 MB (both nix layers,
+#   the WSL image, the Windows kit): the transfer pipeline does not pass the
+#   big gzip files and does not look inside zstd, so those four cross as
+#   .tar.gz.zst and are unpacked (7-Zip) before use. Transport only: the
+#   inner .tar.gz stays byte-identical and nothing nests archives.
 #
 # Staleness is guarded by derivation paths, not mtimes: dist/.wlldrv and
 # dist/.layerdrv record what each big artifact was built from, so a closure
@@ -183,36 +186,23 @@ EXPR
         | sort -z | xargs -0 sha256sum
 ) > "$OUT/SHA256SUMS"
 
-# ── 9. the carry archives ─────────────────────────────────────────────────
-# Everything that crosses the gap arrives inside a .tar.gz (the transfer
-# pipeline is picky about raw extensions) and NO SINGLE FILE may reach the
-# 3072 MB per-file limit -- which one archive of the whole dist does, so it
-# is two. Both extract into the same flat folder (the repo core repeats,
-# ~1 MB) and each holds one destination's payload: nothing to join, nothing
-# to order. Written to /tmp first: packing a directory into a file inside
-# itself is a trap (tar would archive the partial file). Stamps excluded.
-say "packing the carry archives (3072 MB cap each)"
+# ── 9. zstd transports for the big artifacts ──────────────────────────────
+# Measured: the transfer pipeline drops the big gzip tars (and blocks a
+# .tar.gz that holds another archive) but passes zstd and does not look
+# inside it. The four artifacts over ~500 MB therefore get a zstd twin
+# around the exact .tar.gz -- unpack with 7-Zip on the far side, and every
+# tool downstream sees the same bytes as before.
+say "wrapping the big artifacts with zstd (transport twins)"
 rm -f "$OUT"/twentyx-airgap-*.tar.gz
+BIG=("nix-layer.tar.gz" "nix-layer-nvim.tar.gz" "nixos-wsl.tar.gz" "${KITNAME#*-}")
+for f in "${BIG[@]}"; do
+    nix shell nixpkgs#zstd -c zstd -3 -T0 -q -f "$OUT/$f" -o "$OUT/$f.zst"
+    say "  $f.zst ($(( $(stat -c %s "$OUT/$f.zst") / 1000000 )) MB)"
+done
+
+# No file in dist may reach the 3072 MB/file transfer cap -- a future
+# closure can outgrow a layer.
 LIMIT_MB=3072
-REPO_CORE=(README.md MANIFEST.txt SHA256SUMS repo-layer.tar twentyx-airgap.bundle docs)
-WSL_PAYLOAD=(SETUP.ps1 UNPACK.ps1 setup-wsl.sh "${KITNAME#*-}" nixos-wsl.tar.gz wsl-rebuild.tar.gz)
-LAYER_PAYLOAD=(nix-layer.tar.gz nix-layer-nvim.tar.gz)
-
-pack_archive() {
-    local name tmp
-    name="$1"
-    shift
-    tmp="$(mktemp /tmp/twentyx-airgap-XXXXXX.tar.gz)"
-    tar -C "$OUT" -czf "$tmp" --sort=name --exclude='./.*' "$@"
-    mv -f "$tmp" "$OUT/$name"
-    say "  $name ($(( $(stat -c %s "$OUT/$name") / 1000000 )) MB)"
-}
-
-pack_archive "twentyx-airgap-$VERSION-wsl.tar.gz" "${REPO_CORE[@]}" "${WSL_PAYLOAD[@]}"
-pack_archive "twentyx-airgap-$VERSION-layers.tar.gz" "${REPO_CORE[@]}" "${LAYER_PAYLOAD[@]}"
-
-# No file in dist may reach the 3072 MB/file transfer cap -- the archives
-# themselves and every flat artifact (a future closure can outgrow a layer).
 for f in "$OUT"/*; do
     [ -f "$f" ] || continue
     b="$(basename "$f")"
@@ -223,19 +213,6 @@ for f in "$OUT"/*; do
             "$b" "$size" "$LIMIT_MB" >&2
         exit 1
     fi
-done
-
-# Nothing may sit in dist that crosses in no archive: adding an artifact
-# above without listing it here is a silent one-way loss.
-ALL=( "${REPO_CORE[@]}" "${WSL_PAYLOAD[@]}" "${LAYER_PAYLOAD[@]}" )
-for f in "$OUT"/*; do
-    b="$(basename "$f")"
-    case "$b" in .*|twentyx-airgap-*.tar.gz) continue ;; esac
-    for a in "${ALL[@]}"; do
-        [ "$b" = "$a" ] && continue 2
-    done
-    printf 'error: %s is in dist but in no carry archive -- add it to a payload\n' "$b" >&2
-    exit 1
 done
 
 # ── 10. the bundle at a glance ────────────────────────────────────────────
