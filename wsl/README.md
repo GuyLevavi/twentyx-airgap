@@ -60,12 +60,14 @@ from your own shell once:
 `sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl`.
 
 The transfer folder is flat by design (no nested `windows-kit/` or
-`wsl-rebuild/`), and the carry tar `twentyx-airgap-<VERSION>.tar.gz` holds the
-same layout. At a glance:
+`wsl-rebuild/`), and two carry archives hold the same layout, split to stay
+under the 3072 MB/file transfer cap (`-wsl` = image/kit/scripts + repo core,
+`-layers` = the cluster layers + repo core; extract both into one folder).
+At a glance:
 
 | Artifact | What it becomes |
 |---|---|
-| `twentyx-airgap-<VERSION>.tar.gz` | the one file to carry; same flat layout inside |
+| `twentyx-airgap-<VERSION>-wsl.tar.gz` + `...-layers.tar.gz` | the two files to carry; each a complete tar.gz with the same flat layout inside |
 | `README.md`, `MANIFEST.txt`, `SHA256SUMS` | the Windows-side page (it replaced `START-HERE.txt`), versions, `sha256sum -c` |
 | `nixos-wsl.tar.gz` | the image: consumed by `wsl --import` |
 | `wsl-rebuild.tar.gz` | additive cache delta for an existing distro |

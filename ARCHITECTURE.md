@@ -52,9 +52,11 @@ Three artifact classes, three mechanisms:
 | The WSL root tarball | `nix build .#wsl-tarball` | `wsl --import` on Windows |
 
 `scripts/transfer-bundle.sh` assembles all of them into one flat `dist/` and
-packs the single file that physically crosses the gap:
-`twentyx-airgap-<VERSION>.tar.gz`, with a `MANIFEST.txt` (versions, git rev)
-and `SHA256SUMS`. Windows extracts it and runs one script — `SETUP.ps1`
+packs the two files that physically cross the gap:
+`twentyx-airgap-<VERSION>-wsl.tar.gz` and `...-layers.tar.gz` (each under the
+3072 MB/file transfer cap; both extract into the same flat folder), with a
+`MANIFEST.txt` (versions, git rev) and `SHA256SUMS`. Windows extracts them
+and runs one script — `SETUP.ps1`
 imports the rootfs, unpacks the kit, and runs `setup-wsl.sh` inside the
 distro.
 

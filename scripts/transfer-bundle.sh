@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Transfer bundle: one flat directory, then one carry tar, everything that
-# crosses the gap.
+# Transfer bundle: one flat directory plus two carry archives, everything
+# that crosses the gap.
 #
 #   ./scripts/transfer-bundle.sh            # assembles/refreshes dist/
 #
 # Layout when done (flat -- SETUP.ps1/UNPACK.ps1 expect artifacts at the top;
-# the carry tar has the same layout inside):
+# both archives extract into this same folder, no joining, no ordering):
 #
 #   dist/
-#     twentyx-airgap-<VERSION>.tar.gz  the one file you carry
+#     twentyx-airgap-<VERSION>-wsl.tar.gz     Windows/WSL side + repo core
+#     twentyx-airgap-<VERSION>-layers.tar.gz  registry side + repo core
 #     README.md                        the page for other users
 #     MANIFEST.txt                     versions + build identity (sourceable)
 #     SHA256SUMS                       `sha256sum -c` compatible
@@ -182,14 +183,60 @@ EXPR
         | sort -z | xargs -0 sha256sum
 ) > "$OUT/SHA256SUMS"
 
-# ── 9. one flat carry tar ─────────────────────────────────────────────────
-# Written to /tmp first: packing a directory into a file inside itself is a
-# trap (tar would archive the partial file, or refuse it). Stamps excluded.
-say "packing $OUT/twentyx-airgap-$VERSION.tar.gz"
+# ── 9. the carry archives ─────────────────────────────────────────────────
+# Everything that crosses the gap arrives inside a .tar.gz (the transfer
+# pipeline is picky about raw extensions) and NO SINGLE FILE may reach the
+# 3072 MB per-file limit -- which one archive of the whole dist does, so it
+# is two. Both extract into the same flat folder (the repo core repeats,
+# ~1 MB) and each holds one destination's payload: nothing to join, nothing
+# to order. Written to /tmp first: packing a directory into a file inside
+# itself is a trap (tar would archive the partial file). Stamps excluded.
+say "packing the carry archives (3072 MB cap each)"
 rm -f "$OUT"/twentyx-airgap-*.tar.gz
-TMP_OUTER="$(mktemp /tmp/twentyx-airgap-XXXXXX.tar.gz)"
-tar -C "$OUT" -czf "$TMP_OUTER" --sort=name --exclude='./.*' .
-mv -f "$TMP_OUTER" "$OUT/twentyx-airgap-$VERSION.tar.gz"
+LIMIT_MB=3072
+REPO_CORE=(README.md MANIFEST.txt SHA256SUMS repo-layer.tar twentyx-airgap.bundle docs)
+WSL_PAYLOAD=(SETUP.ps1 UNPACK.ps1 setup-wsl.sh "${KITNAME#*-}" nixos-wsl.tar.gz wsl-rebuild.tar.gz)
+LAYER_PAYLOAD=(nix-layer.tar.gz nix-layer-nvim.tar.gz)
+
+pack_archive() {
+    local name tmp
+    name="$1"
+    shift
+    tmp="$(mktemp /tmp/twentyx-airgap-XXXXXX.tar.gz)"
+    tar -C "$OUT" -czf "$tmp" --sort=name --exclude='./.*' "$@"
+    mv -f "$tmp" "$OUT/$name"
+    say "  $name ($(( $(stat -c %s "$OUT/$name") / 1000000 )) MB)"
+}
+
+pack_archive "twentyx-airgap-$VERSION-wsl.tar.gz" "${REPO_CORE[@]}" "${WSL_PAYLOAD[@]}"
+pack_archive "twentyx-airgap-$VERSION-layers.tar.gz" "${REPO_CORE[@]}" "${LAYER_PAYLOAD[@]}"
+
+# No file in dist may reach the 3072 MB/file transfer cap -- the archives
+# themselves and every flat artifact (a future closure can outgrow a layer).
+for f in "$OUT"/*; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in .*) continue ;; esac
+    size="$(( $(stat -c %s "$f") / 1000000 ))"
+    if [ "$size" -ge "$LIMIT_MB" ]; then
+        printf 'error: %s is %s MB, over the %s MB/file transfer cap -- split the payload\n' \
+            "$b" "$size" "$LIMIT_MB" >&2
+        exit 1
+    fi
+done
+
+# Nothing may sit in dist that crosses in no archive: adding an artifact
+# above without listing it here is a silent one-way loss.
+ALL=( "${REPO_CORE[@]}" "${WSL_PAYLOAD[@]}" "${LAYER_PAYLOAD[@]}" )
+for f in "$OUT"/*; do
+    b="$(basename "$f")"
+    case "$b" in .*|twentyx-airgap-*.tar.gz) continue ;; esac
+    for a in "${ALL[@]}"; do
+        [ "$b" = "$a" ] && continue 2
+    done
+    printf 'error: %s is in dist but in no carry archive -- add it to a payload\n' "$b" >&2
+    exit 1
+done
 
 # ── 10. the bundle at a glance ────────────────────────────────────────────
 cd "$OUT"

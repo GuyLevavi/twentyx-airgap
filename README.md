@@ -34,7 +34,7 @@ tells you what that costs before you carry it anywhere.
 | `repo-layer.tar` | ~390 KB |
 | `windows-kit-*.tar.gz` | ~612 MB (Zed + VS Code installers, WSL2 MSI, themes, client templates, the pinned `.vsix` set) |
 | `wsl-rebuild.tar.gz` | ~299 MB today (delta roots: flake inputs + VS Code server/vsix + stdenv; shrinks when a rebase makes them unnecessary) |
-| one carry tar | ~4.7 GB (`twentyx-airgap-<VERSION>.tar.gz`, all of the above) |
+| carry archives | two `.tar.gz`, ~2.5 GB + ~2.3 GB (`twentyx-airgap-<VERSION>-wsl.tar.gz`, `...-layers.tar.gz`), each under the 3072 MB/file transfer cap; extract both into one folder |
 
 (Measured 2026-09-28, `rm -rf dist && ./scripts/transfer-bundle.sh`.)
 
@@ -51,8 +51,11 @@ transfer needed.
 `./scripts/transfer-bundle.sh` produces one flat `dist/`: both layers, the
 NixOS-WSL image, the always-regenerated rebuild delta, the Windows kit, the
 repo as a git bundle, the setup scripts, user-facing docs, `MANIFEST.txt`
-(versions, build identity) and `SHA256SUMS`, then packs all of it into one
-carry tar `twentyx-airgap-<VERSION>.tar.gz`. On Windows, one elevated
+(versions, build identity) and `SHA256SUMS`, then packs it into two carry
+archives, each under the 3072 MB/file transfer cap:
+`twentyx-airgap-<VERSION>-wsl.tar.gz` (Windows/WSL side + the repo core) and
+`twentyx-airgap-<VERSION>-layers.tar.gz` (the cluster layers + the repo
+core); both extract into the same flat folder. On Windows, one elevated
 command runs the whole first-time chain — `SETUP.ps1` unpacks the kit,
 imports the image, and runs `setup-wsl.sh` inside the distro (repo clone,
 offline cache import, first rebuild).
@@ -212,7 +215,7 @@ nix/runai/layer.nix           the closure -> an OCI layer tarball
 libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/transfer-bundle.sh    run OUTSIDE -> the whole flat dist/ + one carry tar (layers, WSL tarball, delta, kit, bundle, docs, MANIFEST/SHA256SUMS)
+scripts/transfer-bundle.sh    run OUTSIDE -> the whole flat dist/ + two carry archives under the 3072 MB cap (layers, WSL tarball, delta, kit, bundle, docs, MANIFEST/SHA256SUMS)
 scripts/export-rebuild-cache.sh  run OUTSIDE -> the WSL delta cache; always run by transfer-bundle, roots in .#wslDeltaRoots
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
