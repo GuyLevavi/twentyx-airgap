@@ -60,13 +60,14 @@ from your own shell once:
 `sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl`.
 
 The transfer folder is flat by design (no nested `windows-kit/` or
-`wsl-rebuild/`), and the four big artifacts get a `.tar.gz.zst` transport
-twin (the pipeline drops big gzip and does not inspect zstd; 7-Zip unpacks
-them back to the exact `.tar.gz`). At a glance:
+`wsl-rebuild/`), and the big artifacts get a transport twin: `.tar.gz.zst`
+for the layers and kit, `.tar.gz.7z` for the WSL image (the pipeline drops
+big gzip and rejected its zstd twin; 7-Zip unpacks any of them back to the
+exact `.tar.gz`). At a glance:
 
 | Artifact | What it becomes |
 |---|---|
-| `*.tar.gz.zst` twins of the layers, image, kit | the transfer shape; unpack with 7-Zip to the plain `.tar.gz` before use |
+| `*.tar.gz.zst` / `nixos-wsl.tar.gz.7z` twins | the transfer shape; unpack with 7-Zip to the plain `.tar.gz` before use |
 | `README.md`, `MANIFEST.txt`, `SHA256SUMS` | the Windows-side page (it replaced `START-HERE.txt`), versions, `sha256sum -c` |
 | `nixos-wsl.tar.gz` | the image: consumed by `wsl --import` |
 | `wsl-rebuild.tar.gz` | additive cache delta for an existing distro |

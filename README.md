@@ -34,7 +34,7 @@ tells you what that costs before you carry it anywhere.
 | `repo-layer.tar` | ~390 KB |
 | `windows-kit-*.tar.gz` | ~612 MB (Zed + VS Code installers, WSL2 MSI, themes, client templates, the pinned `.vsix` set) |
 | `wsl-rebuild.tar.gz` | ~299 MB today (delta roots: flake inputs + VS Code server/vsix + stdenv; shrinks when a rebase makes them unnecessary) |
-| transfer quirk | the four big artifacts cross as `.tar.gz.zst` transport twins (the filter drops big gzip and does not inspect zstd; 7-Zip gives back the exact `.tar.gz`); everything else goes as-is |
+| transfer quirk | the big artifacts cross in transport containers: `.tar.gz.zst` for the layers and kit, `.tar.gz.7z` for the WSL image (the filter drops big gzip and rejected its zstd twin); 7-Zip gives back the exact `.tar.gz`, everything else goes as-is |
 
 (Measured 2026-09-28, `rm -rf dist && ./scripts/transfer-bundle.sh`.)
 
@@ -51,11 +51,11 @@ transfer needed.
 `./scripts/transfer-bundle.sh` produces one flat `dist/`: both layers, the
 NixOS-WSL image, the always-regenerated rebuild delta, the Windows kit, the
 repo as a git bundle, the setup scripts, user-facing docs, `MANIFEST.txt`
-(versions, build identity) and `SHA256SUMS`. The four artifacts over ~500 MB
-(the two layers, the WSL image, the Windows kit) also get a `.zst` transport
-twin: the transfer pipeline drops big gzip files and does not look inside
-zstd, so those cross as `.tar.gz.zst` and are unpacked with 7-Zip before use.
-On Windows, one elevated
+(versions, build identity) and `SHA256SUMS`. The big artifacts also get a
+transport twin: the transfer pipeline drops big gzip files, so the two
+layers and the Windows kit cross as `.tar.gz.zst` and the WSL image as
+`.tar.gz.7z` (it rejected even that one's zstd twin). 7-Zip unpacks them
+to the exact `.tar.gz` before use. On Windows, one elevated
 command runs the whole first-time chain — `SETUP.ps1` unpacks the kit,
 imports the image, and runs `setup-wsl.sh` inside the distro (repo clone,
 offline cache import, first rebuild).
@@ -215,7 +215,7 @@ nix/runai/layer.nix           the closure -> an OCI layer tarball
 libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/transfer-bundle.sh    run OUTSIDE -> the flat dist/ + .zst transport twins of the four big artifacts (big gzip does not cross the filter)
+scripts/transfer-bundle.sh    run OUTSIDE -> the flat dist/ + transport twins of the big artifacts (.zst, WSL image .7z; big gzip does not cross the filter)
 scripts/export-rebuild-cache.sh  run OUTSIDE -> the WSL delta cache; always run by transfer-bundle, roots in .#wslDeltaRoots
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store

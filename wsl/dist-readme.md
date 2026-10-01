@@ -9,23 +9,24 @@ and verified before crossing the gap.
 This folder is FLAT by design and it is EXACTLY the send set: send it as-is.
 The four big artifacts are already in their transport form:
 
-    THE FOUR BIG ARTIFACTS (a zstd container around the plain .tar.gz):
+    THE FOUR BIG ARTIFACTS (a transport container around the plain .tar.gz):
       nix-layer.tar.gz.zst            the pod toolchain layer (plain flavor)
       nix-layer-nvim.tar.gz.zst       the pod toolchain layer (nvim flavor)
-      nixos-wsl.tar.gz.zst            the NixOS-WSL image for `wsl --import`
+      nixos-wsl.tar.gz.7z             the NixOS-WSL image for `wsl --import`
       windows-kit-<ver>.tar.gz.zst    Zed + VS Code + WSL2 MSI, themes, templates
 
     EVERYTHING ELSE (direct):
       README.md  MANIFEST.txt  SHA256SUMS  repo-layer.tar  wsl-rebuild.tar.gz
       twentyx-airgap.bundle  SETUP.ps1  UNPACK.ps1  setup-wsl.sh  docs/
 
-Each `.zst` file holds the exact `.tar.gz` inside a zstd container. The
-transfer pipeline drops the big gzip files, but it does not look inside
-zstd. Unpack each `.zst` on Windows first (7-Zip: right-click -> Extract);
-you get the plain `.tar.gz` back, byte-identical, so `sha256sum -c
-SHA256SUMS` passes once all four are unpacked. Then run one command from
-this folder, as below. `.zst` is transport only: every tool here expects
-the `.tar.gz`, so do not skip the unpack step.
+Each container holds the exact `.tar.gz`: the three `.zst` files inside a
+zstd container, the WSL image inside a 7-Zip container (the transfer
+pipeline dropped even its zstd twin). Unpack all four on Windows first
+with 7-Zip (right-click -> Extract); you get the plain `.tar.gz` back,
+byte-identical, so `sha256sum -c SHA256SUMS` passes once all four are
+unpacked. Then run one command from this folder, as below. These containers
+are transport only: every tool here expects the `.tar.gz`, so do not skip
+the unpack step.
 
 ────────────────────────────────────────────────────────────────────
 FIRST TIME  (one PowerShell command)
@@ -169,10 +170,11 @@ THIS ROUND — the first-remote-test fixes:
     bash and skipping the exec-into-fish marker.
   - VS Code returns, pinned end to end (installer ↔ server commit ↔
     extension engines), replacing nothing: Zed remote stays the default.
-  - The transfer folder is FLAT; the four big artifacts cross as `.zst`
-    twins (the pipeline drops big gzip and does not inspect zstd) and are
-    unpacked with 7-Zip before use; a MANIFEST + SHA256SUMS, and the
-    Windows side is one script (SETUP.ps1) that no longer assumes C:\twentyx.
+  - The transfer folder is FLAT; the big artifacts cross in transport
+    containers (.zst, and 7z for the 1.5 GB WSL image -- the pipeline
+    dropped its zstd twin too) and are unpacked with 7-Zip before use;
+    a MANIFEST + SHA256SUMS, and the Windows side is one script
+    (SETUP.ps1) that no longer assumes C:\twentyx.
 
 EARLIER — fresh-start round: repo ships as a git bundle (real history), Zed
 themes/client templates become version-controlled kit artifacts, the

@@ -22,13 +22,12 @@
 #     setup-wsl.sh                     Linux-side one-shot (SETUP.ps1 runs it)
 #     docs/                            user-facing docs
 #
-#   ...plus a .zst twin of the four artifacts over ~500 MB (both nix layers,
-#   the WSL image, the Windows kit): the transfer pipeline does not pass the
-#   big gzip files and does not look inside zstd, so those four cross as
-#   .tar.gz.zst and are unpacked (7-Zip) before use. Transport only: the
-#   inner .tar.gz stays byte-identical and nothing nests archives. dist IS
-#   the send set -- the plain twins are removed once wrapped, and
-#   SHA256SUMS lists them for the far side, after the unpack.
+#   ...plus a transport twin of the big artifacts: .zst for both nix layers
+#   and the Windows kit, .7z for the WSL image (the pipeline drops big gzip
+#   and did not pass even its zstd twin). Unpacked with 7-Zip before use,
+#   transport only: the inner .tar.gz stays byte-identical. dist IS the send
+#   set -- the plain twins are removed once wrapped, and SHA256SUMS lists
+#   them for the far side, after the unpack.
 #
 # Staleness is guarded by derivation paths, not mtimes: dist/.wlldrv and
 # dist/.layerdrv record what each big artifact was built from, so a closure
@@ -186,25 +185,29 @@ EXPR
 # internal build stamps and do not ship.
 (
     cd "$OUT"
-    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name '*.zst' -print0 \
+    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name '*.zst' ! -name '*.7z' -print0 \
         | sort -z | xargs -0 sha256sum
 ) > "$OUT/SHA256SUMS"
 
-# ── 9. zstd transports for the big artifacts ──────────────────────────────
-# Measured: the transfer pipeline drops the big gzip tars (and blocks a
-# .tar.gz that holds another archive) but passes zstd and does not look
-# inside it. The four artifacts over ~500 MB therefore get a zstd twin
-# around the exact .tar.gz -- unpack with 7-Zip on the far side, and every
-# tool downstream sees the same bytes as before.
-say "wrapping the big artifacts with zstd (transport twins)"
+# ── 9. transport twins for the big artifacts ──────────────────────────────
+# Measured on the wire: the pipeline drops the big gzip files, passes zstd,
+# and did NOT pass the 1.5 GB WSL image even as zstd -- but 7-Zip containers
+# passed. So the layers and the kit get a .zst twin, the WSL image a .7z
+# one. Transport only: the inner .tar.gz stays byte-identical. dist IS the
+# send set -- the plain twins are removed once wrapped, and SHA256SUMS
+# lists them for the far side, after the unpack.
+say "wrapping the big artifacts for the transfer"
 rm -f "$OUT"/twentyx-airgap-*.tar.gz
-BIG=("nix-layer.tar.gz" "nix-layer-nvim.tar.gz" "nixos-wsl.tar.gz" "${KITNAME#*-}")
-for f in "${BIG[@]}"; do
+ZST=("nix-layer.tar.gz" "nix-layer-nvim.tar.gz" "${KITNAME#*-}")
+SEVENZ=("nixos-wsl.tar.gz")
+for f in "${ZST[@]}"; do
     nix shell nixpkgs#zstd -c zstd -3 -T0 -q -f "$OUT/$f" -o "$OUT/$f.zst"
     say "  $f.zst ($(( $(stat -c %s "$OUT/$f.zst") / 1000000 )) MB)"
-    # dist is the send set: the payload lives inside the twin now. A rebuild
-    # of the plain artifact on the next run is the price (the guards above
-    # see it missing), and SHA256SUMS already lists it for the far side.
+    rm -f "$OUT/$f"
+done
+for f in "${SEVENZ[@]}"; do
+    nix shell nixpkgs#p7zip -c 7z a -bso0 -bsp0 -mx1 -mmt=on "$OUT/$f.7z" "$OUT/$f"
+    say "  $f.7z ($(( $(stat -c %s "$OUT/$f.7z") / 1000000 )) MB)"
     rm -f "$OUT/$f"
 done
 

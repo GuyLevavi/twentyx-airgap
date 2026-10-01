@@ -77,7 +77,7 @@ dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /nores
 you, *without* installing Ubuntu — we bring our own distro.)
 
 After the reboot, still Administrator PowerShell, from the **transfer
-folder** (unpack the four `.zst` twins with 7-Zip first — see §3):
+folder** (unpack the four transport twins with 7-Zip first — see §3):
 
 ```powershell
 wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
@@ -175,7 +175,7 @@ carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/*.tar.gz.zst` twins (nix layers, WSL image, kit) | 1.5 GB max each | cross inside zstd; unpack with 7-Zip to the flat `.tar.gz` first, then `SETUP.ps1` |
+| `dist/*.tar.gz.{zst,7z}` twins (nix layers, kit, WSL image) | 1.5 GB max each | cross inside zstd/7z; unpack with 7-Zip to the flat `.tar.gz` first, then `SETUP.ps1` |
 | `dist/README.md`, `dist/MANIFEST.txt`, `dist/SHA256SUMS` | KB | the Windows-side page, versions, `sha256sum -c` |
 | `dist/nix-layer.tar.gz` (+`-nvim`) | ~1.12 / ~1.14 GB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |

@@ -52,11 +52,12 @@ Three artifact classes, three mechanisms:
 | The WSL root tarball | `nix build .#wsl-tarball` | `wsl --import` on Windows |
 
 `scripts/transfer-bundle.sh` assembles all of them into one flat `dist/`,
-with a `MANIFEST.txt` (versions, git rev) and `SHA256SUMS`. The four
-artifacts over ~500 MB cross as `.tar.gz.zst` transport twins — the transfer
-pipeline drops big gzip and does not look inside zstd. Windows unpacks the
-`.zst` twins with 7-Zip, then runs one script — `SETUP.ps1` imports the
-rootfs, unpacks the kit, and runs `setup-wsl.sh` inside the distro.
+with a `MANIFEST.txt` (versions, git rev) and `SHA256SUMS`. The big
+artifacts cross in transport containers — `.tar.gz.zst` for the layers and
+the kit, `.tar.gz.7z` for the WSL image (the pipeline drops big gzip and
+rejected its zstd twin). Windows unpacks them with 7-Zip, then runs one
+script — `SETUP.ps1` imports the rootfs, unpacks the kit, and runs
+`setup-wsl.sh` inside the distro.
 
 Chunks are content-addressed, so they transfer in any order and reassemble by
 hash. There is deliberately no signing: Nix verifies per store path, which is
