@@ -178,11 +178,13 @@ EXPR
     echo "BUILT_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 } > "$OUT/MANIFEST.txt"
 
-# Everything except the stamps and the carry tar itself (which cannot hash
-# itself); hidden files are internal build stamps and do not ship.
+# Everything except the stamps, the zstd transport twins (which wrap the
+# files below, so hashing them is redundant and would make a re-run of this
+# script hash its own outputs) and SHA256SUMS itself; hidden files are
+# internal build stamps and do not ship.
 (
     cd "$OUT"
-    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name 'twentyx-airgap-*.tar.gz' -print0 \
+    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name '*.zst' -print0 \
         | sort -z | xargs -0 sha256sum
 ) > "$OUT/SHA256SUMS"
 
