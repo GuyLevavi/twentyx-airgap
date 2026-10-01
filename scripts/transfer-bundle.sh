@@ -26,7 +26,9 @@
 #   the WSL image, the Windows kit): the transfer pipeline does not pass the
 #   big gzip files and does not look inside zstd, so those four cross as
 #   .tar.gz.zst and are unpacked (7-Zip) before use. Transport only: the
-#   inner .tar.gz stays byte-identical and nothing nests archives.
+#   inner .tar.gz stays byte-identical and nothing nests archives. dist IS
+#   the send set -- the plain twins are removed once wrapped, and
+#   SHA256SUMS lists them for the far side, after the unpack.
 #
 # Staleness is guarded by derivation paths, not mtimes: dist/.wlldrv and
 # dist/.layerdrv record what each big artifact was built from, so a closure
@@ -200,6 +202,10 @@ BIG=("nix-layer.tar.gz" "nix-layer-nvim.tar.gz" "nixos-wsl.tar.gz" "${KITNAME#*-
 for f in "${BIG[@]}"; do
     nix shell nixpkgs#zstd -c zstd -3 -T0 -q -f "$OUT/$f" -o "$OUT/$f.zst"
     say "  $f.zst ($(( $(stat -c %s "$OUT/$f.zst") / 1000000 )) MB)"
+    # dist is the send set: the payload lives inside the twin now. A rebuild
+    # of the plain artifact on the next run is the price (the guards above
+    # see it missing), and SHA256SUMS already lists it for the far side.
+    rm -f "$OUT/$f"
 done
 
 # No file in dist may reach the 3072 MB/file transfer cap -- a future

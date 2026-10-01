@@ -6,25 +6,26 @@ for the RunAI GPU cluster, built to work with the network unplugged.
 Nothing here downloads anything at runtime — everything needed was pinned
 and verified before crossing the gap.
 
-This folder is FLAT by design. Send the files like this:
+This folder is FLAT by design and it is EXACTLY the send set: send it as-is.
+The four big artifacts are already in their transport form:
 
-    AS .zst (four files -- do NOT also send their plain .tar.gz twins):
+    THE FOUR BIG ARTIFACTS (a zstd container around the plain .tar.gz):
       nix-layer.tar.gz.zst            the pod toolchain layer (plain flavor)
       nix-layer-nvim.tar.gz.zst       the pod toolchain layer (nvim flavor)
       nixos-wsl.tar.gz.zst            the NixOS-WSL image for `wsl --import`
       windows-kit-<ver>.tar.gz.zst    Zed + VS Code + WSL2 MSI, themes, templates
 
-    AS-IS (everything else):
+    EVERYTHING ELSE (direct):
       README.md  MANIFEST.txt  SHA256SUMS  repo-layer.tar  wsl-rebuild.tar.gz
       twentyx-airgap.bundle  SETUP.ps1  UNPACK.ps1  setup-wsl.sh  docs/
 
 Each `.zst` file holds the exact `.tar.gz` inside a zstd container. The
 transfer pipeline drops the big gzip files, but it does not look inside
 zstd. Unpack each `.zst` on Windows first (7-Zip: right-click -> Extract);
-you get the plain `.tar.gz` back, byte-identical, so it still matches
-`SHA256SUMS`. Then run one command from this folder, as below. `.zst` is
-transport only: every tool here expects the `.tar.gz`, so do not skip the
-unpack step.
+you get the plain `.tar.gz` back, byte-identical, so `sha256sum -c
+SHA256SUMS` passes once all four are unpacked. Then run one command from
+this folder, as below. `.zst` is transport only: every tool here expects
+the `.tar.gz`, so do not skip the unpack step.
 
 ────────────────────────────────────────────────────────────────────
 FIRST TIME  (one PowerShell command)
