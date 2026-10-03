@@ -170,8 +170,8 @@
         default = self.packages.${system}.runai-layer;
 
         # ── the very first transfer ────────────────────────────────────────
-        # Chicken and egg: nix-import.sh needs a NixOS-WSL machine, and there
-        # is not one yet. This builds the rootfs tarball that `wsl --import`
+        # Chicken and egg: a NixOS-WSL machine is needed to build one, and
+        # there is not one yet. This builds the rootfs tarball that `wsl --import`
         # takes, so the airgapped laptop can be created from a Windows shell
         # with no Nix anywhere on it.
         #

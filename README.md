@@ -40,11 +40,11 @@ tells you what that costs before you carry it anywhere.
 
 The WSL bootstrap is a single ~1.5 GB gzip'd tarball (`nixos-wsl.tar.gz` —
 the builder's own default name is `nixos.wsl`, but `wsl --import` takes the
-same bytes under any name). The binary-cache exporter shards by default;
-reassembly is order-independent because the cache is content-addressed. If
-the size ever hurts, the single biggest lever is clangd (~1.4 GB of the WSL
-closure) — removable as an offline config edit on the WSL machine itself, no
-transfer needed.
+same bytes under any name). The offline rebuild delta is a single
+content-addressed binary cache (`wsl-rebuild.tar.gz`), so re-importing it
+is a no-op rather than a conflict. If the size ever hurts, the single
+biggest lever is clangd (~1.4 GB of the WSL closure) — removable as an
+offline config edit on the WSL machine itself, no transfer needed.
 
 ## The transfer, in one shape
 
@@ -138,7 +138,7 @@ at their use site; see [`MANUAL.md`](MANUAL.md) for the walkthrough):
 `PRELOAD_ORIGINAL`),
 `AGENT_SHELL` (which shell opencode spawns for tools),
 `SSH_BRIDGE_USER`, `SSH_BRIDGE_KEYDIR` (sshd bridge),
-`LAYER_VERSION`, `REUSE_CACHE`, `CACHE_SIGN_KEY`, `NIX_TRANSFER_CACHE`,
+`LAYER_VERSION`,
 `LAYER_NIX`, `LAYER_NIX_NVIM`, `LAYER_REPO`, `IMAGE_REGISTRY`,
 `BASE_REGISTRY`, `BASE_TAG`, `IMAGE_VARIANTS` (scripts + CI),
 `TEST_*` (test harness).
@@ -217,8 +217,6 @@ agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
 scripts/transfer-bundle.sh    run OUTSIDE -> the flat dist/ + transport twins of the big artifacts (.zst, WSL image .7z; big gzip does not cross the filter)
 scripts/export-rebuild-cache.sh  run OUTSIDE -> the WSL delta cache; always run by transfer-bundle, roots in .#wslDeltaRoots
-scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (signing declined, 2026-09)
-scripts/nix-import.sh         run INSIDE  -> imports it into the local store
 scripts/setup-wsl.sh          run INSIDE (root) -> clone/ff bundle, import cache, stage CA, rebuild as the user via sudo
 scripts/windows/SETUP.ps1     run on WINDOWS -> the one-shot: import + UNPACK + setup-wsl
 scripts/windows/UNPACK.ps1    run on WINDOWS -> extract the kit, install themes + client templates + VS Code
@@ -263,9 +261,8 @@ user rather than by Nix (this toolchain is distributed to a team, and a baked
 email would file everyone's state into the owner's directory).
 
 No signing key, by decision: integrity is the content-addressed store hash for
-the binary cache (a damaged chunk fails on the path it damaged). `nix/hosts/wsl.nix`
-keys `require-sigs` off `cache-pubkey`'s existence, so the unsigned path needs
-no edit and says so when it runs.
+the binary cache (a damaged path fails on the path it damaged), and
+`nix/hosts/wsl.nix` sets `require-sigs = false` to match.
 
 ## Zed remote, declared
 

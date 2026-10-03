@@ -15,20 +15,11 @@
   ...
 }:
 let
-  # Written by scripts/nix-export.sh when it signs a transfer, and gitignored
-  # because it is per-machine. Deriving both settings from one file's existence
-  # means neither path needs an edit: sign and the key is trusted, do not sign
-  # and signature checking is off. A hardcoded placeholder key would instead be
-  # an invalid base64 string that fails at activation time, days later, on the
-  # machine least able to debug it.
-  pubkeyFile = ../../cache-pubkey;
-  havePubkey = builtins.pathExists pubkeyFile;
-
   # The internal CA bundle, same file the pod gets via the env-injection
   # mount. WSL does not run bootstrap, so without this nothing on the
   # WSL side trusts the internal CA: push-artifactory.sh, the runai CLI and
   # uv all do TLS against Artifactory. Gitignored and optional — carry it with
-  # the transfer (wsl/README.md), presence is detected like cache-pubkey.
+  # the transfer (wsl/README.md); presence is detected here.
   caBundle = ../../ca-bundle.crt;
   haveCaBundle = builtins.pathExists caBundle;
 
@@ -87,7 +78,8 @@ let
   defaultNixosConfig = pkgs.writeText "default-configuration.nix" ''
     # This is the entry the shipped system already builds from; the durable
     # rebuild path on the WSL machine is this repository's flake, transferred
-    # by nix-import.sh. Kept here so /etc/nixos is not empty.
+    # as the git bundle and cloned by setup-wsl.sh. Kept here so /etc/nixos is
+    # not empty.
     { config, lib, pkgs, ... }:
 
     {
@@ -126,22 +118,17 @@ in
   # ── Offline substitution ────────────────────────────────────────────────
   # There is no cache.nixos.org here. Transfers arrive as a binary cache
   # directory unpacked at /var/cache/nix-transfer; Nix substitutes from it as
-  # if it were a remote cache, and reconciles purely by store hash — which is
-  # what makes a sharded transfer safe to reassemble in any order.
+  # if it were a remote cache, and reconciles purely by store hash.
   nix.settings = {
     experimental-features = [
       "nix-command"
       "flakes"
     ];
     substituters = lib.mkForce [ "file:///var/cache/nix-transfer" ];
-    trusted-public-keys = lib.mkForce (
-      lib.optional havePubkey (lib.removeSuffix "\n" (builtins.readFile pubkeyFile))
-    );
-    # Signing is free and makes the transfer tamper-evident — the property
-    # vendor/CHECKSUMS.sha256 used to provide, except that Nix verifies it per
-    # store path rather than per tarball. Without a key there is nothing to
-    # verify against, and demanding signatures would simply refuse the import.
-    require-sigs = havePubkey;
+    # Unsigned by decision (2026-09): the transfer crosses physically, and
+    # Nix still verifies per store path against the content-addressed hash.
+    trusted-public-keys = lib.mkForce [ ];
+    require-sigs = false;
     # Fail immediately instead of hanging on a substituter that cannot resolve.
     connect-timeout = 5;
     trusted-users = [ username ];

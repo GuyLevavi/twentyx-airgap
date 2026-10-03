@@ -111,8 +111,7 @@ in-gap layer transport is GitLab generic packages
       ```
 
       No signing key, by decision (2026-09): integrity is the content-addressed
-      store hash; `nix/hosts/wsl.nix` already degrades to `require-sigs = false`
-      when `cache-pubkey` is absent.
+      store hash, and `nix/hosts/wsl.nix` sets `require-sigs = false` to match.
 
 - [ ] Carry the dist files as-is: `*.tar.gz.zst` (layers, kit) and
       `nixos-wsl.tar.gz.7z` stand in for their plain `.tar.gz` twins (the
@@ -236,19 +235,9 @@ first connect to a real pod.
       settings file wins and gets a `.example` beside it). Keep Zed and VS
       Code auto-update off: the closure's Zed server and the pre-seeded VS
       Code server move only when the kit + pins move together.
-- [ ] Install the runai CLI for the bridge client side. Preferred: the exact
-      Linux executable the RunAI UI offers (it matches your cluster's server
-      version). Make it a pinned, declared derivation instead of a stray
-      binary in `~/.local/bin`:
-
-      ```bash
-      nix store prefetch-file --json <url-or-file>          # capture sha256
-      ```
-
-      then fill `nix/packages/runai-cli.nix` (version + hash) and add
-      `runai-cli` to `environment.systemPackages` in `nix/hosts/wsl.nix`.
-      Fallback if the UI offers nothing: `uv tool install runai` (resolves
-      internal Artifactory).
+- [ ] Install the runai CLI for the bridge client side: `uv tool install
+      runai` (resolves internal Artifactory), or drop the Linux executable
+      the RunAI UI offers into `~/.local/bin`.
 
 ## 6. After the first transfer
 

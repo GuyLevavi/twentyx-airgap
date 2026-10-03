@@ -97,34 +97,29 @@ if [ -n "$API" ]; then
 fi
 
 # -- 3. glab ----------------------------------------------------------------
-# Probed, not assumed: older glab builds have no `packages` group at all, in
-# which case the stored token is reused on the API path instead.
-if command -v glab >/dev/null 2>&1; then
-    if glab packages --help >/dev/null 2>&1 &&
-        GLAB_HELP="$(glab packages upload --help 2>&1)"; then
-        # Flag names differ across glab releases (--package-name vs --name):
-        # read them off this binary's own help and adapt.
-        NAME_FLAG=""
-        case "$GLAB_HELP" in
-            *--package-name*) NAME_FLAG="--package-name" ;;
-            *--name*) NAME_FLAG="--name" ;;
-        esac
-        VERSION_FLAG=""
-        case "$GLAB_HELP" in
-            *--version*) VERSION_FLAG="--version" ;;
-        esac
-        if [ -n "$NAME_FLAG" ] && [ -n "$VERSION_FLAG" ]; then
-            say "endpoint: glab packages upload ($NAME_FLAG, $VERSION_FLAG)"
-            for f in "${FILES[@]}"; do
-                say "uploading $(basename "$f") ($(du -h "$f" | cut -f1))"
-                glab packages upload "$f" "$NAME_FLAG" "$PACKAGE" "$VERSION_FLAG" "$VERSION"
-                say "uploaded $(basename "$f")"
-            done
-            say "done"
-            exit 0
-        fi
+# Older glab builds have no `packages` group, and the flag spelling moved
+# (--package-name vs --name). Try both, then reuse the stored token on the
+# API path.
+if command -v glab >/dev/null 2>&1 && glab packages upload --help >/dev/null 2>&1; then
+    glab_upload() {
+        glab packages upload "$1" --package-name "$PACKAGE" --version "$VERSION" 2>/dev/null ||
+            glab packages upload "$1" --name "$PACKAGE" --version "$VERSION"
+    }
+    say "endpoint: glab packages upload"
+    glab_ok=1
+    for f in "${FILES[@]}"; do
+        say "uploading $(basename "$f") ($(du -h "$f" | cut -f1))"
+        glab_upload "$f" || { glab_ok=""; break; }
+        say "uploaded $(basename "$f")"
+    done
+    if [ -n "$glab_ok" ]; then
+        say "done"
+        exit 0
     fi
+    say "glab packages upload failed -- trying the stored token"
+fi
 
+if command -v glab >/dev/null 2>&1; then
     TOKEN="$(glab auth status --show-token 2>/dev/null | sed -n 's/.*Token: //p' | head -1 || true)"
     if [ -n "$TOKEN" ]; then
         GITLAB_URL="${GITLAB_URL:-https://gitlab.com}"

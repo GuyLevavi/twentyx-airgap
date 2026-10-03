@@ -25,9 +25,9 @@ let
   };
 
   # The official opencode extension for code-server (the pod IDE). It is
-  # seeded as a packaged default; the raw .vsix below rides along for a
-  # machine that ever wants to sideload it manually. Version and hash are
-  # pinned deliberately: a moving ref would break offline rebuilds.
+  # seeded as a packaged default; its `.src` is the raw .vsix, also shipped
+  # for a machine that ever wants to sideload it manually. Version and hash
+  # are pinned deliberately: a moving ref would break offline rebuilds.
   opencodeVscode = pkgs.vscode-utils.buildVscodeMarketplaceExtension {
     mktplcRef = {
       publisher = "sst-dev";
@@ -35,12 +35,6 @@ let
       version = "0.0.13";
       hash = "sha256-6adXUaoh/OP5yYItH3GAQ7GpupfmTGaxkKP6hYUMYNQ=";
     };
-  };
-
-  # The raw .vsix, for `code --install-extension` on the Windows side.
-  opencodeVsix = pkgs.fetchurl {
-    url = "https://sst-dev.gallery.vsassets.io/_apis/public/gallery/publisher/sst-dev/extension/opencode/0.0.13/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage";
-    hash = "sha256-6adXUaoh/OP5yYItH3GAQ7GpupfmTGaxkKP6hYUMYNQ=";
   };
 
   # Zed's remote-development server, built by the same zed-editor derivation.
@@ -229,7 +223,7 @@ in
       # file there would shadow this anyway.
       {
         ".local/share/code-server/extensions/sst-dev.opencode".source = opencodeVscode;
-        ".local/share/vsix/sst-dev.opencode-0.0.13.vsix".source = opencodeVsix;
+        ".local/share/vsix/sst-dev.opencode-0.0.13.vsix".source = opencodeVscode.src;
       }
 
       # Zed: agent integration through opencode's ACP mode, plus the

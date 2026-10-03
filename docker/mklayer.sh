@@ -41,11 +41,7 @@ root ALL=(ALL:ALL) ALL
 %#0 ALL=(ALL) NOPASSWD: ALL
 @includedir /etc/sudoers.d
 EOF
-cat > "$STAGE/etc/sudoers.d/twentyx" <<'EOF'
-# Managed by the airgap repo layer. RunAI runtime user has gid 0.
-%#0 ALL=(ALL) NOPASSWD: ALL
-EOF
-chmod 0440 "$STAGE/etc/sudoers" "$STAGE/etc/sudoers.d/twentyx"
+chmod 0440 "$STAGE/etc/sudoers"
 
 # ── git: neutral settings, system scope ───────────────────────────────────
 # There is deliberately no packaged ~/.config/git/config in the Nix layer: it

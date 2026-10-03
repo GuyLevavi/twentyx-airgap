@@ -171,7 +171,7 @@ in
     # One list for every consumer (fish PATH, nvim, the Zed server, and the
     # opencode PATH wrap above). The list and its rationale live in
     # nix/modules/lsp.nix — add a server there, not here.
-    ++ (import ./lsp.nix { inherit pkgs; })
+    ++ lspPackages
     ++ lib.optionals (!cfg.nvim.enable) [
       # The plain flavor has no nvim; see EDITOR in home.nix.
       nano

@@ -8,11 +8,9 @@
 # wsl-username in the transfer, else jensen. Steps (idempotent):
 #   1. clone the repo git bundle into the user's home, or fast-forward it
 #   2. import the offline rebuild cache
-#   3. install the kit's VS Code extensions from .vsix files, best-effort
-#      (skipped when the kit or a pre-seeded server is missing)
-#   4. stage ca-bundle.crt / wsl-username so the flake's git-tree evaluation
+#   3. stage ca-bundle.crt / wsl-username so the flake's git-tree evaluation
 #      sees them
-#   5. nixos-rebuild switch --flake <repo>#wsl as the user via sudo — never
+#   4. nixos-rebuild switch --flake <repo>#wsl as the user via sudo — never
 #      as root directly; if passwordless sudo is missing (older image), a
 #      hint to run the rebuild from the user's own shell
 #
@@ -66,37 +64,7 @@ else
     say "wsl-rebuild.tar.gz not found -- rebuilds that need new paths will fail"
 fi
 
-# ── 3. VS Code extensions from the kit (best-effort, offline) ────────────
-# The kit may carry raw .vsix packages under windows-kit/vscode/vsix (or
-# directly under windows-kit). When the distro already has a pre-seeded VS
-# Code server in the user's home, install them with that server's own CLI:
-# no marketplace, no network. Everything here is optional -- a missing kit,
-# vsix or server is a notice, never a failure.
-VSCODE_BIN="/home/$USER_R/.vscode-server/bin"
-if [ -d "$TRANSFER/windows-kit" ]; then
-    VSIX_FILES=()
-    for dir in "$TRANSFER/windows-kit/vscode/vsix" "$TRANSFER/windows-kit"; do
-        [ -d "$dir" ] || continue
-        for vsix in "$dir"/*.vsix; do
-            [ -f "$vsix" ] || continue
-            VSIX_FILES+=("$vsix")
-        done
-    done
-    SERVER_DIRS=("$VSCODE_BIN"/*/)
-    if [ "${#VSIX_FILES[@]}" -eq 0 ]; then
-        say "no .vsix files in the kit -- skipping VS Code extensions"
-    elif [ "${#SERVER_DIRS[@]}" -ne 1 ] || [ ! -x "${SERVER_DIRS[0]%/}/bin/code-server" ]; then
-        say "no pre-seeded VS Code server for $USER_R -- skipping kit extensions"
-    else
-        SERVER="${SERVER_DIRS[0]%/}"
-        say "installing ${#VSIX_FILES[@]} VS Code extension(s) from the kit (best-effort)"
-        for vsix in "${VSIX_FILES[@]}"; do
-            runuser -u "$USER_R" -- "$SERVER/bin/code-server" --install-extension "$vsix" --force || true
-        done
-    fi
-fi
-
-# ── 4. stage the shipped cluster files for the flake ─────────────────────
+# ── 3. stage the shipped cluster files for the flake ─────────────────────
 # Flakes in a git checkout only see tracked/staged files, and these two are
 # gitignored, so force-add them. `git add -A` then makes any other changed
 # shipped text visible to the evaluation. No commit: the staged tree is
@@ -110,7 +78,7 @@ for f in ca-bundle.crt wsl-username; do
 done
 runuser -u "$USER_R" -- git -C "$REPO" add -A
 
-# ── 5. rebuild (as the user via sudo, never as root directly) ────────────
+# ── 4. rebuild (as the user via sudo, never as root directly) ────────────
 # The imported image has passwordless sudo for wheel; older images do not,
 # and sudo would sit on an unanswerable prompt. Detect that up front and
 # hand the one command over instead of hanging the Windows one-shot.

@@ -107,7 +107,7 @@ let
   kit = pkgs.runCommand "windows-kit-${zedVersion}" { } ''
     mkdir -p $out/themes $out/vscode/vsix
     ln -s ${zedInstaller} $out/Zed-x86_64-${zedVersion}-setup.exe
-    ln -s ${wslMsi} $out/wsl.2.9.12.0.x64.msi
+    ln -s ${wslMsi} $out/${wslMsi.name}
     # Version-controlled client templates (repo files, not store paths).
     install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
     install -m 0644 ${./windows/zed-client-settings.personal-example.json} $out/zed-client-settings.personal-example.json
@@ -190,10 +190,5 @@ let
   '';
 in
 {
-  inherit
-    zedInstaller
-    wslMsi
-    kit
-    kitTarball
-    ;
+  inherit kitTarball;
 }

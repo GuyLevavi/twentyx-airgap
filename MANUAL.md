@@ -34,9 +34,9 @@ What you fill in **at the airgap side instead** (no transfer involved):
 - `.gitlab-ci.yml` cluster facts (`BASE_REGISTRY`, `BASE_TAG`,
   `LAYER_BASE_URL`, lint-image digest) — git text, edited on the work WSL PC
   and pushed to the internal GitLab before the first CI run.
-- `nix/packages/runai-cli.nix` — fill version/hash/URL on the work PC (the
-  binary's URL is only reachable there), then rebuild offline. Day-one
-  fallback: put the binary in `~/.local/bin` by hand and pin it later.
+- the runai CLI (the ssh-bridge client) — `uv tool install runai` resolves
+  through internal Artifactory; alternatively drop the Linux executable the
+  RunAI UI offers into `~/.local/bin`.
 
 Also build the Windows-side kit while connected — it is what makes the
 Windows half of the gap turnkey:
@@ -156,9 +156,8 @@ and friends need no network. Adding a package is what needs a transfer.
 
 Daily drivers on WSL: Zed from Windows over its WSL remote (server ships in
 the closure), VS Code Remote-WSL (kit client, pre-seeded server + extensions),
-`opencode`, `runai` CLI once pinned — see `nix/packages/runai-cli.nix` for
-the recipe; the binary the RunAI UI offers is the right one (it matches the
-cluster's server version).
+`opencode`, and the `runai` CLI (`uv tool install runai`; the binary the
+RunAI UI offers works too — it matches the cluster's server version).
 
 ## 2. Build the pod layers (connected machine)
 

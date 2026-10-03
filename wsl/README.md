@@ -158,11 +158,8 @@ this reason) and build from string literals with no fetches. (`/etc/nixos`
 holds only the just-in-case `configuration.nix`; the repo arrives as the
 shipped `twentyx-airgap.bundle`.)
 
-The generic sharded exporter (`scripts/nix-export.sh` outside,
-`scripts/nix-import.sh` inside) remains for arbitrary cache moves; its chunks
-may be transferred in **any order** and re-imported freely — the cache is
-content-addressed, so reassembly has no ordering requirement and no
-partial-state corruption mode (verified by extracting in reverse).
+The rebuild delta is a content-addressed binary cache, so re-importing it is
+a no-op rather than a conflict.
 
 ## Windows → distro over SSH
 

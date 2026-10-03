@@ -47,7 +47,7 @@ Three artifact classes, three mechanisms:
 
 | Artifact | Made by | Lands in |
 |---|---|---|
-| Binary-cache chunks | `scripts/nix-export.sh` (outside) → `nix-import.sh` (inside) | the WSL Nix store |
+| Offline rebuild delta | `scripts/export-rebuild-cache.sh` (outside) → `setup-wsl.sh` (inside) | `/var/cache/nix-transfer`, then the WSL Nix store |
 | Layer tarballs | `scripts/build-layers.sh` → `push-gitlab-packages.sh` (Artifactory fallback) | GitLab generic packages, appended onto base images by CI |
 | The WSL root tarball | `nix build .#wsl-tarball` | `wsl --import` on Windows |
 
@@ -153,7 +153,7 @@ and a rebuilt server is a transfer.
 | 8 | `libexec/common.sh` | identity chain, HOME resolution, env-injection contract |
 | 9 | `libexec/entrypoint` → `bootstrap` → `run-opencode` → `doctor` | the pod boot chain, in that order |
 | 10 | `agent/plugins/preload.ts` + `agent/restore-preload.sh` | the child-restore half of the preload split |
-| 11 | `scripts/` (transfer-bundle, build-layers, nix-export, nix-import, push-gitlab-packages, ssh-bridge) | the transfer flows |
+| 11 | `scripts/` (transfer-bundle, build-layers, export-rebuild-cache, push-gitlab-packages, ssh-bridge) | the transfer flows |
 | 12 | `tests/test-container.sh` | the problematic pod, reproduced locally |
 | 13 | `NOTES.md` | why things are the way they are — the failures behind the comments |
 

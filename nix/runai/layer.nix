@@ -78,7 +78,6 @@ runCommand "runai-layer.tar.gz"
       gnutar
       gzip
     ];
-    passthru = { inherit profile files closure; };
     meta.description = "Nix toolchain tree for crane-append onto RunAI bases";
   }
   ''

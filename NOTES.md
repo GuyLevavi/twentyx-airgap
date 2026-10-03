@@ -44,10 +44,10 @@ Fully airgapped. Build-time network reaches **internal Artifactory only**; pip r
 
 Two independent flows, which used to be one:
 
-    WSL      outside -> nix-export.sh -> binary cache, sharded
-                      (unsigned by decision; optional key path kept)
+    WSL      outside -> transfer-bundle.sh -> nixos-wsl.tar.gz + wsl-rebuild.tar.gz
+                      (unsigned by decision)
                      -> physical transfer
-                     -> nix-import.sh -> /var/cache/nix-transfer -> nixos-rebuild
+                     -> setup-wsl.sh -> /var/cache/nix-transfer -> nixos-rebuild
 
     IMAGES   outside -> build-layers.sh -> nix-layer{,-nvim}.tar.gz
                      -> physical transfer
@@ -67,13 +67,12 @@ Two independent flows, which used to be one:
 
 **No signing keys, by decision (2026-09).** The two-checksum scheme is covered by Nix's
 per-store-path hashing; adding an ed25519 trust chain on top was declined as ceremony.
-`nix/hosts/wsl.nix` keys `require-sigs` off `cache-pubkey`'s existence,
-so the unsigned path needs no edit and prints that it is unverified.
+`nix/hosts/wsl.nix` sets `require-sigs = false` to match.
 
 **What replaced the two-checksum scheme.** `manifest.toml` hashed upstream archives (*did I
 download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
 transfer corrupt anything?*). Nix covers both, better: the flake lock pins inputs by hash, and the
-binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
+binary cache is verified per **store path** rather than per tarball -- so a damaged path fails on
 the path it damaged, not on "the transfer". The binary cache still carries no sidecars; `dist/`
 gained one `SHA256SUMS` + `MANIFEST.txt` (2026-09-28) purely as a post-copy convenience for the
 carry medium (`sha256sum -c` before import). The trust anchor is unchanged: a corrupt layer
@@ -300,11 +299,10 @@ it is not relitigated:
   (`libexec/sshd-inetd` + `scripts/ssh-bridge.sh`) is implemented but only
   exercised against a real `runai exec`. Full story: README "Zed remote,
   declared", `nix/modules/home.nix`.
-- **runai CLI on WSL**: prefer the Linux executable the RunAI UI offers (it
-  matches the cluster's server version); pin it as a declared derivation --
-  recipe in `nix/packages/runai-cli.nix` (fill version/hash/url, wire into
-  `nix/hosts/wsl.nix`). Fallback: `uv tool install runai` (resolves internal
-  Artifactory). It is a client tool, deliberately not in the pod closure.
+- **runai CLI on WSL**: `uv tool install runai` (resolves internal
+  Artifactory), or the Linux executable the RunAI UI offers (it matches the
+  cluster's server version) into `~/.local/bin`. It is a client tool,
+  deliberately not in the pod closure.
 - **shell.env hook**: verified against the shipped opencode version's
   documented behavior; upstream has a TODO about honoring `shell.env` in the
   v2 bash tool -- the `BASH_ENV` path is the belt to that suspenders.

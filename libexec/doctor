@@ -103,10 +103,10 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
     # Staleness. After an image update the store paths change, and any link
     # bootstrap did not rewrite now points at a path that no longer exists.
     # These are silent: the file simply appears to be missing.
-    stale="$(find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | wc -l)"
-    if [ "$stale" -gt 0 ]; then
-        bad "$stale dangling link(s) into /nix/store -- stale from a previous image"
-        find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | head -3 | sed 's/^/       /'
+    stale="$(find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null)"
+    if [ -n "$stale" ]; then
+        bad "$(printf '%s\n' "$stale" | wc -l) dangling link(s) into /nix/store -- stale from a previous image"
+        printf '%s\n' "$stale" | head -3 | sed 's/^/       /'
         bad "fix with: $TOOLCHAIN_ROOT/libexec/bootstrap"
         fails=$((fails+1))
     else

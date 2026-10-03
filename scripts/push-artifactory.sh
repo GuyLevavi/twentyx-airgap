@@ -8,8 +8,7 @@
 # only binary artifacts left are Nix build outputs, and those are computed, not
 # committed.
 #
-# Not to be confused with scripts/nix-import.sh, which loads the *WSL* transfer
-# into a local Nix store. This one feeds the *image* pipeline, which has no Nix.
+# Feeds the *image* pipeline, which has no Nix.
 #
 # Uses the `jf` CLI when present, curl otherwise -- on the very first transfer
 # `jf` itself may not be installed yet.
