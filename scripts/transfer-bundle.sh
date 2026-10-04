@@ -63,6 +63,18 @@ if [ -d "$OUT" ] && [ ! -f "$OUT/.complete" ] && [ -n "$(find "$OUT" -maxdepth 1
     say "wiping partial $OUT (no .complete marker)"
     rm -rf "$OUT"
 fi
+# A completed dist leaves the big artifacts wrapped (the plain files are
+# removed after wrapping). Recover them for this run instead of rebuilding:
+# extraction is seconds, a fresh NixOS-WSL tarball is ~10 minutes.
+if [ -f "$OUT/.complete" ]; then
+    for a in "$OUT"/*.7z; do
+        [ -f "$a" ] || continue
+        f="$(basename "$a" .7z)"
+        [ -f "$OUT/$f" ] && continue
+        say "unwrapping $f for the rerun"
+        nix shell nixpkgs#p7zip -c 7z x -bso0 -bsp0 -o"$OUT" "$a"
+    done
+fi
 rm -f "$OUT/.complete"
 mkdir -p "$OUT"
 
@@ -240,7 +252,10 @@ BIG=(
 )
 for f in "${BIG[@]}"; do
     [ -f "$OUT/$f" ] || continue
-    nix shell nixpkgs#p7zip -c 7z a -bso0 -bsp0 -mx1 -mmt=on "$OUT/$f.7z" "$OUT/$f"
+    # cd first: 7z stores the path as given, so archiving "$OUT/$f" records
+    # "dist/<file>" and extracting in the transfer folder would nest it.
+    # Archiving the bare name yields <folder>/<file>, as the docs promise.
+    ( cd "$OUT" && nix shell nixpkgs#p7zip -c 7z a -bso0 -bsp0 -mx1 -mmt=on "$f.7z" "$f" )
     say "  $f.7z ($(( $(stat -c %s "$OUT/$f.7z") / 1000000 )) MB)"
     rm -f "$OUT/$f"
 done
