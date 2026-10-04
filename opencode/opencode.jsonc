@@ -1,0 +1,45 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // AIRGAP-SETUP: point opencode at the internal endpoint before first use.
+  // This file is a LIVE symlink into ~/twentyx-airgap/opencode/ -- edits take
+  // effect on the next opencode start, no rebuild. Typical shape (ask the
+  // cluster owner for the exact provider, model and baseURL):
+  //
+  //   "model": "<provider>/<model>",
+  //   "provider": {
+  //     "<provider>": {
+  //       "npm": "@ai-sdk/openai-compatible",
+  //       "name": "<label>",
+  //       "options": { "baseURL": "https://<internal-host>/v1" }
+  //     }
+  //   }
+  //
+  // Delete this AIRGAP-SETUP block once configured; the interactive shell and
+  // the boot log warn while it is present.
+  "lsp": {
+    "pyright": { "disabled": true },
+    "basedpyright": {
+      "command": ["basedpyright-langserver", "--stdio"],
+      "extensions": [".py", ".pyi"]
+    },
+    "ruff": {
+      "command": ["ruff", "server"],
+      "extensions": [".py", ".pyi"]
+    },
+    "nixd": { "command": ["nixd"] },
+    "bash": { "command": ["bash-language-server", "start"] },
+    "yaml-ls": { "command": ["yaml-language-server", "--stdio"] },
+    "taplo": {
+      "command": ["taplo", "lsp", "stdio"],
+      "extensions": [".toml"]
+    },
+    "package-version-server": {
+      "command": ["package-version-server"],
+      "extensions": [".json"]
+    },
+    "markdown-oxide": {
+      "command": ["markdown-oxide"],
+      "extensions": [".md", ".markdown"]
+    }
+  }
+}

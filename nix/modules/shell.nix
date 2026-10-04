@@ -99,6 +99,20 @@ in
           set -g fish_complete_path (string replace -a -- ${evalHome} "$HOME" $fish_complete_path)
         end
       end
+
+      # Loud until the two per-site setup steps are done. Neither can ship in
+      # the closure: the internal CA bundle (TLS to internal endpoints) and the
+      # opencode provider/model (the AIRGAP-SETUP placeholder). No repo clone
+      # on the pod -> skip silently there.
+      set -l airgap_repo "$HOME/twentyx-airgap"
+      if test -d "$airgap_repo"
+        if test -f "$airgap_repo/opencode/opencode.jsonc"; and string match -q -- '*AIRGAP-SETUP*' < "$airgap_repo/opencode/opencode.jsonc"
+          echo "WARNING: $airgap_repo/opencode/opencode.jsonc still has the AIRGAP-SETUP placeholder -- set the internal provider/model (next opencode start, no rebuild)." >&2
+        end
+        if not test -f "$airgap_repo/ca-bundle.crt"
+          echo "WARNING: $airgap_repo/ca-bundle.crt is missing -- drop the internal CA bundle there and run rb so TLS to internal endpoints is trusted." >&2
+        end
+      end
     '';
 
     # Abbreviations, not aliases: they expand in place before you hit enter, so

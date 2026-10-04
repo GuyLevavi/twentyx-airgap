@@ -217,6 +217,40 @@ in
         ".config/opencode/plugins/preload.ts".source = ../../agent/plugins/preload.ts;
       }
 
+      # opencode's config loader runs an npm install of @opencode-ai/plugin in
+      # every config dir at startup (Npm.install, verified against v1.18.28).
+      # With no registry reachable the TUI joins that fiber and stalls ~1.5 min
+      # (NpmInstallFailedError ECONNREFUSED) before it draws. The install is
+      # skipped when node_modules exists AND every declared dependency --
+      # including the one it wants to add -- is a root dependency in
+      # package-lock.json. Seed both; no closure growth, no patch.
+      # ponytail: the dependency list is frozen at @opencode-ai/plugin; a
+      # release that installs more packages needs those names added here.
+      {
+        ".config/opencode/node_modules/.keep".text = "";
+        ".config/opencode/package-lock.json".text = builtins.toJSON {
+          name = "opencode";
+          lockfileVersion = 3;
+          requires = true;
+          packages."".dependencies."@opencode-ai/plugin" = pkgs.opencode.version;
+        };
+      }
+
+      # opencode config lives in the repo as a LIVE symlink on WSL, so the
+      # one-time provider/model edit for the internal endpoint takes effect on
+      # the next opencode start -- no rebuild (the /etc/nixos pattern). The
+      # shipped file carries an AIRGAP-SETUP placeholder; the interactive
+      # shell and the boot log warn until it is gone. The pod has no repo
+      # clone and keeps its own config on the PVC.
+      (lib.optionalAttrs (cfg.target == "wsl") {
+        ".config/opencode/opencode.jsonc".source =
+          config.lib.file.mkOutOfStoreSymlink
+            "${config.home.homeDirectory}/twentyx-airgap/opencode/opencode.jsonc";
+        ".config/opencode/tui.json".source =
+          config.lib.file.mkOutOfStoreSymlink
+            "${config.home.homeDirectory}/twentyx-airgap/opencode/tui.json";
+      })
+
       # Editor integration. code-server (the pod's IDE) scans this dir, so a
       # symlinked store path is enough. The user's own opencode.json is NOT
       # packaged: the working config already lives on the PVC, and a real

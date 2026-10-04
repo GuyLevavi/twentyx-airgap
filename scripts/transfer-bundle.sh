@@ -22,34 +22,62 @@
 #     setup-wsl.sh                     Linux-side one-shot (SETUP.ps1 runs it)
 #     docs/                            user-facing docs
 #
-#   ...plus a transport twin of the big artifacts: .zst for both nix layers
-#   and the Windows kit, .7z for the WSL image (the pipeline drops big gzip
-#   and did not pass even its zstd twin). Unpacked with 7-Zip before use,
-#   transport only: the inner .tar.gz stays byte-identical. dist IS the send
-#   set -- the plain twins are removed once wrapped, and SHA256SUMS lists
-#   them for the far side, after the unpack.
+#   ...plus a .7z transport container around EVERY big artifact (both layers,
+#   the kit, the WSL image, the rebuild delta): the transfer pipeline drops
+#   big gzip and did not pass their zstd twins, but 7-Zip containers pass.
+#   Unpacked with 7-Zip before use, transport only: the inner .tar.gz stays
+#   byte-identical. dist IS the send set -- the plain twins are removed once
+#   wrapped, and SHA256SUMS lists them for the far side, after the unpack.
 #
-# Staleness is guarded by derivation paths, not mtimes: dist/.wlldrv and
-# dist/.layerdrv record what each big artifact was built from, so a closure
-# change rebuilds exactly that artifact and a text-only commit rebuilds none.
-# The definitive reset is still one line:
+# Generation consistency: the artifacts only work together (repo bundle at
+# HEAD + image/delta from the same closure). dist/.complete is written LAST
+# by a successful run; a dist without it is a partial set from an interrupted
+# run and is wiped on the next start. Between runs, closure artifacts are
+# guarded by derivation paths, not mtimes: dist/.wlldrv and dist/.layerdrv
+# record what each was built from, so a closure change rebuilds exactly that
+# artifact and a text-only commit rebuilds none. repo-layer.tar is the
+# exception -- it is text and is rebuilt every run. The definitive reset is
+# still one line:
 #
 #   rm -rf dist && ./scripts/transfer-bundle.sh
 #
-# Nothing needs root anywhere in this script: the NixOS-WSL tarball builder
-# self-elevates via a user namespace and the output is owned by whoever runs
-# it. SKIP_CACHE=1 skips the (deliberately always-run) delta export.
+# A dirty worktree is refused (the bundle carries committed history only);
+# ALLOW_DIRTY=1 is the escape hatch. Nothing needs root anywhere in this
+# script: the NixOS-WSL tarball builder self-elevates via a user namespace
+# and the output is owned by whoever runs it. SKIP_CACHE=1 skips the
+# (deliberately always-run) delta export.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT=dist
 VERSION="$(cat VERSION)"
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+
+# ── 0. one generation or nothing ──────────────────────────────────────────
+# A partial dist is worse than none: the bundle at HEAD with an image/delta
+# from an older closure makes the far side's rebuild name store paths that
+# exist nowhere, and Nix then tries to build (and fetch) them. .complete is
+# written LAST by a successful run -- no marker means interrupted, wipe it.
+# The marker is removed up front so THIS run can never inherit a stale one.
+if [ -d "$OUT" ] && [ ! -f "$OUT/.complete" ] && [ -n "$(find "$OUT" -maxdepth 1 -type f ! -name '.*' -print -quit)" ]; then
+    say "wiping partial $OUT (no .complete marker)"
+    rm -rf "$OUT"
+fi
+rm -f "$OUT/.complete"
 mkdir -p "$OUT"
+
+# The bundle carries committed history; the scripts and docs are copied from
+# the working tree. Mixing the two ships a set that cannot be reproduced from
+# the bundle. Refuse it -- ALLOW_DIRTY=1 is the escape hatch.
+if [ -n "$(git status --porcelain)" ] && [ -z "${ALLOW_DIRTY:-}" ]; then
+    echo "error: working tree has uncommitted changes -- commit first" >&2
+    echo "       (the bundle ships committed history only), or set ALLOW_DIRTY=1." >&2
+    exit 1
+fi
 
 # ── 1. the RunAI layers ───────────────────────────────────────────────────
 # Both flavors, rebuilt together when either closure changes. build-layers.sh
-# builds in the persistent chroot store when it exists (NOTES.md §9).
+# builds in the default store and falls back to the chroot store (NOTES §9).
 want_layers="$(nix eval --raw .#runai-layer.drvPath)
 $(nix eval --raw .#runai-layer-nvim.drvPath)"
 if [ ! -f "$OUT/nix-layer.tar.gz" ] || [ ! -f "$OUT/nix-layer-nvim.tar.gz" ] \
@@ -57,6 +85,11 @@ if [ ! -f "$OUT/nix-layer.tar.gz" ] || [ ! -f "$OUT/nix-layer-nvim.tar.gz" ] \
     ./scripts/build-layers.sh "$OUT"
     printf '%s' "$want_layers" > "$OUT/.layerdrv"
 fi
+# repo-layer.tar is TEXT: it changes every commit (libexec/, agent/) and is
+# NOT covered by the closure stamp above, so it is rebuilt every run rather
+# than reusing what the last closure build left here. mklayer.sh is also what
+# CI runs per commit, so the two shapes stay identical.
+./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
 
 # ── 2. the NixOS-WSL root tarball ─────────────────────────────────────────
 # Two guards, because existence alone is not enough: the content probe (a
@@ -179,33 +212,34 @@ EXPR
     echo "BUILT_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 } > "$OUT/MANIFEST.txt"
 
-# Everything except the stamps, the zstd transport twins (which wrap the
+# Everything except the stamps, the 7z transport containers (which wrap the
 # files below, so hashing them is redundant and would make a re-run of this
 # script hash its own outputs) and SHA256SUMS itself; hidden files are
 # internal build stamps and do not ship.
 (
     cd "$OUT"
-    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name '*.zst' ! -name '*.7z' -print0 \
+    find . -type f ! -name '.*' ! -name SHA256SUMS ! -name '*.7z' -print0 \
         | sort -z | xargs -0 sha256sum
 ) > "$OUT/SHA256SUMS"
 
-# ── 9. transport twins for the big artifacts ──────────────────────────────
-# Measured on the wire: the pipeline drops the big gzip files, passes zstd,
-# and did NOT pass the 1.5 GB WSL image even as zstd -- but 7-Zip containers
-# passed. So the layers and the kit get a .zst twin, the WSL image a .7z
-# one. Transport only: the inner .tar.gz stays byte-identical. dist IS the
-# send set -- the plain twins are removed once wrapped, and SHA256SUMS
-# lists them for the far side, after the unpack.
+# ── 9. transport containers for the big artifacts ─────────────────────────
+# Measured on the wire: the pipeline drops the big gzip files and did not
+# pass their zstd twins either (including the 1.5 GB WSL image) -- but 7-Zip
+# containers pass. Every big artifact gets one. Transport only: the inner
+# .tar.gz stays byte-identical, so SHA256SUMS still verifies after the
+# unpack. dist IS the send set -- the plain files are removed once wrapped.
 say "wrapping the big artifacts for the transfer"
 rm -f "$OUT"/twentyx-airgap-*.tar.gz
-ZST=("nix-layer.tar.gz" "nix-layer-nvim.tar.gz" "${KITNAME#*-}")
-SEVENZ=("nixos-wsl.tar.gz")
-for f in "${ZST[@]}"; do
-    nix shell nixpkgs#zstd -c zstd -3 -T0 -q -f "$OUT/$f" -o "$OUT/$f.zst"
-    say "  $f.zst ($(( $(stat -c %s "$OUT/$f.zst") / 1000000 )) MB)"
-    rm -f "$OUT/$f"
-done
-for f in "${SEVENZ[@]}"; do
+BIG=(
+    "nix-layer.tar.gz"
+    "nix-layer-nvim.tar.gz"
+    "${KITNAME#*-}"
+    "nixos-wsl.tar.gz"
+    # Absent when SKIP_CACHE=1 skipped the delta export.
+    "wsl-rebuild.tar.gz"
+)
+for f in "${BIG[@]}"; do
+    [ -f "$OUT/$f" ] || continue
     nix shell nixpkgs#p7zip -c 7z a -bso0 -bsp0 -mx1 -mmt=on "$OUT/$f.7z" "$OUT/$f"
     say "  $f.7z ($(( $(stat -c %s "$OUT/$f.7z") / 1000000 )) MB)"
     rm -f "$OUT/$f"
@@ -230,3 +264,7 @@ done
 cd "$OUT"
 say "bundle contents:"
 du -h ./* 2>/dev/null | sort -k2
+
+# LAST: the set is complete and internally consistent. Anything that ships
+# it looks for this marker first (step 0 wipes a dist that lacks it).
+: > .complete

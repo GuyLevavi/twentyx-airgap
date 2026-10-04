@@ -7,26 +7,24 @@ Nothing here downloads anything at runtime — everything needed was pinned
 and verified before crossing the gap.
 
 This folder is FLAT by design and it is EXACTLY the send set: send it as-is.
-The four big artifacts are already in their transport form:
+The big artifacts are wrapped in 7-Zip containers for the transfer:
 
-    THE FOUR BIG ARTIFACTS (a transport container around the plain .tar.gz):
-      nix-layer.tar.gz.zst            the pod toolchain layer (plain flavor)
-      nix-layer-nvim.tar.gz.zst       the pod toolchain layer (nvim flavor)
+    THE BIG ARTIFACTS (a .7z container around the plain .tar.gz):
+      nix-layer.tar.gz.7z             the pod toolchain layer (plain flavor)
+      nix-layer-nvim.tar.gz.7z        the pod toolchain layer (nvim flavor)
       nixos-wsl.tar.gz.7z             the NixOS-WSL image for `wsl --import`
-      windows-kit-<ver>.tar.gz.zst    Zed + VS Code + WSL2 MSI, themes, templates
+      windows-kit-<ver>.tar.gz.7z     Zed + VS Code + WSL2 MSI, themes, templates
+      wsl-rebuild.tar.gz.7z           offline rebuild cache for an existing distro
 
     EVERYTHING ELSE (direct):
-      README.md  MANIFEST.txt  SHA256SUMS  repo-layer.tar  wsl-rebuild.tar.gz
+      README.md  MANIFEST.txt  SHA256SUMS  repo-layer.tar
       twentyx-airgap.bundle  SETUP.ps1  UNPACK.ps1  setup-wsl.sh  docs/
 
-Each container holds the exact `.tar.gz`: the three `.zst` files inside a
-zstd container, the WSL image inside a 7-Zip container (the transfer
-pipeline dropped even its zstd twin). Unpack all four on Windows first
-with 7-Zip (right-click -> Extract); you get the plain `.tar.gz` back,
-byte-identical, so `sha256sum -c SHA256SUMS` passes once all four are
-unpacked. Then run one command from this folder, as below. These containers
-are transport only: every tool here expects the `.tar.gz`, so do not skip
-the unpack step.
+Unpack all five containers on Windows first with 7-Zip (right-click ->
+Extract); you get the plain `.tar.gz` back, byte-identical, so
+`sha256sum -c SHA256SUMS` passes once all five are unpacked. Then run one
+command from this folder, as below. These containers are transport only:
+every tool here expects the `.tar.gz`, so do not skip the unpack step.
 
 ────────────────────────────────────────────────────────────────────
 FIRST TIME  (one PowerShell command)
@@ -122,8 +120,10 @@ matching remote server for that release's commit — first connect needs no
 network. Do not update VS Code on Windows: a newer client demands a server
 the gap cannot download. The shipped `vscode-settings.json` already pins
 updates off. Extensions (ruff, basedpyright, nix-ide, YAML, themes) are
-installed offline by setup-wsl.sh from the kit's .vsix files; the remote
-settings point ruff and nixd at the same closure binaries Zed and nvim use.
+seeded offline by the system's stamp-guarded oneshot from the pinned .vsix
+set — the server dir is re-owned to the user first, so the install cannot hit
+a root-owned `.vscode-server`; the remote settings point ruff and nixd at the
+same closure binaries Zed and nvim use.
 
 ────────────────────────────────────────────────────────────────────
 IF THE REBUILD FAILS
@@ -170,11 +170,20 @@ THIS ROUND — the first-remote-test fixes:
     bash and skipping the exec-into-fish marker.
   - VS Code returns, pinned end to end (installer ↔ server commit ↔
     extension engines), replacing nothing: Zed remote stays the default.
-  - The transfer folder is FLAT; the big artifacts cross in transport
-    containers (.zst, and 7z for the 1.5 GB WSL image -- the pipeline
-    dropped its zstd twin too) and are unpacked with 7-Zip before use;
-    a MANIFEST + SHA256SUMS, and the Windows side is one script
-    (SETUP.ps1) that no longer assumes C:\twentyx.
+   - The transfer folder is FLAT; every big artifact crosses in a 7-Zip
+     container (the pipeline drops big gzip and rejected the zstd twins)
+     and is unpacked with 7-Zip before use; a MANIFEST + SHA256SUMS; the
+     Windows side is one script (SETUP.ps1) that no longer assumes
+     C:\twentyx.
+   - dist cannot ship half-built: `.complete` is written last and a dist
+     without it (an interrupted run) is wiped and regenerated, so every
+     artifact comes from the same commit and closure.
+   - opencode's startup npm install of @opencode-ai/plugin is
+     short-circuited offline (seeded node_modules + lockfile), ending the
+     ~1.5 min TUI stall; its config is a LIVE symlink into
+     ~/twentyx-airgap/opencode/ with an AIRGAP-SETUP placeholder, and the
+     internal CA + the placeholder warn from the shell and the boot log
+     until treated (edits need no rebuild).
 
 EARLIER — fresh-start round: repo ships as a git bundle (real history), Zed
 themes/client templates become version-controlled kit artifacts, the

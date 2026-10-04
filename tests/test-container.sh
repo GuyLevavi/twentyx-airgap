@@ -43,6 +43,39 @@ trap 'chmod -R u+w "$WORK" >/dev/null 2>&1; if [ -z "${TEST_KEEP:-}" ]; then pod
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
+# Long steps (nix build, pulls, crane appends) get a live elapsed heartbeat --
+# a ten-minute build must not look like a hang. Output is captured to
+# $WORK/step.log and echoed only on failure; run_step_out returns the last
+# line so callers can read `nix build --print-out-paths`.
+run_step() {
+    local desc="$1" start=$SECONDS rc=0 pid spin='|/-\\' i=0
+    shift
+    "$@" >"$WORK/step.log" 2>&1 &
+    pid=$!
+    # Status goes to stderr: stdout is reserved for run_step_out's payload.
+    if [ -t 2 ]; then
+        while kill -0 "$pid" 2>/dev/null; do
+            printf '\r\033[36m==>\033[0m %s %s %ss' "$desc" "${spin:i++%4:1}" "$((SECONDS - start))" >&2
+            sleep 1
+        done
+        printf '\r\033[K' >&2
+    else
+        printf '\033[36m==>\033[0m %s (started)\n' "$desc" >&2
+    fi
+    wait "$pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        printf '\033[36m==>\033[0m %s FAILED after %ss\n' "$desc" "$((SECONDS - start))" >&2
+        tail -20 "$WORK/step.log" >&2
+        return "$rc"
+    fi
+    printf '\033[36m==>\033[0m %s done in %ss\n' "$desc" "$((SECONDS - start))" >&2
+}
+
+run_step_out() {
+    run_step "$@"
+    tail -1 "$WORK/step.log"
+}
+
 # Assertions run commands as direct arguments -- no eval, no quoting hell.
 # expect_ok <desc> <cmd...>
 expect_ok() {
@@ -71,17 +104,27 @@ done
 curl -sf "http://$REG/v2/" >/dev/null || { echo "registry did not start" >&2; exit 1; }
 
 say "mock base: ubuntu:24.04 -> $REG/base-slim"
-podman pull -q docker.io/library/ubuntu:24.04 >/dev/null
-podman push --tls-verify=false -q docker.io/library/ubuntu:24.04 "$REG/base-slim:latest" >/dev/null
+run_step "pulling the mock base (once, then cached)" \
+    podman pull -q docker.io/library/ubuntu:24.04
+run_step "pushing the mock base to the local registry" \
+    podman push --tls-verify=false -q docker.io/library/ubuntu:24.04 "$REG/base-slim:latest"
 
 # ── layers ────────────────────────────────────────────────────────────────
 say "layers"
 if [ -n "${TEST_NIX_LAYER:-}" ]; then
     cp "${TEST_NIX_LAYER:?}" "$WORK/nix-layer.tar.gz"
+elif P="$(run_step_out "building the nix layer (default store)" \
+    nix build .#runai-layer --no-link --print-out-paths)"; then
+    # Default store first: after any local build this is instant. The
+    # persistent chroot store is the fallback for a store that lost paths
+    # (NOTES.md §9); a chroot build pays for the whole closure, which is why
+    # a first run used to sit for ten minutes with no output.
+    cp "$P" "$WORK/nix-layer.tar.gz"
 else
     # A chroot store prints logical /nix/store paths but materializes them
     # under its own root -- hence the "$TEST_STORE$P" copy source.
-    P="$(nix build --store "$TEST_STORE" .#runai-layer --no-link --print-out-paths | tail -1)"
+    P="$(run_step_out "building the nix layer (chroot store $TEST_STORE)" \
+        nix build --store "$TEST_STORE" .#runai-layer --no-link --print-out-paths)"
     cp "$TEST_STORE$P" "$WORK/nix-layer.tar.gz"
 fi
 LAYER_NIX="$WORK/nix-layer.tar.gz" ./docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
@@ -102,9 +145,10 @@ printf '[global]\nindex-url = https://artifactory.internal/api/pypi/pypi/simple\
 printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "$WORK/env/ca-bundle.crt"
 
 say "assembling"
-IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
-    LAYER_NIX="$WORK/nix-layer.tar.gz" LAYER_REPO="$WORK/repo-layer.tar" \
-    ./docker/assemble.sh test >/dev/null
+run_step "assembling the image (crane append, no docker build)" \
+    env IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
+        LAYER_NIX="$WORK/nix-layer.tar.gz" LAYER_REPO="$WORK/repo-layer.tar" \
+        ./docker/assemble.sh test
 IMAGE="$REG/workspace:test-base-slim"
 
 # run_ic: the problematic pod shape, verbatim: arbitrary UID with no passwd
@@ -120,6 +164,9 @@ run_ic() {
 }
 
 say "pod simulation (uid 10001, gid 0)"
+# Warm the pull once; every run_ic after this reuses podman's layer cache.
+run_step "warming the image pull (vfs copy on first run)" \
+    podman pull -q --tls-verify=false "$IMAGE"
 expect_ok "runtime HOME=/ is overridden with the PVC home" \
     run_ic bash -c 'test "$HOME" = /data/jensen'
 DOCTOR_OUT="$(run_ic /opt/twentyx/libexec/doctor 2>&1 || true)"

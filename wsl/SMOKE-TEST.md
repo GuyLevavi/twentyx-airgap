@@ -27,7 +27,8 @@ during install (`setup-wsl.sh` is its Linux half); the commands below are the
 manual fallback, and worth verifying either way. It needs the two artifacts
 the transfer ships:
 `twentyx-airgap.bundle` (the repo) and `wsl-rebuild.tar.gz` (the offline
-rebuild cache), both flat in the extracted transfer folder.
+rebuild cache; unpack its `.7z` container with 7-Zip first), both flat in the
+extracted transfer folder.
 
 ```bash
 # as root (one-time; clones the repo, imports the cache) -- exactly what
@@ -160,19 +161,26 @@ itself (`agent.terminal_init_command` in the packaged settings).
 ```bash
 uname -r              # kernels <= 6.6 are the SIGSEGV case; the closure reorders bun's ELF headers
 opencode --version    # must print, not die in ld.so before main
+time opencode         # must open promptly: a ~1.5 min stall means the
+                      # @opencode-ai/plugin install-skip seed is missing
 opencode acp --help   # the ACP entry point loads (Zed's agent panel starts `opencode acp`)
 echo "$TERM $TERM_PROGRAM"               # terminal identity, see §5
 ```
 
 A SIGSEGV before any output is the old kernel<=6.6 failure — the closure's
-`fix-phdr-order` repair did not land; report `uname -r`. If Zed's agent panel
-is stuck, run `opencode acp` by hand — it must start and wait, not exit with
-an error.
+`fix-phdr-order` repair did not land; report `uname -r`. A ~1.5 min stall
+before the TUI draws is the offline npm-install trap; the closure seeds
+`~/.config/opencode/node_modules` + `package-lock.json` to skip it (see
+`nix/modules/home.nix`). If Zed's agent panel is stuck, run `opencode acp` by
+hand — it must start and wait, not exit with an error.
 
+- **Provider/model**: `~/twentyx-airgap/opencode/opencode.jsonc` is a LIVE
+  symlink into the repo (`~/.config/opencode/opencode.jsonc` → it); set the
+  internal endpoint there and delete the `AIRGAP-SETUP` block. The shell
+  warning stops on the next shell start — no rebuild.
 - **Theme**: in the TUI run `/theme` to list and pick; it persists to your
-  config (`~/.config/opencode/opencode.json` → `"theme": "<name>"`). The
-  packaged default is opencode's own; the repo deliberately does not ship
-  your config.
+  config (`~/.config/opencode/tui.json` → `"theme": "<name>"`, also a live
+  symlink into the repo).
 - **shift+enter**: reaches the TUI only if the terminal reports the kitty
   keyboard protocol. Your WezTerm now enables it (`config.enable_kitty_keyboard
   = true`, see §5) — restart WezTerm and re-test; the nvim warning "modes

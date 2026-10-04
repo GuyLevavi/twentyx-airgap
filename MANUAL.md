@@ -77,7 +77,8 @@ dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /nores
 you, *without* installing Ubuntu — we bring our own distro.)
 
 After the reboot, still Administrator PowerShell, from the **transfer
-folder** (unpack the four transport twins with 7-Zip first — see §3):
+folder** (unpack every `.tar.gz.7z` transport container with 7-Zip first —
+see §3):
 
 ```powershell
 wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
@@ -134,10 +135,10 @@ WSL details that matter (first-boot gotchas, the no-WWW rehearsal): see
 
 | Artifact | Travels as | Becomes |
 |---|---|---|
-| `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (the page replaced `START-HERE.txt`; checksums via `sha256sum -c`) |
-| `nixos-wsl.tar.gz` | stays packed | consumed by `wsl --import` — never extracted by hand |
-| `windows-kit-*.tar.gz` | stays packed | extracted by `UNPACK.ps1`; Zed/VS Code, themes/templates installed |
-| `wsl-rebuild.tar.gz` | packed until inside | extracted to `/var/cache/nix-transfer` by `setup-wsl.sh` |
+| `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (the page replaced `START-HERE.txt`; checksums via `sha256sum -c` after the unpack) |
+| `nixos-wsl.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `wsl --import` — never extracted by hand beyond the container |
+| `windows-kit-*.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted by `UNPACK.ps1`; Zed/VS Code, themes/templates installed |
+| `wsl-rebuild.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted to `/var/cache/nix-transfer` by `setup-wsl.sh` |
 | `twentyx-airgap.bundle` | stays packed | `git clone`d — a bundle is a git remote, not an archive |
 | `nix-layer*.tar.gz`, `repo-layer.tar` | stay packed | consumed by `crane append` / CI — never opened by hand |
 | `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly (`SETUP.ps1` chains the other two) |
@@ -174,7 +175,7 @@ carries, and what each thing becomes:
 
 | Artifact | Size | Lands in |
 |---|---|---|
-| `dist/*.tar.gz.{zst,7z}` twins (nix layers, kit, WSL image) | 1.5 GB max each | cross inside zstd/7z; unpack with 7-Zip to the flat `.tar.gz` first, then `SETUP.ps1` |
+| `dist/*.tar.gz.7z` containers (nix layers, kit, WSL image, rebuild delta) | 1.5 GB max each | cross inside 7-Zip; unpack with 7-Zip to the flat `.tar.gz` first, then `SETUP.ps1` |
 | `dist/README.md`, `dist/MANIFEST.txt`, `dist/SHA256SUMS` | KB | the Windows-side page, versions, `sha256sum -c` |
 | `dist/nix-layer.tar.gz` (+`-nvim`) | ~1.12 / ~1.14 GB | Artifactory → CI `crane append` |
 | `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |

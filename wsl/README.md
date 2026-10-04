@@ -60,14 +60,14 @@ from your own shell once:
 `sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl`.
 
 The transfer folder is flat by design (no nested `windows-kit/` or
-`wsl-rebuild/`), and the big artifacts get a transport twin: `.tar.gz.zst`
-for the layers and kit, `.tar.gz.7z` for the WSL image (the pipeline drops
-big gzip and rejected its zstd twin; 7-Zip unpacks any of them back to the
-exact `.tar.gz`). At a glance:
+`wsl-rebuild/`), and every big artifact travels inside a `.tar.gz.7z`
+container (the pipeline drops big gzip and rejected their zstd twins;
+7-Zip unpacks any of them back to the exact `.tar.gz`). **Unpack all of
+them with 7-Zip before running `SETUP.ps1`.** At a glance:
 
 | Artifact | What it becomes |
 |---|---|
-| `*.tar.gz.zst` / `nixos-wsl.tar.gz.7z` twins | the transfer shape; unpack with 7-Zip to the plain `.tar.gz` before use |
+| `*.tar.gz.7z` containers (layers, kit, WSL image, rebuild delta) | the transfer shape; unpack with 7-Zip to the plain `.tar.gz` before use |
 | `README.md`, `MANIFEST.txt`, `SHA256SUMS` | the Windows-side page (it replaced `START-HERE.txt`), versions, `sha256sum -c` |
 | `nixos-wsl.tar.gz` | the image: consumed by `wsl --import` |
 | `wsl-rebuild.tar.gz` | additive cache delta for an existing distro |
@@ -76,6 +76,18 @@ exact `.tar.gz`). At a glance:
 | `nix-layer*.tar.gz`, `repo-layer.tar` | the pod image pipeline — crane/CI consume them |
 | `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | the one-shot chain and its halves |
 | `docs/` | README, ARCHITECTURE, MANUAL, smoke test, INNER-CONFIG |
+
+On the first interactive shell after setup, two deliberate warnings may
+appear — both are one-time, per-site setup that cannot ship in the closure:
+
+| Warning | Fix (no rebuild needed for the first) |
+|---|---|
+| `opencode.jsonc still has the AIRGAP-SETUP placeholder` | edit `~/twentyx-airgap/opencode/opencode.jsonc` in place (it is a live symlink): set the internal provider/model/baseURL, delete the placeholder block |
+| `ca-bundle.crt is missing` | drop the internal CA bundle at `~/twentyx-airgap/ca-bundle.crt` and run `rb` (the flake trusts it via `security.pki`) |
+
+If the CA is present next to `SETUP.ps1` in the transfer folder it is staged
+into the repo automatically; the warning covers a folder that shipped without
+it. Both warnings also land in `wsl/var/log/bootlog.txt` / `<transfer>\bootlog.txt`.
 
 ## Rehearsing "no WWW" on a connected machine
 

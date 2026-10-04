@@ -41,7 +41,8 @@ let
   vscodeServerTar = pkgs.fetchurl {
     inherit (vscode.server) url name hash;
   };
-  vscodeServerDir = "/home/${username}/.vscode-server/bin/${vscode.commit}";
+  vscodeHome = "/home/${username}/.vscode-server";
+  vscodeServerDir = "${vscodeHome}/bin/${vscode.commit}";
 
   # Remote (WSL-side) machine settings: the language-server pins, pointing at
   # the SAME closure binaries Zed and nvim use, plus the schema fetches that
@@ -291,11 +292,14 @@ in
       # -z.
       PATH="${pkgs.gnutar}/bin:${pkgs.gzip}/bin:$PATH" \
         ${pkgs.gnutar}/bin/tar -xzf ${vscodeServerTar} -C "$seed" --strip-components=1
-      # The tarball builder's user namespace maps only uid 0, so chown to the
-      # real user returns EINVAL there; systemd-tmpfiles `z` re-owns the home
-      # on the first real boot. Never fail an activation on it.
-      chown -R ${username}:users "$home/.vscode-server" 2>/dev/null || true
     fi
+    # Unconditional, not just after an extraction: the build-time activation
+    # runs in a user namespace where chown to the real user is EINVAL, so the
+    # tarball ships .vscode-server root-owned; tmpfiles normally re-owns it at
+    # boot, but a switch can run before/around that. Re-own on EVERY
+    # activation -- a root-owned server dir is the EACCES the extension
+    # install (and a manual code-server --install-extension) used to hit.
+    chown -R ${username}:users ${vscodeHome} 2>/dev/null || true
     settings="$home/.vscode-server/data/Machine/settings.json"
     if [ ! -e "$settings" ]; then
       install -d "$home/.vscode-server/data/Machine"
@@ -318,6 +322,9 @@ in
       RemainAfterExit = true;
       User = username;
       Group = "users";
+      # `+` runs this one step as root despite User=: the server dir can still
+      # be root-owned on a fresh image, and the install runs as the user.
+      ExecStartPre = "+${pkgs.coreutils}/bin/chown -R ${username}:users ${vscodeHome}";
     };
     path = [
       pkgs.coreutils
@@ -383,6 +390,7 @@ in
     # Explicit PATH: the default ExecStart environment has no coreutils/shadow.
     path = with pkgs; [
       coreutils
+      gnugrep
       util-linux
       shadow
       systemd
@@ -396,6 +404,16 @@ in
         echo "════════ boot $(date -u '+%Y-%m-%dT%H:%M:%SZ') ════════"
         echo "── identity ${username}:"
         id ${username} 2>&1 || true
+        # The two per-site setup steps that cannot ship in the image. Loud
+        # until treated: a missing CA silently breaks TLS to internal
+        # endpoints, and an unconfigured opencode has no working provider.
+        repo="/home/${username}/twentyx-airgap"
+        if [ ! -f "$repo/ca-bundle.crt" ]; then
+          echo "WARN: $repo/ca-bundle.crt missing -- drop the internal CA there and run rb"
+        fi
+        if [ -f "$repo/opencode/opencode.jsonc" ] && grep -q AIRGAP-SETUP "$repo/opencode/opencode.jsonc"; then
+          echo "WARN: $repo/opencode/opencode.jsonc still has the AIRGAP-SETUP placeholder"
+        fi
         echo "── root directory (must be 755 root:root):"
         stat -c '%a %U:%G /' / 2>&1 || true
         ls -ld /home /home/${username} 2>&1 || true

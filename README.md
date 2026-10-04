@@ -34,7 +34,7 @@ tells you what that costs before you carry it anywhere.
 | `repo-layer.tar` | ~390 KB |
 | `windows-kit-*.tar.gz` | ~612 MB (Zed + VS Code installers, WSL2 MSI, themes, client templates, the pinned `.vsix` set) |
 | `wsl-rebuild.tar.gz` | ~299 MB today (delta roots: flake inputs + VS Code server/vsix + stdenv; shrinks when a rebase makes them unnecessary) |
-| transfer quirk | the big artifacts cross in transport containers: `.tar.gz.zst` for the layers and kit, `.tar.gz.7z` for the WSL image (the filter drops big gzip and rejected its zstd twin); 7-Zip gives back the exact `.tar.gz`, everything else goes as-is |
+| transfer quirk | every big artifact crosses inside a `.tar.gz.7z` container (the filter drops big gzip and rejected its zstd twins); 7-Zip gives back the exact `.tar.gz`, everything else goes as-is |
 
 (Measured 2026-09-28, `rm -rf dist && ./scripts/transfer-bundle.sh`.)
 
@@ -51,14 +51,16 @@ offline config edit on the WSL machine itself, no transfer needed.
 `./scripts/transfer-bundle.sh` produces one flat `dist/`: both layers, the
 NixOS-WSL image, the always-regenerated rebuild delta, the Windows kit, the
 repo as a git bundle, the setup scripts, user-facing docs, `MANIFEST.txt`
-(versions, build identity) and `SHA256SUMS`. The big artifacts also get a
-transport twin: the transfer pipeline drops big gzip files, so the two
-layers and the Windows kit cross as `.tar.gz.zst` and the WSL image as
-`.tar.gz.7z` (it rejected even that one's zstd twin). 7-Zip unpacks them
-to the exact `.tar.gz` before use. On Windows, one elevated
-command runs the whole first-time chain — `SETUP.ps1` unpacks the kit,
-imports the image, and runs `setup-wsl.sh` inside the distro (repo clone,
-offline cache import, first rebuild).
+(versions, build identity) and `SHA256SUMS`. Every big artifact travels
+inside a `.tar.gz.7z` container — the transfer pipeline drops big gzip and
+rejected their zstd twins, 7-Zip containers pass. 7-Zip unpacks them to the
+exact `.tar.gz` before use (all of them, `wsl-rebuild.tar.gz` included).
+`dist/.complete` is written only by a successful run; a dist without it is a
+partial set and is wiped on the next run, so a shipped folder is always one
+generation. On Windows, one elevated command runs the whole first-time
+chain — `SETUP.ps1` imports the image, runs `UNPACK.ps1` and then
+`setup-wsl.sh` inside the distro (repo clone, offline cache import, first
+rebuild).
 
 Two update shapes, deliberately distinct: a **rebase** carries a rebuilt
 `nixos-wsl.tar.gz` and re-imports (home wiped, packaged defaults reapply —
@@ -215,7 +217,7 @@ nix/runai/layer.nix           the closure -> an OCI layer tarball
 libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
 agent/                        opencode preload plugin + BASH_ENV restore helper
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/transfer-bundle.sh    run OUTSIDE -> the flat dist/ + transport twins of the big artifacts (.zst, WSL image .7z; big gzip does not cross the filter)
+scripts/transfer-bundle.sh    run OUTSIDE -> the flat dist/ + .7z containers around every big artifact (big gzip does not cross the filter); refuses a dirty tree, stamps .complete last
 scripts/export-rebuild-cache.sh  run OUTSIDE -> the WSL delta cache; always run by transfer-bundle, roots in .#wslDeltaRoots
 scripts/setup-wsl.sh          run INSIDE (root) -> clone/ff bundle, import cache, stage CA, rebuild as the user via sudo
 scripts/windows/SETUP.ps1     run on WINDOWS -> the one-shot: import + UNPACK + setup-wsl

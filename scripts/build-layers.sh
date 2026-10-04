@@ -21,26 +21,28 @@ say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
 say "building"
 
-# The layer is built in the persistent chroot store when it exists: a NEW
-# closure's drv files are never in the default store until it is built there
-# (the NOTES.md §9 repair class), while the chroot holds every closure this
-# repo ever evaluated -- it is the donor, and the fallback too.
+# Default store first: after any local build the layer is already there, so a
+# transfer run starts in seconds. The persistent chroot store is the fallback
+# for a store that lost paths (NOTES.md §9) -- a build there pays for the
+# closure, which is exactly the ten-minute silence this avoids.
 CHROOT=/tmp/airgap-test-store
-if [ -d "$CHROOT/nix/store" ]; then
-    STORE=("--store" "$CHROOT")
-    PREFIX="$CHROOT"
-else
-    STORE=()
-    PREFIX=""
-fi
+build_layer() {
+    local attr="$1" out
+    if out="$(nix build --no-link --print-out-paths "$attr" 2>/dev/null)"; then
+        printf '%s\n' "$out"
+    elif [ -d "$CHROOT/nix/store" ]; then
+        out="$(nix build --store "$CHROOT" --no-link --print-out-paths "$attr")"
+        printf '%s\n' "$CHROOT$out"
+    else
+        nix build --no-link --print-out-paths "$attr"
+    fi
+}
 
-NIX_PLAIN="$(nix build "${STORE[@]}" --no-link --print-out-paths .#runai-layer)"
-NIX_NVIM="$(nix build "${STORE[@]}" --no-link --print-out-paths .#runai-layer-nvim)"
+NIX_PLAIN="$(build_layer .#runai-layer)"
+NIX_NVIM="$(build_layer .#runai-layer-nvim)"
 
-# Copied rather than symlinked: these leave the machine, and a store symlink
-# does not survive a USB stick.
-install -m 0644 "$PREFIX$NIX_PLAIN" "$OUT/nix-layer.tar.gz"
-install -m 0644 "$PREFIX$NIX_NVIM"  "$OUT/nix-layer-nvim.tar.gz"
+install -m 0644 "$NIX_PLAIN" "$OUT/nix-layer.tar.gz"
+install -m 0644 "$NIX_NVIM"  "$OUT/nix-layer-nvim.tar.gz"
 
 ./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
 
