@@ -80,8 +80,13 @@ fi
 NEW="$(nix build --no-link --print-out-paths .#nixosConfigurations.wsl.config.system.build.toplevel)"
 BASE="$(readlink -f .gcroots/wsl-system 2>/dev/null || true)"
 [ -e "$BASE" ] || BASE=""
+# The stamp records what the NAR was exported from: NEW and the base used
+# (empty = full export). Reusing a delta against a different base would ship
+# a set the far side cannot import.
+want_stamp="$NEW
+$BASE"
 if [ -f "$BUILD/wsl-update.nar" ] \
-    && [ "$(cat "$BUILD/.updatestamp" 2>/dev/null || true)" = "$NEW" ]; then
+    && [ "$(cat "$BUILD/.updatestamp" 2>/dev/null || true)" = "$want_stamp" ]; then
     say "reusing the exported closure delta"
 else
     rm -f "$BUILD/wsl-update.nar"
@@ -97,7 +102,7 @@ else
     else
         nix-store -qR "$NEW" | xargs -r nix-store --export > "$BUILD/wsl-update.nar"
     fi
-    printf '%s' "$NEW" > "$BUILD/.updatestamp"
+    printf '%s\n%s\n' "$NEW" "$BASE" > "$BUILD/.updatestamp"
 fi
 # Only now: a GC root that outruns a failed export would make the next delta
 # against a base the far side never received.
@@ -120,6 +125,9 @@ cp README.md ARCHITECTURE.md MANUAL.md "$OUT/docs/"
 cp README.md "$OUT/README.md"
 say "carrying the setup scripts"
 cp scripts/windows/UNPACK.ps1 scripts/windows/SETUP.ps1 scripts/setup-wsl.sh "$OUT/"
+# The text layer travels plain: setup-wsl.sh overlays it onto the distro on
+# the first install and on every text-only update.
+cp "$BUILD/repo-layer.tar" "$OUT/"
 
 # ── 6. the repo itself, as a git bundle ───────────────────────────────────
 # The real history -- commits, diffs, bisect -- not a tar of the working tree.

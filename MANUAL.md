@@ -104,11 +104,12 @@ if you see a prompt you are on an older image.
 | Artifact | Travels as | Becomes |
 |---|---|---|
 | `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (`sha256sum -c` after the unpack) |
+| `repo-layer.tar` | plain file | overlaid by `setup-wsl.sh` (text-only updates carry just this) |
 | `nixos-wsl.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `wsl --import` |
 | `windows-kit-*.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted by `UNPACK.ps1` |
 | `wsl-update.nar` (inside `.7z`) | unpack with 7-Zip | imported by `setup-wsl.sh` on an existing distro |
 | `twentyx-airgap.bundle` | stays as-is | a git bundle: `git clone` it for history |
-| `nix-layer*.tar.gz`, `repo-layer.tar` (inside `.7z`) | unpack with 7-Zip | consumed by `crane append` / CI |
+| `nix-layer*.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `crane append` / CI |
 | `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly |
 
 ## 2. Cross the gap
@@ -125,7 +126,7 @@ state.
 | dist file | Size | Lands in |
 |---|---|---|
 | `nix-layer.tar.gz.7z` (+`-nvim`) | ~1.1 GB each | GitLab packages → CI `crane append` |
-| `repo-layer.tar` | ~400 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
+| `repo-layer.tar` | ~400 KB | `setup-wsl.sh` overlays `/opt/twentyx` (CI builds its own for pods) |
 | `nixos-wsl.tar.gz.7z` | ~1.5 GB | `wsl --import` |
 | `wsl-update.nar.7z` | closure delta | `setup-wsl.sh` on an existing distro |
 | `windows-kit-*.tar.gz.7z` | ~600 MB | Windows: `UNPACK.ps1` |
