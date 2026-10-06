@@ -52,7 +52,7 @@ if [ ! -f "$BUILD/nix-layer.tar.gz" ] || [ ! -f "$BUILD/nix-layer-nvim.tar.gz" ]
     printf '%s' "$want_layers" > "$BUILD/.layerdrv"
 fi
 # repo-layer.tar is TEXT and changes every commit, so it is rebuilt every run.
-./docker/mklayer.sh "$BUILD/repo-layer.tar" >/dev/null
+LAYER_NIX="$BUILD/nix-layer.tar.gz" ./docker/mklayer.sh "$BUILD/repo-layer.tar" >/dev/null
 
 # ── 2. the NixOS-WSL root tarball ─────────────────────────────────────────
 # Stamped with .#wsl-tarball.drvPath, which covers the builder AND the

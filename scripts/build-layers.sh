@@ -25,7 +25,7 @@ readarray -t LAYERS < <(nix build --no-link --print-out-paths .#runai-layer .#ru
 install -m 0644 "${LAYERS[0]}" "$OUT/nix-layer.tar.gz"
 install -m 0644 "${LAYERS[1]}" "$OUT/nix-layer-nvim.tar.gz"
 
-./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
+LAYER_NIX="$OUT/nix-layer.tar.gz" ./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
 
 say "done"
 for f in "$OUT"/nix-layer.tar.gz "$OUT"/nix-layer-nvim.tar.gz "$OUT"/repo-layer.tar; do
