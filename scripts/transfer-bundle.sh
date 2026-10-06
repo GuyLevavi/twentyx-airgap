@@ -14,7 +14,7 @@
 #     nix-layer-nvim.tar.gz            same + nvim flavor
 #     repo-layer.tar                   this repo's text layer
 #     nixos-wsl.tar.gz                 the NixOS-WSL rootfs for wsl --import
-#     wsl-rebuild.tar.gz               delta cache for an EXISTING distro
+#     wsl-update.nar                   store delta for an EXISTING distro
 #     windows-kit-<zedVer>.tar.gz      Zed + VS Code + WSL2 MSI, themes,
 #                                      client templates (extract on Windows)
 #     twentyx-airgap.bundle            the repo as a git bundle (real history)
@@ -42,10 +42,8 @@
 #   rm -rf dist && ./scripts/transfer-bundle.sh
 #
 # A dirty worktree is refused (the bundle carries committed history only);
-# ALLOW_DIRTY=1 is the escape hatch. Nothing needs root anywhere in this
-# script: the NixOS-WSL tarball builder self-elevates via a user namespace
-# and the output is owned by whoever runs it. SKIP_CACHE=1 skips the
-# (deliberately always-run) delta export.
+# ALLOW_DIRTY=1 is the escape hatch. The NixOS-WSL tarball is built by the
+# upstream builder under sudo (it chroots and bind-mounts).
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -119,26 +117,44 @@ if [ ! -f "$OUT/nixos-wsl.tar.gz" ] \
     || [ "$(cat "$OUT/.wlldrv" 2>/dev/null || true)" != "$want_wsl" ] \
     || ! { tar -tzf "$OUT/nixos-wsl.tar.gz" 2>/dev/null || true; } | grep -m1 -q '^\./bin/init$'; then
     rm -f "$OUT/nixos-wsl.tar.gz"
-    say "building the NixOS-WSL tarball"
+    say "building the NixOS-WSL tarball (upstream builder, under sudo)"
     # No --no-link here: the builder is invoked THROUGH ./result below, and a
     # stale result/ from an earlier build would ship the wrong system.
     nix build .#wsl-tarball
-    # The builder self-elevates via a user namespace — no sudo, and the
-    # output file is owned by the invoking user. -f in case the target
-    # exists (stale or root-owned from older runs).
-    ./result/bin/nixos-wsl-tarball-builder "$OUT/nixos-wsl.tar.gz"
+    # The upstream builder needs real root (nixos-install chroots and bind
+    # mounts). --chown pre-seeds /home/jensen for uid 1000, the first normal
+    # user on NixOS-WSL.
+    sudo ./result/bin/nixos-wsl-tarball-builder \
+        --chown home/jensen 1000:100 "$OUT/nixos-wsl.tar.gz"
     printf '%s' "$want_wsl" > "$OUT/.wlldrv"
 fi
 
-# ── 3. the offline rebuild delta ──────────────────────────────────────────
-# ALWAYS regenerated: the earlier shape kept a stale one (it only rebuilt
-# artifacts when missing), and a delta that lags the closure is worse than
-# no delta — it makes a rolling update fail halfway. SKIP_CACHE=1 is the
-# deliberate escape hatch; see export-rebuild-cache.sh for the root policy.
-if [ -z "${SKIP_CACHE:-}" ]; then
-    say "exporting the offline rebuild cache"
-    ./scripts/export-rebuild-cache.sh
+# ── 3. the WSL closure delta ──────────────────────────────────────────────
+# The appliance is updated by importing a store delta and switching the
+# system profile -- nothing evaluates Nix inside the gap. The base is the
+# last shipped system, kept as a GC root (.gcroots/wsl-system) so a garbage
+# collection cannot delete it; without one (first transfer, or a far side
+# older than the last shipment) the whole closure is exported.
+say "exporting the WSL closure delta"
+NEW="$(nix build --no-link --print-out-paths .#nixosConfigurations.wsl.config.system.build.toplevel)"
+BASE="$(readlink -f .gcroots/wsl-system 2>/dev/null || true)"
+[ -e "$BASE" ] || BASE=""
+if [ -n "$BASE" ]; then
+    comm -13 <(nix-store -qR "$BASE" | sort) <(nix-store -qR "$NEW" | sort) \
+        > "$OUT/.delta-paths"
+    if [ -s "$OUT/.delta-paths" ]; then
+        xargs -r nix-store --export < "$OUT/.delta-paths" > "$OUT/wsl-update.nar"
+    else
+        say "closure unchanged since the last shipment -- no delta"
+    fi
+    rm -f "$OUT/.delta-paths"
+else
+    nix-store -qR "$NEW" | xargs -r nix-store --export > "$OUT/wsl-update.nar"
 fi
+# Only now: a GC root that outruns a failed export would make the next delta
+# against a base the far side never received.
+mkdir -p .gcroots
+nix-store --add-root .gcroots/wsl-system --indirect -r "$NEW" >/dev/null
 
 # ── 4. the Windows kit ────────────────────────────────────────────────────
 say "collecting the windows kit"
@@ -218,6 +234,8 @@ EXPR
     echo "VSCODE_COMMIT=$(jq -r .vscodeCommit <<<"$META")"
     echo "ZED_VERSION=$(jq -r .zed <<<"$META")"
     echo "NIXPKGS_REV=$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+    echo "WSL_SYSTEM=$NEW"
+    echo "WSL_BASE=$BASE"
     echo "GIT_REV=$(git rev-parse HEAD)"
     echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)"
     echo "GIT_DIRTY=$([ -n "$(git status --porcelain)" ] && echo yes || echo no)"
@@ -247,8 +265,8 @@ BIG=(
     "nix-layer-nvim.tar.gz"
     "${KITNAME#*-}"
     "nixos-wsl.tar.gz"
-    # Absent when SKIP_CACHE=1 skipped the delta export.
-    "wsl-rebuild.tar.gz"
+    # Absent when the closure is unchanged since the last shipment.
+    "wsl-update.nar"
 )
 for f in "${BIG[@]}"; do
     [ -f "$OUT/$f" ] || continue

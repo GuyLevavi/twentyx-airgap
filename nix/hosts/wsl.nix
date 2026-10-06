@@ -28,14 +28,6 @@ let
     nvim = true;
   };
 
-  # The internal CA bundle, same file the pod gets via the env-injection
-  # mount. WSL does not run bootstrap, so without this nothing on the
-  # WSL side trusts the internal CA: push-artifactory.sh, the runai CLI and
-  # uv all do TLS against Artifactory. Gitignored and optional — carry it with
-  # the transfer (wsl/README.md); presence is detected here.
-  caBundle = ../../ca-bundle.crt;
-  haveCaBundle = builtins.pathExists caBundle;
-
   # ── Windows-side assets ─────────────────────────────────────────────────
   # The kit (Zed installer, themes, client settings templates, WSL2 MSI,
   # VS Code) is built by .#windows-kit; the WSL side itself needs nothing from
@@ -78,46 +70,8 @@ let
   vsixPaths = map (e: "${e.src}") vscodeExtensions;
   vsixStamp = builtins.hashString "sha256" (lib.concatStringsSep "\n" vsixPaths);
 
-  # WSL-registry files the upstream tarballBuilder installs into the tarball.
-  # wsl-distribution.conf is what makes `wsl --import` register the distro
-  # with a Start-Menu shortcut; the default configuration.nix is the
-  # just-in-case file a teammate finds under /etc/nixos.
-  wslDistroConf = pkgs.writeText "wsl-distribution.conf" ''
-    [oobe]
-    defaultName = NixOS
-
-    [shortcut]
-    icon = /etc/nixos.ico
-  '';
-  defaultNixosConfig = pkgs.writeText "default-configuration.nix" ''
-    # This is the entry the shipped system already builds from; the durable
-    # rebuild path on the WSL machine is this repository's flake, transferred
-    # as the git bundle and cloned by setup-wsl.sh. Kept here so /etc/nixos is
-    # not empty.
-    { config, lib, pkgs, ... }:
-
-    {
-      imports = [ <nixos-wsl/modules> ];
-
-      wsl.enable = true;
-      wsl.defaultUser = "${username}";
-
-      system.stateVersion = "25.05";
-    }
-  '';
 in
 {
-  imports = [
-    # Remote-WSL support for the Microsoft server: a user service that patches
-    # the bundled node of each server install (interpreter + RPATH, plus the
-    # vsce-sign libssl fix) as it appears. Without it the server's node cannot
-    # exec on NixOS, and patching after first connect is a race the client
-    # loses.
-    inputs.nixos-vscode-server.nixosModules.default
-  ];
-
-  services.vscode-server.enable = true;
-
   wsl = {
     enable = true;
     defaultUser = username;
@@ -129,22 +83,16 @@ in
 
   i18n.defaultLocale = "en_US.UTF-8";
 
-  # ── Offline substitution ────────────────────────────────────────────────
-  # There is no cache.nixos.org here. Transfers arrive as a binary cache
-  # directory unpacked at /var/cache/nix-transfer; Nix substitutes from it as
-  # if it were a remote cache, and reconciles purely by store hash.
+  # ── Frozen appliance ────────────────────────────────────────────────────
+  # Nothing evaluates Nix inside the gap: updates arrive as a store delta
+  # (wsl-update.nar) applied with nix-store --import + nix-env --set. Nix
+  # itself is still here for `nix-store` and `nix-env`, but no substituter is
+  # reachable and none is configured.
   nix.settings = {
     experimental-features = [
       "nix-command"
       "flakes"
     ];
-    substituters = lib.mkForce [ "file:///var/cache/nix-transfer" ];
-    # Unsigned by decision (2026-09): the transfer crosses physically, and
-    # Nix still verifies per store path against the content-addressed hash.
-    trusted-public-keys = lib.mkForce [ ];
-    require-sigs = false;
-    # Fail immediately instead of hanging on a substituter that cannot resolve.
-    connect-timeout = 5;
     trusted-users = [ username ];
     auto-optimise-store = true;
   };
@@ -182,9 +130,37 @@ in
 
   nixpkgs.config.allowUnfree = true;
 
-  # Internal CA trust for the WSL side (pod side uses the env-injection
-  # contract instead). No-op until ca-bundle.crt is carried across.
-  security.pki.certificateFiles = lib.optionals haveCaBundle [ caBundle ];
+  # ── Internal CA at runtime ──────────────────────────────────────────────
+  # /var/lib/airgap-env/ca-bundle.crt is dropped in by setup-wsl.sh (or by
+  # hand) and never baked in: the bundle rotates and differs per cluster. The
+  # service concatenates it onto the system bundle; /etc and
+  # NODE_EXTRA_CA_CERTS point at the result, so adding or rotating the CA
+  # needs `systemctl restart airgap-ca`, not a transfer.
+  systemd.services.airgap-ca = {
+    description = "Build the runtime CA bundle (system store + injected CA)";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = [
+      pkgs.bash
+      pkgs.coreutils
+    ];
+    script = ''
+      mkdir -p /var/lib/airgap-env
+      cat ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt > /var/lib/airgap-env/ca-certificates.crt
+      if [ -f /var/lib/airgap-env/ca-bundle.crt ]; then
+        cat /var/lib/airgap-env/ca-bundle.crt >> /var/lib/airgap-env/ca-certificates.crt
+      fi
+    '';
+  };
+
+  environment.etc."ssl/certs/ca-certificates.crt".source =
+    lib.mkForce "/var/lib/airgap-env/ca-certificates.crt";
+  environment.etc."ssl/certs/ca-bundle.crt".source =
+    lib.mkForce "/var/lib/airgap-env/ca-certificates.crt";
 
   # ── prebuilt binaries from other toolchains ─────────────────────────────
   # nix-ld gives foreign prebuilts (the runai CLI, uv-managed interpreters,
@@ -209,68 +185,55 @@ in
     # password logins outright.
     hashedPassword = "*";
     shell = pkgs.bash; # login shell stays bash; fish is exec'd interactively
-    # The VS Code server-patching service is a USER unit (nixos-vscode-server),
-    # and the patch must be in place before the first Remote-WSL connect: a
-    # user manager started at boot does that, one started by the session races
-    # the client.
-    linger = true;
     extraGroups = [
       "wheel"
       "podman"
     ];
-    # Ownership cannot be set inside the build's user namespace (only uid 0
-    # is mapped, so every chown to a real user returns EINVAL). A home dir
-    # created by the in-chroot activation therefore ships root:root 0700 —
-    # measured: `su - jensen` could not cd into it and home-manager-jensen
-    # failed. tmpfiles (below) creates/re-owns it on first boot, where root
-    # really is root.
-    createHome = false;
+    # The upstream tarball builder creates the home with the skeleton and the
+    # right ownership; --chown home/jensen 1000:100 is the belt to that brace.
   };
 
   # sudo with no password prompt: the account's password is locked ("*"), so
   # a prompt is unanswerable rather than a gate -- and anyone who can run
-  # `wsl` is one `wsl -u root` away from root anyway. This is what makes
-  # `rb` (and the documented `sudo nixos-rebuild`) usable from the distro.
+  # `wsl` is one `wsl -u root` away from root anyway.
   security.sudo.wheelNeedsPassword = false;
 
-  # /home/<user> has to be owned by the user with mode 0700. tmpfiles runs
-  # as real root at boot: `d` creates it, `z` fixes ownership recursively
-  # (in the build's user namespace only uid 0 is mapped, so anything the
-  # chroot activation writes under the home lands root-owned).
-  #
   # /opt/twentyx is the stable tool path both targets share: editor settings
   # point at /opt/twentyx/profile/bin/... and never go stale when the store
-  # moves. L+ forces the link, so a rebuild updates it on the next boot.
+  # moves. L+ forces the link, so a system update refreshes it on next boot.
   systemd.tmpfiles.rules = [
-    "d /home/${username} 0700 ${username} users -"
-    "z /home/${username} - ${username} users -"
     "d /opt/twentyx 0755 root root -"
     "L+ /opt/twentyx/profile - - - - ${config.system.path}"
     "L+ /opt/twentyx/home-defaults - - - - ${twentyx.homeDefaults}"
   ];
 
   # Same session variables a pod gets as image ENV: shell rc files reach only
-  # shells, and `runai exec`/code-server never source one.
-  environment.sessionVariables = twentyx.sessionEnv;
+  # shells, and `runai exec`/code-server never source one. Node ignores the
+  # system trust store, hence the runtime CA bundle.
+  environment.sessionVariables = twentyx.sessionEnv // {
+    NODE_EXTRA_CA_CERTS = "/var/lib/airgap-env/ca-certificates.crt";
+  };
 
-  # Seed $HOME once per user-manager start: home-defaults become store
-  # symlinks, dotfiles are copied in only when absent. The repo clone arrives
-  # with setup-wsl.sh, so this is a no-op until it exists.
-  systemd.user.services.seed-home = {
+  # Seed $HOME once per boot: home-defaults become store symlinks, dotfiles
+  # are copied in only when absent. A no-op until setup-wsl.sh has overlaid
+  # /opt/twentyx; setup-wsl restarts it after an update.
+  systemd.services.seed-home = {
     description = "Seed $HOME from the toolchain tree";
-    wantedBy = [ "default.target" ];
+    wantedBy = [ "multi-user.target" ];
     after = [ "systemd-tmpfiles-setup.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      User = username;
+      Group = "users";
     };
     path = [
       pkgs.bash
       pkgs.coreutils
     ];
     script = ''
-      [ -x "$HOME/twentyx-airgap/libexec/seed-home" ] || exit 0
-      exec "$HOME/twentyx-airgap/libexec/seed-home"
+      [ -x /opt/twentyx/libexec/seed-home ] || exit 0
+      exec /opt/twentyx/libexec/seed-home
     '';
   };
 
@@ -316,74 +279,49 @@ in
     settings.PasswordAuthentication = false;
   };
 
-  # ── VS Code (Remote-WSL): pre-seed server + extensions + pins ──────────
-  # The server tarball is pinned in nix/vscode-version.nix. The activation
-  # extracts it into the user's home only when absent (the $HOME layering
-  # rule: real files are the user's; this is a packaged default), and writes
-  # the remote machine settings carrying the LSP pins.
-  system.activationScripts.vscodeServerSeed = lib.stringAfter [ "users" ] ''
-    commit="${vscode.commit}"
-    home="/home/${username}"
-    seed="$home/.vscode-server/bin/$commit"
-    if [ ! -x "$seed/bin/code-server" ]; then
-      # Absent or incomplete (a failed earlier extraction leaves the empty
-      # dir): re-extract. Only our own packaged default is ever touched --
-      # a working server at this commit is left alone.
-      rm -rf "$seed"
-      mkdir -p "$seed"
-      # tar is NOT on the activation PATH -- measured: the first image
-      # shipped an empty seed directory because the extraction silently
-      # failed. Name the closure binaries explicitly; gzip rides along for
-      # -z.
-      PATH="${pkgs.gnutar}/bin:${pkgs.gzip}/bin:$PATH" \
-        ${pkgs.gnutar}/bin/tar -xzf ${vscodeServerTar} -C "$seed" --strip-components=1
-    fi
-    # Unconditional, not just after an extraction: the build-time activation
-    # runs in a user namespace where chown to the real user is EINVAL, so the
-    # tarball ships .vscode-server root-owned; tmpfiles normally re-owns it at
-    # boot, but a switch can run before/around that. Re-own on EVERY
-    # activation -- a root-owned server dir is the EACCES the extension
-    # install (and a manual code-server --install-extension) used to hit.
-    chown -R ${username}:users ${vscodeHome} 2>/dev/null || true
-    settings="$home/.vscode-server/data/Machine/settings.json"
-    if [ ! -e "$settings" ]; then
-      install -d "$home/.vscode-server/data/Machine"
-      install -m 0644 ${vscodeRemoteSettings} "$settings"
-    fi
-  '';
-
-  # The extensions are installed with the server's own CLI, which keeps the
-  # extensions.json bookkeeping correct. Oneshot as the user; the stamp makes
-  # it a no-op once the set is installed, and re-runs it after a transfer
-  # that changes the set. The auto-fix service patches node in parallel --
-  # either order works (nix-ld covers the unpatched window).
+  # ── VS Code (Remote-WSL): server + extensions + pins ───────────────────
+  # The server tarball is pinned in nix/vscode-version.nix. The oneshot runs
+  # as jensen after tmpfiles: extracts the server when absent (then it is a
+  # real file the user owns), writes the remote machine settings carrying the
+  # LSP pins when absent, and installs the pinned extensions with the
+  # server's own CLI. No marketplace, no activation script, no chowns.
   systemd.services.vscode-extensions = {
-    description = "Seed pinned VS Code extensions into ~/.vscode-server";
+    description = "Seed the pinned VS Code server + extensions into ~/.vscode-server";
     wantedBy = [ "multi-user.target" ];
     after = [ "systemd-tmpfiles-setup.service" ];
-    unitConfig.ConditionPathExists = "${vscodeServerDir}/bin/code-server";
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
       User = username;
       Group = "users";
-      # `+` runs this one step as root despite User=: the server dir can still
-      # be root-owned on a fresh image, and the install runs as the user.
-      ExecStartPre = "+${pkgs.coreutils}/bin/chown -R ${username}:users ${vscodeHome}";
     };
     path = [
-      pkgs.coreutils
       pkgs.bash
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.gzip
     ];
     script = ''
       set -euo pipefail
-      stamp="$HOME/.vscode-server/.airgap-vsix"
+      home="/home/${username}"
+      seed="$home/.vscode-server/bin/${vscode.commit}"
+      if [ ! -x "$seed/bin/code-server" ]; then
+        rm -rf "$seed"
+        mkdir -p "$seed"
+        tar -xzf ${vscodeServerTar} -C "$seed" --strip-components=1
+      fi
+      settings="$home/.vscode-server/data/Machine/settings.json"
+      if [ ! -e "$settings" ]; then
+        install -d "$home/.vscode-server/data/Machine"
+        install -m 0644 ${vscodeRemoteSettings} "$settings"
+      fi
+      stamp="$home/.vscode-server/.airgap-vsix"
       want="${vsixStamp}"
       if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
         exit 0
       fi
       for vsix in ${lib.concatStringsSep " " vsixPaths}; do
-        ${vscodeServerDir}/bin/code-server --install-extension "$vsix" --force
+        "$seed/bin/code-server" --install-extension "$vsix" --force
       done
       printf '%s\n' "$want" > "$stamp"
     '';
@@ -425,53 +363,26 @@ in
   ];
 
   # ── Boot evidence for the airgapped machine ────────────────────────────
-  # The machine we cannot debug is the one that boots badly. Every boot, this
-  # appends the decisive evidence — journal head, failed units, and a real
-  # non-root login-shell exec test — to a log the Windows side can read,
-  # so a diagnosis costs one file read, not a support session.
+  # One file read, not a support session: date, failed units, the journal
+  # tail, copied to the shared Windows partition when it is mounted.
   systemd.services.bootlog = {
-    description = "Airgap: append boot evidence to the Windows-mounted log";
+    description = "Airgap: write boot evidence to the Windows-mounted log";
     wantedBy = [ "multi-user.target" ];
     after = [ "multi-user.target" ];
-    # Explicit PATH: the default ExecStart environment has no coreutils/shadow.
     path = with pkgs; [
       coreutils
-      gnugrep
-      util-linux
-      shadow
       systemd
     ];
     serviceConfig.Type = "oneshot";
     script = ''
-      mkdir -p /var/log 2>/dev/null || true
       out="/var/log/bootlog.txt"
       {
-        echo
         echo "════════ boot $(date -u '+%Y-%m-%dT%H:%M:%SZ') ════════"
-        echo "── identity ${username}:"
-        id ${username} 2>&1 || true
-        # Per-site setup that cannot ship in the image: an unconfigured
-        # opencode has no working provider.
-        if [ -f "/home/${username}/.config/opencode/opencode.jsonc" ] &&
-           grep -q AIRGAP-SETUP "/home/${username}/.config/opencode/opencode.jsonc"; then
-          echo "WARN: ~/.config/opencode/opencode.jsonc still has the AIRGAP-SETUP placeholder"
-        fi
-        echo "── root directory (must be 755 root:root):"
-        stat -c '%a %U:%G /' / 2>&1 || true
-        ls -ld /home /home/${username} 2>&1 || true
-        echo "── non-root login-shell exec test:"
-        timeout 20 su -l ${username} -c 'id; echo EXEC_OK' 2>&1 || true
         echo "── failed units:"
-        systemctl --failed --no-pager 2>&1 || true
-        echo "── dbus unit:"
-        systemctl status dbus --no-pager -n 6 2>&1 || true
-        echo "── /run permissions:"
-        ls -ld /run/systemd/journal /run/systemd/journal/socket 2>&1 || true
-        echo "── mounts:"
-        mount | grep -E ' on / | on /run ' 2>&1 || true
-        echo "── journal head:"
-        journalctl -b --no-pager 2>&1 | head -120 || true
-      } >> "$out" 2>&1 || true
+        systemctl --failed --no-pager
+        echo "── journal tail:"
+        journalctl -b --no-pager | tail -100
+      } > "$out" 2>&1 || true
       # The shared Windows partition appears only once the WSL automount is
       # up; retry rather than guess the ordering.
       for _ in 1 2 3 4 5 6; do
@@ -482,151 +393,6 @@ in
       done
     '';
   };
-
-  # ── the WSL rootfs tarball, built without root ─────────────────────────
-  # Replaces the upstream tarballBuilder: its nixos-install path cannot run
-  # in a user namespace — the trusted daemon copies the closure into the
-  # chroot store as real root, then the namespaced client chowns
-  # daemon-owned files and gets EINVAL. Same outcome here with the client
-  # doing every write: `nix copy --to local?root=` is in-process, the
-  # system profile is a direct symlink, and `tar --owner=0` stamps root
-  # ownership into the archive at packaging time (which also makes the
-  # bytes reproducible across runs). The wrapper in flake.nix still re-execs
-  # via `unshare -rm` so nothing lands owned by the real user mid-build.
-  system.build.tarballBuilder = lib.mkForce (pkgs.writeShellApplication {
-    name = "nixos-wsl-tarball-builder";
-    runtimeInputs = with pkgs; [
-      coreutils
-      findutils
-      gnugrep
-      gnutar
-      pigz
-      config.nix.package
-      nixos-install-tools
-    ];
-    text = ''
-      out="nixos.wsl"
-      if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" = "-h" ]; }; then
-        echo "Usage: $0 [output.tar.gz]"
-        exit 1
-      fi
-      [ "$#" -eq 1 ] && out="$1"
-
-      root=$(mktemp -d)
-      # Every command guarded: under errexit, an unguarded failure inside
-      # the EXIT trap aborts the remaining commands — an unguarded umount
-      # (host submounts inside the rbinds return nonzero) left a 4.6 GB
-      # tempdir behind after a successful tar (measured).
-      # chmod first: the copied store paths carry the store's read-only
-      # modes (r--r--r--), and plain rm cannot descend into those dirs —
-      # measured leaving a 4.6 GB /tmp tempdir behind and failing the run
-      # with rc=65 after a successful tar.
-      trap 'umount -R "$root/dev" "$root/sys" "$root/proc" 2>/dev/null || true; chmod -R u+w "$root" 2>/dev/null || true; rm -rf "$root" 2>/dev/null || true' EXIT
-
-      # Every nix invocation against the chroot store must run with an empty
-      # build-users-group: the default ("nixbld") makes the LocalStore init
-      # chown the store dir to the group's gid, which is not mapped inside
-      # the user namespace → EINVAL. With an empty group the check is
-      # skipped entirely; the imported system's own nix.conf is untouched.
-      export NIX_CONFIG="build-users-group = "
-
-      echo "[NixOS-WSL] Installing..."
-      install -d "$root/nix/store" "$root/nix/var/nix/profiles/per-user/root" "$root/etc"
-
-      # Copy the closure client-side and register the store DB from nix's own
-      # dump format (`nix-store --dump-db` → `--load-db`, proven round trip).
-      # This is the one step that forced root in the upstream builder: with
-      # nixos-install, the trusted daemon copies the closure as real root and
-      # the namespaced client then chowns daemon-owned files → EINVAL. Here
-      # the client does every write, so `unshare -rm` is self-sufficient.
-      # Ownership is stamped into the tarball by --owner=0 at packaging time;
-      # file modes and timestamps come straight from the store.
-      nix path-info -r ${config.system.build.toplevel} | while read -r storePath; do
-        cp -r --preserve=mode,timestamps "$storePath" "$root/nix/store/"
-      done
-      nix path-info -r ${config.system.build.toplevel} \
-        | xargs -d '\n' nix-store --dump-db \
-        | nix-store --store "local?root=$root" --load-db
-
-      echo "[NixOS-WSL] Setting the system profile..."
-      install -d "$root/nix/var/nix/profiles/per-user/root" "$root/etc"
-      ln -sfn ${config.system.build.toplevel} "$root/nix/var/nix/profiles/system"
-      touch "$root/etc/NIXOS"
-
-      # Run the system activation against the tarball root — the step the
-      # upstream builder got for free from nixos-install. This populates
-      # /etc (passwd, fstab, systemd units), /bin and /sbin (sh + init
-      # shim) and users. Without it the imported distro fails with
-      # "getpwuid(0) failed" and "execvpe (/bin/sh) failed" — measured.
-      # The bind mounts cover the specialfs snippet, whose own mounts fail
-      # in a user namespace (devpts gid, sysfs type) and are non-fatal:
-      # the activation continues and everything that matters lands in the
-      # root. The /nix/users-chown-to-unmapped-gid failures (specialfs,
-      # /etc/shadow) are corrected by tar --owner=0 at packaging time.
-      # switch-to-configuration was tried first — it is an ELF binary now
-      # and defers all work to actual boot; the direct activate script is
-      # what populates the tree. nixos-enter mounts only /dev /sys /proc
-      # and self-namespaces so no bind leaks into the tar; the explicit
-      # steps below are its behaviour, reproduced in our mount namespace
-      # (its own nested re-exec cannot mount /proc here).
-      echo "[NixOS-WSL] Running the system activation..."
-      ln -sfn /proc/mounts "$root/etc/mtab"
-      mount --make-rprivate /
-      mkdir -p "$root/dev" "$root/sys" "$root/proc"
-      mount --rbind /dev "$root/dev"
-      mount --rbind /sys "$root/sys"
-      mount --rbind /proc "$root/proc"
-      # || true: inside the namespace the activation *reports* failures —
-      # the specialfs mounts (devpts gid), the /etc/shadow chown (unmapped
-      # gid) and the seed's chown to the unmapped uid — but every file
-      # still lands, and tar --owner=0 stamps the final ownership into the
-      # archive. A nonzero activation here is expected; aborting on it
-      # would ship an unpopulated root (rc=64, no /etc/passwd — measured).
-      chroot "$root" /nix/var/nix/profiles/system/activate || true
-      # Best effort: the rbind'd trees hold host submounts (hugepages, fuse
-      # connections, module sysfs) that plain `umount -R` cannot fully
-      # unwind from here. Anything left over dies with the namespace, and
-      # the tar step above excludes /dev /sys /proc entirely.
-      umount -R "$root/dev" "$root/sys" "$root/proc" 2>/dev/null || true
-
-      echo "[NixOS-WSL] Adding wsl-distribution.conf"
-      install -Dm644 ${wslDistroConf} "$root/etc/wsl-distribution.conf"
-      install -Dm644 ${inputs.nixos-wsl}/assets/NixOS-WSL.ico "$root/etc/nixos.ico"
-
-      echo "[NixOS-WSL] Adding default config..."
-      install -Dm644 ${defaultNixosConfig} "$root/etc/nixos/configuration.nix"
-
-      echo "[NixOS-WSL] Normalizing directory permissions..."
-      # Directory traversal invariant, enforced for the WHOLE tree instead of
-      # path by path. The build root comes from `mktemp -d` (mode 0700) and
-      # the user-namespace activation cannot chown, so restrictive directory
-      # modes can survive into the archive; tar records them and extractors
-      # (GNU tar, measured; WSL's import too) apply them to the distro. A
-      # 0700 / then makes every non-root process fail EACCES on every
-      # absolute path: user shells cannot exec, messagebus cannot reach
-      # journald, login cannot chdir, the WSL relay cannot start a session.
-      # Root bypasses via DAC_OVERRIDE, so it presents as "root works,
-      # nothing user-level does" — every failure in wsl/FIRST-BOOT.md traces
-      # back to this. Files are deliberately NOT widened: the store already
-      # carries correct exec bits, and sshd refuses to start if host keys
-      # are anything but 0600. The bind-mounted trees are pruned: they are
-      # host state, excluded from the tar anyway, and cannot be chmodded.
-      prune=( -path "$root/dev" -o -path "$root/sys" -o -path "$root/proc" )
-      find "$root" \( "''${prune[@]}" \) -prune -o -type d -exec chmod a+rx {} +
-      if find "$root" \( "''${prune[@]}" \) -prune -o -type d ! -perm -o+x -print -quit | grep -q .; then
-        echo "[NixOS-WSL] FATAL: a directory in the image is not traversable" >&2
-        exit 1
-      fi
-      # /dev /sys /proc are bind-mounted host trees during the activation
-      # step — runtime mounts, not distro content (WSL mounts its own /dev
-      # and /proc at import). Excluding keeps live sysfs state (which tar
-      # reads with "file shrank" warnings) out of the archive.
-      tar -C "$root" -c --sort=name --mtime='@1' --numeric-owner --owner=0 --group=0 \
-        --hard-dereference \
-        --exclude=./dev --exclude=./sys --exclude=./proc \
-        . | pigz > "$out"
-    '';
-  });
 
   system.stateVersion = "25.05";
 }

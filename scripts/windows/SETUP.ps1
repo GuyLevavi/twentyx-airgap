@@ -12,10 +12,11 @@
 #      when that distro is already registered the import is skipped
 #   2. runs UNPACK.ps1 from -Base (Windows side: kit, Zed themes/settings,
 #      WezTerm, VS Code) unless -SkipUnpack
-#   3. runs setup-wsl.sh as root inside the distro (clone the repo bundle,
-#      import the offline rebuild cache, first nixos-rebuild); the transfer
-#      dir is passed through as TRANSFER so -Base works outside C:\twentyx
-#   4. prints the verification commands and the smoke test path
+#   3. runs setup-wsl.sh as root inside the distro (overlay the text layer,
+#      stage the runtime CA, apply the closure delta when carried); the
+#      transfer dir is passed through as TRANSFER so -Base works outside
+#      C:\twentyx
+#   4. prints the verification commands
 #
 # The Linux side of the kit -- VS Code extensions included -- is installed
 # by setup-wsl.sh, not by this script. See docs/MANUAL.md.
@@ -78,12 +79,6 @@ if ($LASTEXITCODE -ne 0) { throw "wslpath failed for $setupWin ($LASTEXITCODE)" 
 $setupWsl = "$setupWsl".Trim()
 if (-not $setupWsl) { throw "wslpath returned nothing for $setupWin" }
 
-$cache = Join-Path $Base "wsl-rebuild.tar.gz"
-if (-not (Test-Path $cache)) {
-    $hint = if (Test-Path "$cache.7z") { " (extract the .7z transport containers with 7-Zip first)" } else { "" }
-    throw "missing $cache$hint"
-}
-
 Say "running setup-wsl.sh as root in '$Distro' (user: $User)"
 wsl -d $Distro -u root -- env "TRANSFER=$baseWsl" bash "$setupWsl" "$User"
 if ($LASTEXITCODE -ne 0) { throw "setup-wsl.sh failed ($LASTEXITCODE)" }
@@ -91,6 +86,6 @@ if ($LASTEXITCODE -ne 0) { throw "setup-wsl.sh failed ($LASTEXITCODE)" }
 # -- 4. what next ----------------------------------------------------------
 Say "done. Verify inside the distro:"
 Say "  wsl -d $Distro"
-Say "  cd ~/twentyx-airgap"
-Say "  git log --oneline -3"
-Say "then run the smoke test: docs/wsl-SMOKE-TEST.md"
+Say "  systemctl --failed"
+Say "  doctor"
+Say "  nvim, opencode and zed remote are seeded from the text layer"

@@ -27,15 +27,6 @@
       url = "github:raine/workmux";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
-    # Remote-WSL support for the Microsoft VS Code server: a user service
-    # that patches each freshly installed server's bundled node for NixOS.
-    # The server and the extension set themselves are pinned in
-    # nix/vscode-version.nix and nix/vscode-extensions.nix -- this input is
-    # only the patch mechanism.
-    nixos-vscode-server = {
-      url = "github:nix-community/nixos-vscode-server";
-    };
   };
 
   outputs =
@@ -95,21 +86,10 @@
         # ── the very first transfer ────────────────────────────────────────
         # Chicken and egg: a NixOS-WSL machine is needed to build one, and
         # there is not one yet. This builds the rootfs tarball that
-        # `wsl --import` takes.
-        #
-        # No sudo: the upstream builder demands EUID 0 for its chroot and bind
-        # mounts, so the wrapper re-execs it inside a user namespace. Set
-        # NO_UNSHARE=1 to skip the namespace if a caller genuinely is root.
-        wsl-tarball =
-          let
-            inner = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
-          in
-          pkgs.writeShellScriptBin "nixos-wsl-tarball-builder" ''
-            if [ "$(id -u)" = 0 ] || [ -n "''${NO_UNSHARE:-}" ]; then
-              exec ${inner}/bin/nixos-wsl-tarball-builder "$@"
-            fi
-            exec ${pkgs.util-linux}/bin/unshare -rm ${inner}/bin/nixos-wsl-tarball-builder "$@"
-          '';
+        # `wsl --import` takes. The upstream builder, run under sudo:
+        #   sudo ./result/bin/nixos-wsl-tarball-builder \
+        #     --chown home/jensen 1000:100 dist/nixos-wsl.tar.gz
+        wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
 
         # ── the Windows-side half of the first transfer ───────────────────
         # WSL2 MSI + the Zed installer pinned to the same upstream release as
