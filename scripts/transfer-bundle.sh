@@ -63,8 +63,11 @@ if [ ! -f "$BUILD/nixos-wsl.tar.gz" ] \
     rm -f "$BUILD/nixos-wsl.tar.gz"
     say "building the NixOS-WSL tarball (upstream builder, under sudo)"
     nix build .#wsl-tarball
-    sudo ./result/bin/nixos-wsl-tarball-builder \
-        --chown home/jensen 1000:100 "$BUILD/nixos-wsl.tar.gz"
+    # Real root is required: nixos-install chroots and bind-mounts. No
+    # --chown: it runs BEFORE the install (it is for --extra-files) and would
+    # fail on the not-yet-existing home; the activation script creates
+    # /home/jensen as 1000:100 anyway (isNormalUser defaults createHome=true).
+    sudo ./result/bin/nixos-wsl-tarball-builder "$BUILD/nixos-wsl.tar.gz"
     printf '%s' "$want_wsl" > "$BUILD/.wlldrv"
 fi
 

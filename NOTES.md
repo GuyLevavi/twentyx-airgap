@@ -69,11 +69,13 @@ setting goes stale on the next closure update; this is the fix.
   delta, `nix-env --set`s the system profile, runs
   `switch-to-configuration switch`, and restarts `seed-home`. Rollback is
   `nix-env --rollback` + switch.
-- The tarball is built by the **upstream** NixOS-WSL builder under `sudo`
-  with `--chown home/jensen 1000:100`. The previous custom rootless builder
-  existed only to work around user-namespace EINVALs; with real root those
-  workarounds (`createHome = false`, tmpfiles home rules, activation
-  chowns) are gone. The tarball is the only artifact that needs sudo.
+- The tarball is built by the **upstream** NixOS-WSL builder under `sudo`.
+  The previous custom rootless builder existed only to work around
+  user-namespace EINVALs; with real root those workarounds
+  (`createHome = false`, tmpfiles home rules, activation chowns) are gone.
+  No `--chown home/jensen`: upstream applies chowns before `nixos-install`
+  (it is for `--extra-files`), and the activation script already creates the
+  home as 1000:100. The tarball is the only artifact that needs sudo.
 
 ## No signing, by decision
 

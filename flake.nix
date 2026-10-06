@@ -88,8 +88,7 @@
         # Chicken and egg: a NixOS-WSL machine is needed to build one, and
         # there is not one yet. This builds the rootfs tarball that
         # `wsl --import` takes. The upstream builder, run under sudo:
-        #   sudo ./result/bin/nixos-wsl-tarball-builder \
-        #     --chown home/jensen 1000:100 dist/nixos-wsl.tar.gz
+        #   sudo ./result/bin/nixos-wsl-tarball-builder nixos-wsl.tar.gz
         wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
 
         # ── the Windows-side half of the first transfer ───────────────────

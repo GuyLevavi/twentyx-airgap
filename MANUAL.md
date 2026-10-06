@@ -41,13 +41,14 @@ evaluated or fetched inside the gap.
 
 ```bash
 nix build .#wsl-tarball
-sudo ./result/bin/nixos-wsl-tarball-builder \
-    --chown home/jensen 1000:100 dist/nixos-wsl.tar.gz
+sudo ./result/bin/nixos-wsl-tarball-builder nixos-wsl.tar.gz
 ```
 
 The upstream builder needs real root (it chroots and bind-mounts), hence
-`sudo`; `--chown` pre-seeds `/home/jensen` for uid 1000, the first normal
-user. `transfer-bundle.sh` runs exactly this.
+`sudo`. Do not pass `--chown`: it runs before the install (it exists for
+`--extra-files`) and would fail on the not-yet-created home; the activation
+script creates `/home/jensen` as 1000:100 anyway. `transfer-bundle.sh` runs
+exactly this.
 
 **Windows, from absolute zero, no WSL installed.** PowerShell, **as
 Administrator**:

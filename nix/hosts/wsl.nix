@@ -12,8 +12,8 @@
   ...
 }:
 let
-  # Fixed for everyone: the toolchain is one appliance, and the tarball is
-  # built with --chown home/jensen for the same uid.
+  # Fixed for everyone: the toolchain is one appliance, and the install
+  # creates this user with the first free uid, 1000.
   username = "jensen";
 
   # One profile, one session environment, one tree of packaged defaults --
@@ -190,8 +190,8 @@ in
       "wheel"
       "podman"
     ];
-    # The upstream tarball builder creates the home with the skeleton and the
-    # right ownership; --chown home/jensen 1000:100 is the belt to that brace.
+    # isNormalUser defaults createHome=true, so nixos-install's activation
+    # creates /home/jensen with the skeleton, owned 1000:100.
   };
 
   # sudo with no password prompt: the account's password is locked ("*"), so

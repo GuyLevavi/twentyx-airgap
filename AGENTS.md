@@ -59,8 +59,9 @@ an existing home.
 small text files plain). Stamps (`build/.layerdrv`, `.wlldrv`,
 `.updatestamp`) rebuild only what a closure change requires; `repo-layer.tar`
 is rebuilt every run. A dirty worktree is refused (`ALLOW_DIRTY=1`). The WSL
-tarball is built by the upstream builder under `sudo`
-(`--chown home/jensen 1000:100`). `dist/` is wiped and rebuilt each run.
+tarball is built by the upstream builder under `sudo` (no `--chown`; the
+activation script creates `/home/jensen`). `dist/` is wiped and rebuilt each
+run.
 
 ## Nix rules
 

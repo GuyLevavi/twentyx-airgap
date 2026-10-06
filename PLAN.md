@@ -129,7 +129,7 @@ Copy them into `dotfiles/`, then rewrite every `/nix/store/...` path to a stable
 - `nix/hosts/wsl.nix`:
   - Delete the custom `system.build.tarballBuilder` override (the whole block L444-587).
   - Delete the workarounds it needed: `createHome = false`, the tmpfiles `d`/`z` home rules, the three `.vscode-server` chowns, `defaultNixosConfig`, `wslDistroConf`.
-  - Pre-seed `/home/jensen` via the upstream builder's `--chown` flag instead: `sudo ./result/bin/nixos-wsl-tarball-builder --chown home/jensen 1000:100 dist/nixos-wsl.tar.gz`. (uid 1000 is the first normal user on NixOS-WSL; jensen is that user.)
+  - Let the upstream builder's `nixos-install` create `/home/jensen` (activation + `createHome` default): `sudo ./result/bin/nixos-wsl-tarball-builder nixos-wsl.tar.gz`. (uid 1000 is the first normal user on NixOS-WSL; jensen is that user. `--chown` runs before the install and is for `--extra-files` only.)
   - Cut `bootlog` to: date, `systemctl --failed --no-pager`, `journalctl -b --no-pager | tail -100`, copy to `/mnt/c/twentyx/bootlog.txt` if mounted.
 - Delete `wsl/FIRST-BOOT.md`. Its builder lessons no longer apply.
 
