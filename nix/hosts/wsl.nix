@@ -250,8 +250,8 @@ in
   # regeneration from these declarations, not a useradd that can half-fail
   # inside the build's user namespace and still ship (the old "|| true").
   # mutableUsers=false + locked passwords is deliberate: the WSL relay never
-  # authenticates and inbound SSH is key-only (keys are added post-import,
-  # wsl/README.md). This flag acknowledges "no password anywhere" by design.
+  # authenticates and inbound SSH is key-only (keys are added post-import).
+  # This flag acknowledges "no password anywhere" by design.
   users.allowNoPasswordLogin = true;
   users.mutableUsers = false;
   users.users.systemd-oom = {
@@ -265,10 +265,7 @@ in
   };
   users.groups.systemd-timesync = { };
 
-  # D-Bus is deliberately left at the NixOS default (dbus-broker). Its
-  # launcher's EACCES on journald's socket, which once looked like the root
-  # cause, was a symptom of the 0700-/ invariant violation fixed in the
-  # builder below — not a reason to deviate. See wsl/FIRST-BOOT.md.
+  # D-Bus is deliberately left at the NixOS default (dbus-broker).
 
   # ── SSH, both directions ────────────────────────────────────────────────
   # Inbound: the Zed client on Windows connects over plain SSH to this machine

@@ -1,77 +1,135 @@
 # AGENTS.md
 
-A toolchain for an **airgapped** RunAI/OpenShift environment and a NixOS-WSL laptop, from one source of truth. `README.md` is the authoritative overview; `ARCHITECTURE.md` is the how-it-works tour with a reading order for new readers; `MANUAL.md` is the step-by-step; `docs/INNER-CONFIG.md` maps where cluster-specific config belongs; `NOTES.md` holds open items, in-cluster facts and war stories (registry names there are still placeholders); `TODO.md` is the ordered next-step checklist. For changes touching WSL boot, read `wsl/FIRST-BOOT.md` and `wsl/SMOKE-TEST.md` first. Read them before making non-trivial changes.
+A toolchain for an **airgapped** RunAI/OpenShift environment and a NixOS-WSL
+laptop, from one source of truth. `README.md` is the authoritative overview;
+`ARCHITECTURE.md` is the how-it-works tour with a reading order for new
+readers; `MANUAL.md` is the step-by-step; `NOTES.md` holds open items and the
+why behind load-bearing pieces. Read them before making non-trivial changes.
 
-## Verification (there is no test suite — but there are tests)
+## Verification
 
 ```bash
 ./tests/test-container.sh    # full image integration, needs podman (mock base + local registry)
-nix shell nixpkgs#shellcheck -c shellcheck -S warning libexec/* agent/*.sh tests/*.sh scripts/*.sh docker/*.sh   # CI lint gate
+nix shell nixpkgs#shellcheck -c shellcheck -S warning libexec/* agent/*.sh tests/*.sh scripts/*.sh docker/*.sh
 nix flake check                            # evaluates both targets
-nix build .#runai-layer                    # real check that the closure builds (needs a Nix host)
-nix develop                                # devshell: shellcheck, shfmt, nixfmt, statix, deadnix, crane, skopeo, dive, jq
+nix build .#runai-layer                    # real check that the closure builds
+nix build .#runai-layer-nvim               # also runs the headless nvim offline check (Nix sandbox)
+nix develop                                # devshell: shellcheck, shfmt, nixfmt, statix, deadnix, crane, skopeo, dive, jq, 7z
 ```
 
-`tests/test-container.sh` simulates the problematic pod (uid 10001, hostile preloader, env-injection mount) — run it after touching anything in `libexec/`, `agent/`, `docker/`, or the layer. It builds the layer in the DEFAULT store first (instant after a local build) and falls back to the chroot store only when that fails, and long steps print an elapsed heartbeat, so it is ~1 min warm (was ~25 min silent); `TEST_KEEP=1` leaves the local registry up for debugging, `TEST_NIX_LAYER=...` reuses a prebuilt layer. Match the existing shell style: `set -euo pipefail`, `say()` for status output, `--help`-less comment headers with a usage line. There is no `bin/` dispatcher — libexec scripts are the entry points (`doctor`, `run-opencode`, `bootstrap`, `entrypoint`, `sshd-inetd`).
+`tests/test-container.sh` simulates the problematic pod (uid 10001, gid 0,
+hostile LD_PRELOAD, env-injection mount) — run it after touching anything in
+`libexec/`, `agent/`, `docker/`, or the layer. `TEST_KEEP=1` leaves the local
+registry up for debugging; `TEST_NIX_LAYER=...` reuses a prebuilt layer.
+Match the existing shell style: `set -euo pipefail`, `say()` for status
+output, comment headers with a usage line. There is no `bin/` dispatcher —
+libexec scripts are the entry points (`doctor`, `run-opencode`, `bootstrap`,
+`seed-home`, `entrypoint`, `sshd-inetd`).
 
 ## The one distinction that drives everything
 
 | Change type | Where | Deploy cost |
 |---|---|---|
-| `libexec/`, `agent/` | git text | CI re-tars `repo-layer.tar` per commit (no transfer) |
+| `libexec/`, `agent/`, `dotfiles/` | git text | CI re-tars `repo-layer.tar` per commit (no transfer) |
 | anything in `flake.nix` / `nix/` | closure | rebuild → **physical transfer** |
 
-Adding a package to `nix/modules/tools.nix` changes both targets at once. Shell/prompt/tmux/nvim/git configs are Nix-*generated* — editing them is a closure change, even though they look like config. Config *edits* (writeText/buildEnv/symlinkJoin) still rebuild offline in seconds; adding a *package* is what forces a transfer.
+`nix/packages.nix` is the package list; adding a package changes both
+targets. `nix/profile.nix` builds the profile, the session environment and
+the packaged defaults. `dotfiles/` is seeded into `$HOME` **once** and then
+belongs to the user — editing a seeded file in the repo changes nothing for
+an existing home.
+
+## Never evaluate Nix inside the gap
+
+- WSL updates are a store delta (`wsl-update.nar`): `nix-store --import`,
+  `nix-env --set`, `switch-to-configuration switch`. The base is the GC root
+  `.gcroots/wsl-system`; `transfer-bundle.sh` advances it only after a
+  successful export. Rollback is `nix-env --rollback` + switch.
+- Pods never run Nix: `nix/runai/layer.nix` extracts the built closure as an
+  OCI layer tarball; `docker/assemble.sh` appends it registry-side.
+- No runtime fetch anywhere: opencode's model fetch/updates are off, Zed's
+  auto-update and `auto_install_extensions` are off, npm is seeded around,
+  and LazyVim resolves through lazy's `dev` mechanism. A runtime fetch in the
+  gap is a hang, not an error.
 
 ## Transfers
 
-`./scripts/transfer-bundle.sh` assembles the flat `dist/` in one shot: both nix layers, `repo-layer.tar`, `nixos-wsl.tar.gz`, `wsl-rebuild.tar.gz` (the offline delta, ALWAYS regenerated; `SKIP_CACHE=1` skips), the windows kit, `twentyx-airgap.bundle` (the repo's real history), user-facing docs, `README.md`, `MANIFEST.txt` + `SHA256SUMS`, and the setup scripts (`SETUP.ps1` on Windows, `UNPACK.ps1`, `setup-wsl.sh`) — then wraps every big artifact in a `.7z` transport container (the pipeline drops big gzip and rejected the zstd twins); the inner `.tar.gz` stays byte-identical and `transfer-bundle.sh` fails if any single file would exceed the 3072 MB/file cap. A dirty worktree is refused (`ALLOW_DIRTY=1` overrides — the bundle carries committed history only, scripts/docs come from the working tree), `repo-layer.tar` is rebuilt every run (text changes every commit), and `dist/.complete` is written LAST: a dist without it is an interrupted partial set and is wiped on the next run, so one shipped folder is one generation. The big artifacts are stamped with their drvPath (`dist/.layerdrv`, `dist/.wlldrv`), so a closure change rebuilds exactly that artifact and a text-only commit rebuilds none; the WSL tarball also gets a content probe (`./bin/init` present), because existence alone is not enough (the probe guards the producer's SIGPIPE, or pipefail makes a healthy tarball look stale). Layers only: `./scripts/build-layers.sh [outdir]`, which builds in the default store first and falls back to the chroot store `/tmp/airgap-test-store` when a path is missing (NOTES §9).
-
-`wsl-username` is per-machine and gitignored: a plain-directory flake copy uses it, a git checkout excludes it and ships the default (`jensen` in `flake.nix`).
+`./scripts/transfer-bundle.sh` builds plain artifacts in the gitignored
+`build/` and assembles `dist/` (every big artifact in a `.7z` container,
+small text files plain). Stamps (`build/.layerdrv`, `.wlldrv`,
+`.updatestamp`) rebuild only what a closure change requires; `repo-layer.tar`
+is rebuilt every run. A dirty worktree is refused (`ALLOW_DIRTY=1`). The WSL
+tarball is built by the upstream builder under `sudo`
+(`--chown home/jensen 1000:100`). `dist/` is wiped and rebuilt each run.
 
 ## Nix rules
 
-- **Git is text-only, enforced by design.** No vendored blobs, no binaries, no lockfile-generated artifacts. The closure replaces any manifest/CHECKSUMS scheme.
-- **Never run Nix inside a pod.** `nix/runai/layer.nix` extracts the built closure as an OCI layer tarball; the lock is law in the airgap (`nix flake update` only on a connected machine).
-- Pin inputs deliberately; most follow `nixpkgs`. Marketplace extensions and tarball fetches pin exact hashes — re-pin only when upstream mutates the asset.
-- Auto-updates are disabled everywhere: a runtime fetch in the gap is a hang, not an error (tldr/tealdeer was removed entirely for this reason — a 2 MB nicety that mutated upstream three times is not worth a fetch class that bites).
+- Git is text-only, enforced by design. No vendored blobs, no binaries, no
+  lockfile-generated artifacts; the closure replaces any manifest scheme.
+- Pin inputs deliberately; `nix flake update` runs only on a connected
+  machine. Pins that must move together: the Zed kit installer ↔
+  `nix/zed-client-version.nix`, and `nix/vscode-version.nix` ↔
+  `nix/vscode-extensions.nix`.
+- Session env belongs in `nix/profile.nix` (`twentyx.sessionEnv`), which
+  becomes image ENV in a pod and `environment.sessionVariables` on WSL.
 
 ## Image assembly (`docker/`)
 
-Bases are 15–30 GB; two layers are appended registry-side with `crane append`, never `FROM base-pytorch`. Constraints that are silent failures, not build errors:
+Bases are 15–30 GB; two layers are appended registry-side with `crane
+append`, never `FROM base-pytorch`. Constraints that are silent failures, not
+build errors:
 
-- The closure must land at literal `/nix/store` — ELF interpreters are absolute store paths.
-- `crane mutate` must **prepend** to the base's `PATH` (torch breaks without conda paths) and never replace `ENTRYPOINT` — the base's is stashed in `BASE_ENTRYPOINT` and handed over.
-- Session env (`TERMINFO_DIRS`, `LOCALE_ARCHIVE`, …) must be image ENV via `layer.nix`'s `session-env`, not shell rc — `runai exec` and code-server never source rc files. Image ENV does no expansion; shell-expression values are filtered out in `assemble.sh`.
-- Nix **strips setuid bits** from build outputs. The setuid `sudo` copy is made in `mklayer.sh` (extracted from the nix layer, `chmod 4555` — not 4755, the tar's `g=u` would make it group-writable).
-
-## LD_PRELOAD / opencode split
-
-RunAI injects GPU-fractioning libs via `LD_PRELOAD` (they crash opencode), but CUDA needs them back in every command the agent runs. `libexec/run-opencode` replaces the preload with the libc **matching the target binary's own glibc** (via `ldd` — a *system* libc preloaded into a Nix binary is a `GLIBC_PRIVATE` error) and stashes the original in `PRELOAD_ORIGINAL`; `agent/plugins/preload.ts` (`shell.env` hook) and `agent/restore-preload.sh` (`BASH_ENV`) restore it for children. Gotcha: `ldd/ldconfig -p | awk '…exit'` returns 141 (SIGPIPE) under `pipefail` — always add `|| true`.
+- the closure must land at literal `/nix/store` — ELF interpreters are
+  absolute store paths;
+- `crane mutate` must **prepend** to the base's `PATH` and never replace
+  `ENTRYPOINT` — the base's is stashed in `BASE_ENTRYPOINT` and handed over;
+- session env must be image ENV via `layer.nix`'s `session-env`, not shell
+  rc — `runai exec` and code-server never source rc files;
+- Nix strips setuid bits from build outputs; the setuid `sudo` copy is made
+  in `mklayer.sh` (`chmod 4555`, not 4755).
 
 ## `$HOME` layering rule
 
-`$HOME` is relocated to the PVC. A **symlink into `/nix/store` is packaged**; a **real file is the user's** and must never be clobbered. `XDG_CACHE_HOME` is deliberately ephemeral (local disk), so nothing durable may live there. For an arbitrary UID with no passwd entry the runtime itself sets `HOME=/` — `entrypoint` and `run-opencode` re-resolve it via `session_home()`; keep those in sync when touching identity resolution.
-
-Packaged defaults (`layer.nix`) are a real directory of per-file symlinks (not one symlink), so overlayfs merges them across layers and a repo-layer file at the same path would override a single default per commit. Wiring caveat: `docker/mklayer.sh` stages only `libexec/`, `agent/`, `VERSION` and generated `etc/` files — there is no repo-level `home-defaults/` directory, so use that override mechanism only after adding it to `mklayer.sh`. Precedence: user's real file > repo-layer override > Nix default.
+A symlink into `/nix/store` is ours and refreshed on every start; a real file
+is the user's and is never touched. `libexec/seed-home` is the only writer:
+packaged defaults as store symlinks, dotfiles copied once. `XDG_CACHE_HOME`
+is deliberately ephemeral (local disk). For an arbitrary UID with no passwd
+entry the runtime sets `HOME=/`; `entrypoint` and `run-opencode` re-resolve
+it via `session_home()` — keep those in sync when touching identity.
 
 ## Environment-provided assets
 
-Cluster-specific files (internal CA bundle, pip.conf, nginx site config) are never baked in. Contract: `/opt/airgap-env` (ConfigMap mount) wins over `/data/.airgap-env` (shared PVC). Known files are wired to env vars by `injection_exports()` in `common.sh`, consumed by bootstrap (drop-ins), the entrypoint (exec'd payloads) and the launcher (agent tree) — keep all three in sync. CRI exec (`runai exec -- cmd`) sees none of these; scripts reached that way must self-resolve.
+Cluster-specific files (internal CA bundle, pip.conf) are never baked in:
+`/opt/airgap-env` (ConfigMap mount) wins over `/data/.airgap-env` (shared
+PVC). Known files are wired to env vars by `injection_exports()` in
+`common.sh`, consumed by bootstrap (drop-ins), the entrypoint (exec'd
+payloads) and the launcher (agent tree) — keep all three in sync. CRI exec
+(`runai exec -- cmd`) sees none of these; scripts reached that way must
+self-resolve.
 
-## opencode, editors & root in the pod
+## Editors & agents
 
-- opencode + zed-editor (with its remote server) + code-server are in the closure (nixpkgs builds opencode from source: models catalog baked in, autoupdate off, `OPENCODE_DISABLE_MODELS_FETCH=true`). **The opencode binary is AVX2-only** (bun compile without `--baseline`) — SIGILL on pre-Haswell cluster nodes; fix is a local overlay, not a downgrade. A separate, already-fixed trap: nixpkgs patchelf's bun, and `bun build --compile` recycles the moved `PT_GNU_STACK` slot so the highest-vaddr `PT_LOAD` lands first — Linux <= 6.6 (WSL2, RHEL 8/9) never maps the BSS; `opencodeFixed` in `nix/modules/tools.nix` reorders with `nix/scripts/fix-phdr-order.py`, and `tests/test-container.sh` asserts the ascending layout.
-- Editor pins move in lockstep: `.#windows-kit`'s Zed installer is pinned to `pkgs.zed-editor.version` (re-pin via `nix store prefetch-file` when nixpkgs bumps zed). Zed's remote-server lookup is exact-match on the client's FULL version string (build metadata included), so the shim name comes from `nix/zed-client-version.nix` — pinned to the kit installer's build and re-pinned in the same commit — never from `pkgs.zed-editor.version` alone. The VS Code side has the same shape: `nix/vscode-version.nix` pins client/server version + commit and `throw`s at eval time when `pkgs.code-server.version` no longer matches, so both must re-pin with nixpkgs. The kit also ships the Zed theme files and the client templates (`nix/packages/windows/`), all pinned/committed.
-- opencode config: in a pod the user's `opencode.json` is NOT shipped — the working config lives on the PVC (durable `$HOME`). On WSL `nix/modules/home.nix` symlinks `~/.config/opencode/opencode.jsonc` INTO the cloned repo (live, no rebuild) with an `AIRGAP-SETUP` placeholder the shell/bootlog warn about until edited. Both targets also seed `node_modules/.keep` + a `package-lock.json` declaring `@opencode-ai/plugin`, which short-circuits opencode's startup npm install (the ~1.5 min ECONNREFUSED TUI stall) — re-check that pair when opencode bumps. The preload plugin and the Zed `agent_servers` default ship as packaged defaults via `home.file`.
-- Root: the repo layer ships `/etc/sudoers` granting `%#0` (gid 0) passwordless sudo; the setuid binary comes from the closure. `doctor` checks it. Podman's `storage.conf` (vfs) is written by bootstrap into the ephemeral cache.
-- Zed/SSH into a pod rides `sshd -i` inside `runai exec` stdio (`libexec/sshd-inetd` + `scripts/ssh-bridge.sh`); no pty anywhere on that path — a pty corrupts the SSH protocol.
+- opencode is `opencodeFixed` (phdr reorder, required on Linux ≤ 6.6) in the
+  profile; the LD_PRELOAD split (`run-opencode` + `preload.ts` +
+  `restore-preload.sh`) is load-bearing.
+- Zed and VS Code settings pin `/opt/twentyx/profile/bin/...`; never bake a
+  store path into a config file.
+- LazyVim plugins and treesitter parsers come from
+  `nix/packages/nvim-plugins.nix`; the headless check runs in the Nix
+  sandbox when that derivation builds.
+- Zed/SSH into a pod rides `sshd -i` inside `runai exec` stdio
+  (`libexec/sshd-inetd` + `scripts/ssh-bridge.sh`); no pty anywhere on that
+  path — a pty corrupts the SSH protocol.
 
 ## Gotchas
 
-- `push-gitlab-packages.sh` / `push-artifactory.sh` (image layers — GitLab generic packages primary, Artifactory fallback) are a different flow from the WSL transfer (`transfer-bundle.sh` → `setup-wsl.sh`) — don't confuse them.
-- Transfers are re-importable; integrity is the content-addressed store hash, not a tarball checksum.
-- `mklayer.sh` builds `repo-layer.tar` as plain tar (text, no container); CI rebuilds it per commit — it's the one-commit deploy path.
-- Identity in a pod comes from `session_user()` in `libexec/common.sh` (env → workspace name → git email → `$USER`); the workspace rule is the intended one and there is deliberately no baked git email (team distribution), and no packaged `~/.config/git/config` (it would block `git config --global` on the PVC) — neutral git settings ship as `/etc/gitconfig` instead.
-- First WSL artifact: `./scripts/transfer-bundle.sh`, or `nix build .#wsl-tarball` + `./result/bin/nixos-wsl-tarball-builder dist/nixos-wsl.tar.gz` — **no sudo**, the builder self-elevates in a user namespace (`NO_UNSHARE=1` opts out). See `wsl/README.md`; the WSL side gets the repo by cloning `dist/twentyx-airgap.bundle` (a git bundle — the real history, not a tar).
-- Local connected machine: the store was repaired 2026-09 (both layer flavors build on the default store); if "store path ... does not exist" reappears, NOTES.md §9 has the three damage classes, the `nix copy` skip-on-row trap and the remedies (`/nix/store` was never read-only — no remount needed); the chroot store (`nix build --store /tmp/airgap-test-store .#runai-layer`) is the donor and fallback.
+- `push-gitlab-packages.sh` / `push-artifactory.sh` (image layers) are a
+  different flow from the WSL transfer (`transfer-bundle.sh` →
+  `setup-wsl.sh`) — don't confuse them.
+- `mklayer.sh` stages `libexec/`, `agent/`, `dotfiles/`, `VERSION` and the
+  generated `etc/` files; it is the one-commit deploy path.
+- `ldd`/`ldconfig -p | awk '…exit'` returns 141 (SIGPIPE) under `pipefail` —
+  always add `|| true`.
+- `find` does not descend into a symlinked starting point; `seed-home`
+  resolves `home-defaults` first.
+- The local-store repair history is in NOTES.md ("the local store repair").

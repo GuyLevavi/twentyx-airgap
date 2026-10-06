@@ -1,308 +1,82 @@
 # twentyx-airgap
 
-A self-contained, transferable, headless workspace toolchain for a fully airgapped
-RunAI/OpenShift environment — and the same toolchain in WSL, as NixOS.
+A frozen appliance for an airgapped RunAI/OpenShift lab: one toolchain, built
+on a connected machine, carried across physically, and never fetched at
+runtime — in a pod or in the Windows laptop's NixOS-WSL distro.
 
-Nix computes the closure. That is the whole idea: what crosses the gap is not a
-hand-maintained list of blobs that drifts out of date, it is whatever the config
-actually references, and nothing else.
+Nix computes the closure on the connected machine. Nothing evaluates Nix
+inside the gap: a WSL update is a store delta imported and switched, a pod
+image is a layer appended registry-side.
 
 ## Two targets, one source of truth
 
-`nix/modules/` is evaluated twice:
-
-| | WSL | RunAI |
+| | WSL (frozen appliance) | RunAI pod (OCI layer) |
 |---|---|---|
-| What it is | a real NixOS system **inside** the gap | a read-only tree baked into an OCI layer |
-| Nix at runtime | yes — rebuilds offline | **no** — never runs in a pod |
-| How it arrives | one flat transfer tar + `SETUP.ps1` (import, cache, repo, rebuild); rolling updates: git bundle + delta cache | `crane append`, `docker/assemble.sh` |
-| Python | Nix (3.12 only, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
-| Cluster tools | kubectl, k9s, stern, helm, crane, podman | podman + sudo (root via gid 0) |
-| Agent | opencode + workmux (tmux) | opencode (via `run-opencode`) + workmux (tmux) |
-| Editor | zed (Windows client + remote server), VS Code Remote-WSL (pinned), nvim | code-server (closure) + zed remote server |
+| What it is | a real NixOS system inside the gap | a read-only tree appended to an internal base |
+| Nix at runtime | `nix-store`/`nix-env`: import a delta, switch | never |
+| How it arrives | `nixos-wsl.tar.gz` (first) / `wsl-update.nar` (updates) | `crane append`, `docker/assemble.sh` |
+| Package set | `nix/packages.nix`, one profile for both targets | same |
+| Config | `dotfiles/` seeded once into `$HOME` | same, via the repo layer |
+| Editors | Zed + VS Code Remote-WSL + LazyVim | code-server + Zed remote server |
+| Python | Nix (3.12, uv, ruff) | the base's — it owns torch and CUDA |
 
-Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
-tells you what that costs before you carry it anywhere.
+`nix/profile.nix` builds the one package profile, session environment and
+tree of packaged defaults both targets consume. Adding a package changes both.
 
-## Sizes, measured
+## Stable tool paths
 
-| | |
-|---|---|
-| WSL bootstrap, one file | **~1.5 GB** (`nixos-wsl.tar.gz`, gzip) |
-| `nix-layer.tar.gz` | ~1.1 GB (code-server + zed remote server + podman/sudo/nginx/openssh + workmux/gcc/nodejs) |
-| `nix-layer-nvim.tar.gz` | ~1.14 GB (+ pure nvim and treesitter) |
-| `repo-layer.tar` | ~390 KB |
-| `windows-kit-*.tar.gz` | ~612 MB (Zed + VS Code installers, WSL2 MSI, themes, client templates, the pinned `.vsix` set) |
-| `wsl-rebuild.tar.gz` | ~299 MB today (delta roots: flake inputs + VS Code server/vsix + stdenv; shrinks when a rebase makes them unnecessary) |
-| transfer quirk | every big artifact crosses inside a `.tar.gz.7z` container (the filter drops big gzip and rejected its zstd twins); 7-Zip gives back the exact `.tar.gz`, everything else goes as-is |
+`/opt/twentyx/profile/bin/<tool>` works on both targets (on WSL it is a
+symlink to the system profile). Editor settings point there, so they survive
+updates; a store path baked into a config file would go stale on the next
+transfer.
 
-(Measured 2026-09-28, `rm -rf dist && ./scripts/transfer-bundle.sh`.)
+## The one `$HOME` rule
 
-The WSL bootstrap is a single ~1.5 GB gzip'd tarball (`nixos-wsl.tar.gz` —
-the builder's own default name is `nixos.wsl`, but `wsl --import` takes the
-same bytes under any name). The offline rebuild delta is a single
-content-addressed binary cache (`wsl-rebuild.tar.gz`), so re-importing it
-is a no-op rather than a conflict. If the size ever hurts, the single
-biggest lever is clangd (~1.4 GB of the WSL closure) — removable as an
-offline config edit on the WSL machine itself, no transfer needed.
+A symlink into `/nix/store` is ours and refreshed on every start (packaged
+defaults). A real file is yours and is never touched (dotfiles are copied in
+once, then they are yours). Config edits inside the gap are local and
+durable; changing the closure is what needs a transfer.
 
-## The transfer, in one shape
+## Editors, fully offline
 
-`./scripts/transfer-bundle.sh` produces one flat `dist/`: both layers, the
-NixOS-WSL image, the always-regenerated rebuild delta, the Windows kit, the
-repo as a git bundle, the setup scripts, user-facing docs, `MANIFEST.txt`
-(versions, build identity) and `SHA256SUMS`. Every big artifact travels
-inside a `.tar.gz.7z` container — the transfer pipeline drops big gzip and
-rejected their zstd twins, 7-Zip containers pass. 7-Zip unpacks them to the
-exact `.tar.gz` before use (all of them, `wsl-rebuild.tar.gz` included).
-`dist/.complete` is written only by a successful run; a dist without it is a
-partial set and is wiped on the next run, so a shipped folder is always one
-generation. On Windows, one elevated command runs the whole first-time
-chain — `SETUP.ps1` imports the image, runs `UNPACK.ps1` and then
-`setup-wsl.sh` inside the distro (repo clone, offline cache import, first
-rebuild).
+- **Zed** — the remote server ships in the closure under the client's exact
+  full version string; language servers are pinned to
+  `/opt/twentyx/profile/bin`; the Windows kit vendors the nix/toml/tombi/
+  dockerfile/env extensions and `UNPACK.ps1` installs them client-side (the
+  client uploads them to the remote on connect). Auto-update and
+  `auto_install_extensions` are off.
+- **VS Code** — the server tarball is pinned and seeded by a oneshot; the
+  pinned `.vsix` set installs with the server's own CLI. Updates off on both
+  sides.
+- **LazyVim** — plugins and treesitter parsers are a Nix-built tree that
+  lazy.nvim resolves through its `dev` mechanism; mason is disabled and the
+  servers come from the profile. A headless nvim check runs in the Nix
+  sandbox, so a missing plugin or parser fails the build.
+- **opencode** — the models catalog is baked in, autoupdate is off, and the
+  plugin/skills/node_modules seeds short-circuit the startup npm install.
 
-Two update shapes, deliberately distinct: a **rebase** carries a rebuilt
-`nixos-wsl.tar.gz` and re-imports (home wiped, packaged defaults reapply —
-the price of a clean slate), while a **rolling** update carries the git
-bundle plus the `wsl-rebuild.tar.gz` delta (additive; ~299 MB today, most of
-it the pinned VS Code server and its extensions, and nothing at all once a
-rebase has absorbed it) and
-re-runs `setup-wsl.sh`, which fast-forwards the repo and rebuilds. Text
-changes never need a re-import; closure changes are usually cheaper as a
-rebase. The big artifacts carry drvPath stamps (`dist/.layerdrv`,
-`dist/.wlldrv`), so a closure change rebuilds exactly what it must and a
-text-only commit rebuilds nothing.
+## The transfer
 
-## The two layers at runtime
-
-`$HOME` in a pod is wiped on every restart, so it is **relocated wholesale** onto
-the PVC. Selective symlinking only ever rescues the state you remembered to
-enumerate, and there is always another tool writing a dotfile nobody listed.
-
-| Layer | Path | Rule |
-|---|---|---|
-| Packaged defaults | `$TOOLCHAIN_ROOT/home-defaults` → `/nix/store` | immutable |
-| Yours | `$HOME` on `/data/<user>` | durable, never clobbered |
-
-Inside `$HOME` the distinction is visible in the filesystem: **a symlink into the
-store is ours, a real file is yours.** Bootstrap never touches a real file, so
-overriding a packaged default is just: edit it. Back up the real file and the
-next start re-links the default.
-
-`XDG_CACHE_HOME` is deliberately *not* durable — the PVC is network-backed, and
-nvim, the LSPs and pip on a network filesystem are painfully slow. A cache is
-reconstructible by definition.
-
-```
-doctor               layers, closure, terminal, sudo, podman, env, endpoint
-run-opencode         launch opencode with the RunAI preload handled
-code-server          the pod IDE — in the closure, ahead of the base's copy
-sudo <cmd>           the runtime user (gid 0) has passwordless root
-podman ...           rootful via sudo; storage.conf prewritten (vfs)
-```
-
-## Environment-provided assets
-
-Some things must not be baked into the image because they differ per cluster
-and rotate: the internal CA bundle, pip.conf, RunAI's nginx site config. The
-contract, in preference order:
-
-1. **`/opt/airgap-env`** — a ConfigMap/Secret volume, mounted via RunAI
-   pod-template customization. Platform-idiomatic: updates without an image
-   rebuild or a PVC write.
-2. **`/data/.airgap-env`** — a directory on the shared PVC, for when mounting
-   is not available. One copy per cluster.
-
-Known file names are wired into the environment wherever it can be reached
-(shell drop-ins, the pod entrypoint, the opencode launcher — everything except
-CRI exec, which only sees image ENV): `pip.conf` → `PIP_CONFIG_FILE`,
-`ca-bundle.crt` → `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`,
-`GIT_SSL_CAINFO`, `NIX_SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`. Unknown file
-names are simply present at their path — that is the extension point for the
-next "thing that needs to be there". `doctor` reports what was found.
-The system trust store is also updated best-effort via sudo (Debian bases).
-
-Two related, operator-supplied values are plain env, not files:
-`LLM_BASE_URL` + `LLM_API_KEY` point the agent at the internal
-vLLM endpoint (doctor probes `$BASE/models`). On WSL, the same cluster CA is
-wired declaratively instead — carry `ca-bundle.crt` next to the flake
-(`security.pki.certificateFiles` picks it up if present).
-
-Override variables — no `AIRGAP_` prefix; nothing else in these images uses
-generic names, so the name is the documentation (all optional, all documented
-at their use site; see [`MANUAL.md`](MANUAL.md) for the walkthrough):
-
-`SESSION_USER`, `SESSION_HOME` (identity / relocated home),
-`EPHEMERAL_CACHE` (bootstrap scratch dir),
-`PRELOAD_STRIP`, `PRELOAD_PATTERN`, `PRELOAD_RESTORE_AGENT_BASH`,
-`PRELOAD_LIBC` (opencode launcher; the stash it hands to children is
-`PRELOAD_ORIGINAL`),
-`AGENT_SHELL` (which shell opencode spawns for tools),
-`SSH_BRIDGE_USER`, `SSH_BRIDGE_KEYDIR` (sshd bridge),
-`LAYER_VERSION`,
-`LAYER_NIX`, `LAYER_NIX_NVIM`, `LAYER_REPO`, `IMAGE_REGISTRY`,
-`BASE_REGISTRY`, `BASE_TAG`, `IMAGE_VARIANTS` (scripts + CI),
-`TEST_*` (test harness).
-
-## Default overrides without a transfer
-
-Packaged defaults live in `$TOOLCHAIN_ROOT/home-defaults` as a directory of
-per-file symlinks into the store — and overlayfs **merges directories across
-layers**. So the repo layer, which CI re-tars per commit, can override any
-individual packaged default by shipping a real file at the same path
-(`opt/twentyx/home-defaults/.config/starship.toml`, say): seconds, no closure
-rebuild, no physical transfer. A user's real file in `$HOME` still wins over
-both — that precedence is enforced by bootstrap, not by the filesystem.
-
-## Two update paths
-
-| Change | Path | Cost |
-|---|---|---|
-| anything in the closure | rebuild → transfer → CI | a physical transfer |
-| libexec / agent text | push → CI re-tars `repo-layer.tar` per commit | one commit, no transfer |
-
-Inside the gap, config edits are real files in `$HOME`: seed-home copies the
-shipped default in once and never overwrites it, so editing is local, durable
-and needs no rebuild. Changing what Nix builds — the package set, the closure —
-needs a new closure transfer. Nothing evaluates Nix inside the gap.
-
-## Images: append, don't rebuild
-
-The internal `*-pytorch` bases are 15–30GB, and `FROM base-pytorch` exhausts the
-build pod's ephemeral storage unpacking them. Everything we add is files, so
-two tarballs are appended registry-side with `crane append`, which fetches only
-each base's manifest and config. See [`docker/README.md`](docker/README.md).
+`./scripts/transfer-bundle.sh` builds plain artifacts in the gitignored
+`build/` and assembles `dist/`: every big artifact inside a `.7z` container
+(the pipeline drops big gzip), plus the small text files — docs, setup
+scripts, the repo bundle, `MANIFEST.txt`, `SHA256SUMS`. On Windows,
+`SETUP.ps1` imports the image, runs `UNPACK.ps1`, and runs `setup-wsl.sh`
+inside the distro.
 
 ## The LD_PRELOAD / CUDA split
 
-RunAI injects GPU-fractioning `.so` files via `LD_PRELOAD`. They crash opencode,
-but stripping them everywhere breaks CUDA in everything the agent runs. Both are
-true at once, so treat the process and its children separately:
+RunAI injects GPU-fractioning libraries via `LD_PRELOAD`; they crash
+opencode, but CUDA needs them back in every command the agent runs.
+`libexec/run-opencode` replaces the preload with the libc matching the
+binary's own glibc and stashes the original; `agent/plugins/preload.ts` and
+`agent/restore-preload.sh` restore it for children.
 
-- `libexec/run-opencode` replaces `LD_PRELOAD` with the libc **matching the
-  binary's own glibc** (resolved with `ldd` — a system libc preloaded into a
-  Nix-built binary is a `GLIBC_PRIVATE` error, not a no-op), stashing the
-  original in `PRELOAD_ORIGINAL`
-- `agent/plugins/preload.ts` restores the stash via opencode's
-  `shell.env` hook; `agent/restore-preload.sh` does the same via `BASH_ENV` for
-  any non-interactive bash the hook does not cover
+## Read next
 
-`doctor` prints `torch.cuda.is_available()` under both.
-
-## Headless nvim over RunAI
-
-The `-nvim` flavor is usable from a Windows terminal emulator through
-`runai exec`. Six things have to be right, and all six are wired:
-
-1. `runai exec -it` — `runai attach` gives you PID 1's stdio, which is not a TTY
-2. tmux, always — an exec session dies on any network blip
-3. `TERMINFO_DIRS` — the slim bases have neither `tmux-256color` nor `wezterm`
-4. `LOCALE_ARCHIVE` — otherwise fish warns on every start and mangles glyphs
-5. `TERM`/`COLORTERM` — kubectl forwards `TERM` but never `COLORTERM`
-6. OSC 52 — the only route from a yank in the pod to the Windows clipboard
-
-Use **WezTerm** (Ghostty has no Windows build). It announces `TERM=wezterm`,
-whose terminfo ships in the closure for exactly this reason.
-
-## Layout
-
-```
-flake.nix                     both targets, pinned inputs
-nix/modules/                  the shared config: home, shell, tools, nvim
-nix/hosts/wsl.nix             NixOS-WSL: offline substituters, nix-ld, sshd, podman
-nix/runai/layer.nix           the closure -> an OCI layer tarball
-libexec/*                     bootstrap, doctor, entrypoint, run-opencode, sshd-inetd
-agent/                        opencode preload plugin + BASH_ENV restore helper
-scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/transfer-bundle.sh    run OUTSIDE -> the flat dist/ + .7z containers around every big artifact (big gzip does not cross the filter); refuses a dirty tree, stamps .complete last
-scripts/export-rebuild-cache.sh  run OUTSIDE -> the WSL delta cache; always run by transfer-bundle, roots in .#wslDeltaRoots
-scripts/setup-wsl.sh          run INSIDE (root) -> clone/ff bundle, import cache, stage CA, rebuild as the user via sudo
-scripts/windows/SETUP.ps1     run on WINDOWS -> the one-shot: import + UNPACK + setup-wsl
-scripts/windows/UNPACK.ps1    run on WINDOWS -> extract the kit, install themes + client templates + VS Code
-scripts/push-gitlab-packages.sh  run INSIDE -> all artifacts to GitLab generic packages (primary; CI fetches with a job token)
-scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory (fallback for CI)
-scripts/ssh-bridge.sh         run on WSL  -> socat bridge: Zed/SSH into a pod
-tests/                        container integration tests (podman, no cluster)
-docker/                       registry-side assemble (no npm, no node layer)
-NOTES.md                      open items + design notes
-ARCHITECTURE.md               the tech tour: how it works, in what order to read this
-MANUAL.md                     the step-by-step: build, transfer, connect, daily use
-```
-
-## Testing without the gap
-
-`tests/test-container.sh` assembles the image against a mock base in a local
-registry and runs it under the problematic pod shape — arbitrary UID 10001
-with no passwd entry, tmpfs PVC, a hostile preloader on `LD_PRELOAD`, an
-env-injection mount — asserting HOME relocation, closure integrity, the
-preload split, defaults seeding, sudoers and layer determinism. First run
-builds a throwaway Nix store (~10 min); reruns are fast. `nix develop` has
-everything, or the script pulls what it needs:
-
-```bash
-nix develop -c ./tests/test-container.sh
-```
-
-`tests/test-gpu-cuda.sh` is opt-in for GPU hosts (needs the nvidia CDI setup
-described in its header) — in practice that is gpubox only: the work WSL PC
-is CPU-only, and on RunAI the cluster injects GPUs into pods itself. What it
-cannot verify locally — CUDA under the real fractioning preloaders — only a
-fractioned pod can (see NOTES.md).
-
-## Before the first transfer
-
-Nothing personal is declared in the closure. Identity in a pod comes from the
-platform: the workspace name (`<username>-<whatever>-<n>-<n>` → first part =
-your PVC directory; `SESSION_USER` env overrides for usernames with a dash).
-Git identity is a real file on the durable home — one
-`git config --global user.email` per person, editable forever, owned by the
-user rather than by Nix (this toolchain is distributed to a team, and a baked
-email would file everyone's state into the owner's directory).
-
-No signing key, by decision: integrity is the content-addressed store hash for
-the binary cache (a damaged path fails on the path it damaged), and
-`nix/hosts/wsl.nix` sets `require-sigs = false` to match.
-
-## Zed remote, declared
-
-The remote-development server is built by the same `zed-editor` derivation and
-ships in the closure as packaged defaults under `~/.zed_server/`. Zed's client
-looks for a file named after its **own full version string** — build metadata
-included (`1.17.2+stable.349.c8e44cf…`) — and only checks that it runs, so the
-name must match the artifact, not a guess: `.#windows-kit` ships a **Windows
-Zed installer**, `nix/zed-client-version.nix` records that installer's exact
-client version string, and the shim is generated from it. Use the shipped
-installer and the match is by construction. Keep Zed's auto-update OFF on
-Windows (the closure's server moves only when the pins in
-`nix/packages/windows-kit.nix` + `nix/zed-client-version.nix` move together).
-The client reaches the host over plain SSH on WSL, or over
-`scripts/ssh-bridge.sh` (`sshd -i` inside `runai exec`) into a pod.
-
-## VS Code, also declared
-
-The WSL side also ships Microsoft VS Code Remote-WSL, pinned end to end:
-`nix/vscode-version.nix` holds the release (1.115.0, commit `41dd792b…`) with
-an eval-time `throw` when `pkgs.code-server.version` no longer matches, so
-the pod IDE and the Windows client cannot silently skew; the same file
-carries the installer and server-tarball hashes. The closure pre-seeds
-`~/.vscode-server/bin/<commit>` (activation) and installs the pinned
-extension set (`nix/vscode-extensions.nix`) with the server's own CLI on a
-stamped oneshot; `nixos-vscode-server` patches the bundled node for NixOS.
-The Windows kit ships the matching installer and a settings template with
-updates **off** — a newer client would demand a server the gap cannot
-download. Remote machine settings pin `ruff.path` and `nix.serverPath` to
-the same closure binaries Zed and nvim use, so all three editors share one
-language-server set.
-
-## Status
-
-The Nix side is built and tested; the layers below were produced and unpacked,
-`bootstrap`/`doctor` were run against the real tree, and the
-chunked transfer was verified by reassembling in reverse order and diffing.
-The opencode/LD_PRELOAD split and the sudoers+setuid root path were exercised
-end-to-end against a mock base in a local registry (see NOTES.md §8).
-
-Not yet exercised **in the gap**: `assemble.sh` against real internal bases, and
-the `wsl --import` of `nix build .#wsl-tarball`. See [`NOTES.md`](NOTES.md) — the
-internal registry names are still placeholders.
+- [`MANUAL.md`](MANUAL.md) — build → carry → Windows setup → WSL
+  update/rollback → pods → debugging.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the tour, with a reading order.
+- [`NOTES.md`](NOTES.md) — open items and the why behind the load-bearing
+  pieces.
+- [`AGENTS.md`](AGENTS.md) — the rules for changing this repo.

@@ -27,6 +27,7 @@
       url = "github:raine/workmux";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
   };
 
   outputs =
@@ -112,6 +113,7 @@
           go-containerregistry
           skopeo
           dive
+          p7zip
           jq
         ];
       };

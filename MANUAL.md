@@ -1,89 +1,68 @@
 # Manual
 
 The short path from connected machine to working pod. For the *why* behind
-every step — what a closure is, why there is no `FROM` in the image build —
-see [`ARCHITECTURE.md`](ARCHITECTURE.md); details live in
-[`README.md`](README.md) and [`NOTES.md`](NOTES.md). This file is the sequence.
+every step, see [`ARCHITECTURE.md`](ARCHITECTURE.md); open items and design
+verdicts live in [`NOTES.md`](NOTES.md). This file is the sequence.
 
 ## 0. One-time, on the connected machine
 
 ```bash
-nix flake check                      # evaluates both targets
-nix develop                          # shellcheck, nixfmt, crane, skopeo, jq
+nix flake check                       # evaluates both targets
+nix develop                           # shellcheck, nixfmt, crane, skopeo, jq, 7z
+nix build .#windows-kit               # Zed + VS Code + WSL2 MSI, themes, extensions
 ```
 
-If `nix build` fails with "store path ... does not exist", the local store lost
-files or DB rows — see NOTES.md §9 for the diagnosis classes and the repair
-(recipe: copy files from a chroot store, then one `nix copy` as root), or
-build into a throwaway store: `nix build --store /tmp/airgap-test-store .#runai-layer`.
+If `nix build` fails with "store path ... does not exist", the local store
+lost files or DB rows — NOTES.md's "local store repair" has the diagnosis
+classes and the recipe.
 
-Declare what only you know — nothing here is a closure value any more:
+Cluster facts are CI variables set in the airgap's GitLab (project/group
+variables beat `.gitlab-ci.yml`), so nothing is "filled in" from the
+connected side: `BASE_REGISTRY`, `BASE_TAG`, `IMAGE_VARIANTS`, and either
+`GITLAB_TOKEN`+`GITLAB_PROJECT` or `ARTIFACTORY_URL` +
+`ARTIFACTORY_GENERIC_REPO` + `ARTIFACTORY_TOKEN`.
+
+Declare what only you know — nothing here is a closure value:
 
 - Identity in a pod comes from the workspace-name convention
-  (`<username>-<whatever>-<n>-<n>` → first part = your PVC directory). No
-  email is baked in: this toolchain is distributed to a team, and a baked
-  identity would file everyone's state into one person's directory. If your
-  username contains a dash, set `SESSION_USER=<you>` in the workspace env
-  (RunAI pod template) — that is the override chain's first rule.
-- Git identity is per-user and cheaply editable on purpose: one
-  `git config --global user.email` on the durable home, a real file, done
-  forever. Nothing in the image owns it.
+  (`<username>-<whatever>-<n>-<n>` → first part = your PVC directory). If
+  your username contains a dash, set `SESSION_USER=<you>` in the RunAI
+  workspace env — that is the override chain's first rule.
+- Git identity is per-user: one `git config --global user.email` on the
+  durable home, a real file, done forever. Nothing in the image owns it.
 
-What you fill in **at the airgap side instead** (no transfer involved):
+## 1. The WSL machine (first install)
 
-- `.gitlab-ci.yml` cluster facts (`BASE_REGISTRY`, `BASE_TAG`,
-  `LAYER_BASE_URL`, lint-image digest) — git text, edited on the work WSL PC
-  and pushed to the internal GitLab before the first CI run.
-- the runai CLI (the ssh-bridge client) — `uv tool install runai` resolves
-  through internal Artifactory; alternatively drop the Linux executable the
-  RunAI UI offers into `~/.local/bin`.
+The laptop runs **NixOS inside WSL2**. It is a frozen appliance: its packages
+and defaults arrive in the image and in the carried delta; nothing is
+evaluated or fetched inside the gap.
 
-Also build the Windows-side kit while connected — it is what makes the
-Windows half of the gap turnkey:
+**Build the image on the connected machine (Linux):**
 
 ```bash
-nix build .#windows-kit       # one tar.gz: Zed (release-matched), VS Code, themes, templates, WSL2 MSI
+nix build .#wsl-tarball
+sudo ./result/bin/nixos-wsl-tarball-builder \
+    --chown home/jensen 1000:100 dist/nixos-wsl.tar.gz
 ```
 
-## 1. The WSL machine (NixOS inside the gap)
+The upstream builder needs real root (it chroots and bind-mounts), hence
+`sudo`; `--chown` pre-seeds `/home/jensen` for uid 1000, the first normal
+user. `transfer-bundle.sh` runs exactly this.
 
-The laptop runs **NixOS inside WSL2**: a complete Linux system (your shell,
-your Nix store, your configs) booted in a lightweight VM that Windows manages.
-Files are shared both ways (`/mnt/c` from Linux, `\\wsl$\twentyx` from
-Windows). It is a real NixOS machine — rebuilds, systemd, everything.
-
-**One-time build on the connected machine (Linux):** — per team member, since
-each imports their own tarball. Set the WSL username first (a per-machine,
-gitignored one-liner, not a closure value):
-
-```bash
-echo <your-name> > wsl-username                 # only if you are not the default
-nix build .#wsl-tarball                         # builds the tarball builder
-./result/bin/nixos-wsl-tarball-builder dist/nixos-wsl.tar.gz   # no sudo; ~1.1 GB
-```
-
-**One-time setup on Windows — from absolute zero, no WSL installed.**
-PowerShell, **run as Administrator**. DISM is the Windows component store;
-each line flips on an optional feature WSL depends on: the Linux-subsystem
-API, and the virtual-machine platform that WSL2 actually runs on:
+**Windows, from absolute zero, no WSL installed.** PowerShell, **as
+Administrator**:
 
 ```powershell
 dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
 dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
 ```
 
-**Reboot now** — neither feature is active until you do. (Windows 11 shortcut:
-`wsl --install --no-distribution` does the same two things and reboots for
-you, *without* installing Ubuntu — we bring our own distro.)
-
-After the reboot, still Administrator PowerShell, from the **transfer
-folder** (unpack every `.tar.gz.7z` transport container with 7-Zip first —
-see §3):
+**Reboot now** — neither feature is active until you do. After the reboot,
+from the **transfer folder** (unpack every `.7z` container with 7-Zip first):
 
 ```powershell
 wsl --set-default-version 2      # WSL2 (real kernel), not the legacy WSL1
-# No WSL at all? The kit carries WSL2 itself: extract the kit tar and install
-# its MSI (on a connected Windows, `wsl --update` does the same).
+# No WSL at all? The kit carries WSL2 itself:
 tar -xf .\windows-kit-<ver>.tar.gz
 msiexec /i .\windows-kit\wsl.2.9.12.0.x64.msi
 ```
@@ -95,158 +74,193 @@ powershell -ExecutionPolicy Bypass -File .\SETUP.ps1
 ```
 
 `SETUP.ps1` imports `nixos-wsl.tar.gz` as the `twentyx` distro (skipped when
-it is already registered), runs `UNPACK.ps1` (kit, Zed themes/settings,
-WezTerm, VS Code) and then `setup-wsl.sh` as root inside the distro (clone
-the repo bundle, import the offline rebuild cache); the final
-`nixos-rebuild` runs as the user via sudo, never as root. Every knob is a
-parameter:
+already registered), runs `UNPACK.ps1` (kit, Zed themes/settings/extensions,
+WezTerm, VS Code), and runs `setup-wsl.sh` as root inside the distro (overlay
+the text layer, stage the runtime CA, apply the closure delta when carried).
+Every knob is a parameter:
 
 ```powershell
 .\SETUP.ps1 -Distro twentyx -InstallDir C:\wsl\nixos -User jensen -Base <extracted folder>
 ```
 
-Put `C:\wsl\nixos` (`-InstallDir`) on a drive with tens of GB free — the VM
-disk lives there and grows. The distro name is what every `wsl -d` command
-refers to.
+Put `C:\wsl\nixos` on a drive with tens of GB free — the VM disk lives there
+and grows.
 
-**Manual equivalent** (the fallback) — `wsl --import` + the two scripts:
+**Manual equivalent** (the fallback):
 
 ```powershell
 wsl --import twentyx C:\wsl\nixos .\nixos-wsl.tar.gz --version 2
 powershell -ExecutionPolicy Bypass -File .\UNPACK.ps1
-wsl -d twentyx -u root -- bash /mnt/c/<extracted folder>/setup-wsl.sh jensen
+wsl -d twentyx -u root -- bash /mnt/c/<extracted folder>/setup-wsl.sh
 ```
 
-`UNPACK.ps1` extracts the kit and installs the themes/templates (never
-overwriting a personal file); `setup-wsl.sh` clones the repo bundle, imports
-the offline rebuild cache and runs the first `nixos-rebuild` as the user via
-sudo. Both are idempotent.
-
-Sudo asks for a password once? It is locked by design; the imported image
-carries passwordless sudo for wheel, so the rebuild never needs one. If you
-see a prompt you are on an older image — log in as the user and run the
-rebuild from your own shell once:
-`sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl`.
-
-WSL details that matter (first-boot gotchas, the no-WWW rehearsal): see
-[`wsl/README.md`](wsl/README.md).
+Both scripts are idempotent and never overwrite a personal file. Sudo asks
+for a password once? The imported image carries passwordless sudo for wheel;
+if you see a prompt you are on an older image.
 
 ### Packed vs extracted (the one table)
 
 | Artifact | Travels as | Becomes |
 |---|---|---|
-| `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (the page replaced `START-HERE.txt`; checksums via `sha256sum -c` after the unpack) |
-| `nixos-wsl.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `wsl --import` — never extracted by hand beyond the container |
-| `windows-kit-*.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted by `UNPACK.ps1`; Zed/VS Code, themes/templates installed |
-| `wsl-rebuild.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted to `/var/cache/nix-transfer` by `setup-wsl.sh` |
-| `twentyx-airgap.bundle` | stays packed | `git clone`d — a bundle is a git remote, not an archive |
-| `nix-layer*.tar.gz`, `repo-layer.tar` | stay packed | consumed by `crane append` / CI — never opened by hand |
-| `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly (`SETUP.ps1` chains the other two) |
+| `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (`sha256sum -c` after the unpack) |
+| `nixos-wsl.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `wsl --import` |
+| `windows-kit-*.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted by `UNPACK.ps1` |
+| `wsl-update.nar` (inside `.7z`) | unpack with 7-Zip | imported by `setup-wsl.sh` on an existing distro |
+| `twentyx-airgap.bundle` | stays as-is | a git bundle: `git clone` it for history |
+| `nix-layer*.tar.gz`, `repo-layer.tar` (inside `.7z`) | unpack with 7-Zip | consumed by `crane append` / CI |
+| `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly |
 
-**Every later change** — edit in the WSL-side repo, commit, rebuild:
-
-```bash
-# inside the distro, as the user (the repo lives on the durable home; the
-# flake reads the GIT TREE, so stage new files before rebuilding)
-rb                          # git add -A + sudo nixos-rebuild switch --flake <repo>#wsl
-# spelled out: sudo nixos-rebuild switch --flake ~/twentyx-airgap#wsl
-```
-
-A config *edit* (not a new package) rebuilds offline in seconds — `writeText`
-and friends need no network. Adding a package is what needs a transfer.
-
-Daily drivers on WSL: Zed from Windows over its WSL remote (server ships in
-the closure), VS Code Remote-WSL (kit client, pre-seeded server + extensions),
-`opencode`, and the `runai` CLI (`uv tool install runai`; the binary the
-RunAI UI offers works too — it matches the cluster's server version).
-
-## 2. Build the pod layers (connected machine)
+## 2. Cross the gap
 
 ```bash
-# The arg is an OUTPUT DIRECTORY, not a flavor: both flavors are always built.
-./scripts/build-layers.sh            # dist/nix-layer.tar.gz + nix-layer-nvim.tar.gz + repo-layer.tar
-./scripts/build-layers.sh /tmp/out   # same three files, elsewhere
+./scripts/transfer-bundle.sh
 ```
 
-## 3. Cross the gap
+Builds `build/` (plain, gitignored, stamp-guarded) and assembles `dist/`:
+the `.7z` containers plus the small files. The script refuses a dirty
+worktree (`ALLOW_DIRTY=1` overrides); `build/` and `.gcroots/` are local
+state.
 
-`./scripts/transfer-bundle.sh` assembles all of `dist/` in one shot. What it
-carries, and what each thing becomes:
-
-| Artifact | Size | Lands in |
+| dist file | Size | Lands in |
 |---|---|---|
-| `dist/*.tar.gz.7z` containers (nix layers, kit, WSL image, rebuild delta) | 1.5 GB max each | cross inside 7-Zip; unpack with 7-Zip to the flat `.tar.gz` first, then `SETUP.ps1` |
-| `dist/README.md`, `dist/MANIFEST.txt`, `dist/SHA256SUMS` | KB | the Windows-side page, versions, `sha256sum -c` |
-| `dist/nix-layer.tar.gz` (+`-nvim`) | ~1.12 / ~1.14 GB | Artifactory → CI `crane append` |
-| `dist/repo-layer.tar` | ~380 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
-| `dist/nixos-wsl.tar.gz` (first time / re-import) | ~1.5 GB | `wsl --import` |
-| `dist/windows-kit-*.tar.gz` | ~612 MB | Windows: Zed + VS Code + WSL2 MSI, themes, templates (`UNPACK.ps1`) |
-| `dist/wsl-rebuild.tar.gz` | ~299 MB | `/var/cache/nix-transfer` (offline rebuild cache) |
-| `dist/twentyx-airgap.bundle` | ~308 KB | `git clone` inside the distro (real history) |
-| `dist/SETUP.ps1`, `dist/UNPACK.ps1`, `dist/setup-wsl.sh` | KB | run directly (`SETUP.ps1` chains all three) — see §1 |
+| `nix-layer.tar.gz.7z` (+`-nvim`) | ~1.1 GB each | GitLab packages → CI `crane append` |
+| `repo-layer.tar` | ~400 KB | CI rebuilds it with `docker/mklayer.sh` per commit |
+| `nixos-wsl.tar.gz.7z` | ~1.5 GB | `wsl --import` |
+| `wsl-update.nar.7z` | closure delta | `setup-wsl.sh` on an existing distro |
+| `windows-kit-*.tar.gz.7z` | ~600 MB | Windows: `UNPACK.ps1` |
+| `twentyx-airgap.bundle` | ~300 KB | git history inside the distro |
+| docs + scripts + `MANIFEST.txt` + `SHA256SUMS` | KB | read directly |
 
-The bases themselves never cross the gap (they are in the airgap registry and
-`crane` cross-mounts them) — see [`docker/BASE-IMAGES.md`](docker/BASE-IMAGES.md)
-for base-image choices and the first-transfer checklist.
+## 3. Updating the WSL appliance
 
-## 4. Registry side (inside the gap)
+A text-only change (`libexec/`, `agent/`, `dotfiles/`) needs the new
+`repo-layer.tar` only. A closure change needs `wsl-update.nar` too, built by
+`transfer-bundle.sh` from the last shipped system (`.gcroots/wsl-system`).
 
 ```bash
-./scripts/push-artifactory.sh        # layers → generic-local/airgap/<ver>/
+# Windows, elevated, from the extracted transfer folder
+wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh
 ```
 
-Fill in `.gitlab-ci.yml`: `BASE_REGISTRY` (internal path), `BASE_TAG`
-(pin per transfer — digest, not `latest`). CI then assembles the image
-registry-side with `crane append` — no `FROM`, no Docker build, the bases are
-never pulled or unpacked.
+`setup-wsl.sh` overlays `/opt/twentyx`, drops `ca-bundle.crt`/`pip.conf`
+into `/var/lib/airgap-env` and restarts `airgap-ca`, then (when a delta is
+carried) `nix-store --import`s it, sets the system profile, runs
+`switch-to-configuration switch`, and re-seeds `$HOME`.
 
-## 5. Pod template (RunAI UI)
+**Rollback:**
 
-- **Env**: `LLM_BASE_URL` (internal vLLM endpoint), `LLM_API_KEY`.
-- **Mount**: a ConfigMap/Secret at `/opt/airgap-env` containing
-  `ca-bundle.crt` and `pip.conf` (known names are wired to
-  `SSL_CERT_FILE`, `PIP_CONFIG_FILE`, … automatically; a PVC dir at
-  `/data/.airgap-env` works as fallback).
+```bash
+wsl -d twentyx -u root -- bash -c \
+  'nix-env -p /nix/var/nix/profiles/system --rollback &&
+   /nix/var/nix/profiles/system/bin/switch-to-configuration switch'
+```
+
+A config edit is not an update: edit the real file in `$HOME`, no transfer.
+The seeded files report when a shipped default has moved on:
+`newer default available: diff <shipped> <yours>`.
+
+### Internal CA and pip.conf
+
+Drop them next to `setup-wsl.sh` in the transfer folder (or into
+`/var/lib/airgap-env` by hand) and restart the service:
+
+```bash
+wsl -d twentyx -u root -- systemctl restart airgap-ca
+```
+
+`airgap-ca` concatenates the system bundle with `ca-bundle.crt`;
+`/etc/ssl/certs/*` and `NODE_EXTRA_CA_CERTS` point at the result. No
+transfer and no rebuild to add or rotate the CA.
+
+## 4. Pods
+
+Publish the layers, then let CI append them:
+
+```bash
+./scripts/push-gitlab-packages.sh   # GitLab generic packages; push-artifactory.sh is the fallback
+```
+
+CI (`assemble`) fetches the layers, rebuilds `repo-layer.tar` from the
+checkout, and runs `docker/assemble.sh` — `crane append` against the
+internal bases, which are never pulled or unpacked. PATH is prepended and the
+base's ENTRYPOINT is stashed and handed back.
+
+**Pod template (RunAI UI):**
+
+- **Env**: `LLM_BASE_URL`, `LLM_API_KEY`.
+- **Mount**: a ConfigMap/Secret at `/opt/airgap-env` with `ca-bundle.crt`
+  and `pip.conf` (known names are wired to `SSL_CERT_FILE`,
+  `PIP_CONFIG_FILE`, …; a PVC dir at `/data/.airgap-env` is the fallback).
 - **PVC**: `/data` writable by the runtime user.
 - **Base**: any internal flavor; `vscode-*` bases hand their ENTRYPOINT back
   automatically.
 
-### Where cluster-specific config goes
-
-The mount above is the pod's half of the contract; the WSL side has the
-parallel file story (gitignored `ca-bundle.crt` next to the flake, your own
-durable `~/.config` files). The full map — every setting, its lifetime, who
-consumes it, which changes need a transfer, and how to fold an inner
-(`tenx`-style) repo build into this toolchain — is
-[`docs/INNER-CONFIG.md`](docs/INNER-CONFIG.md).
-
-## 6. First session in a pod
+**First session:**
 
 ```bash
-runai exec -it -- /opt/twentyx/libexec/doctor   # paste this if anything is off
+runai exec -it -- /opt/twentyx/libexec/doctor       # paste this if anything is off
 runai exec -it -- /opt/twentyx/libexec/run-opencode # the agent; preload handled
-sudo <cmd>                                            # passwordless (gid 0)
-sudo podman images                                    # rootful podman, vfs prewritten
+sudo <cmd>                                          # passwordless (gid 0)
+sudo podman images                                  # rootful podman, vfs prewritten
 ```
 
-Editors: `code-server` is in the closure and wins over the base's copy;
-a `vscode-*` workspace starts it via the base ENTRYPOINT. Zed remote connects
-through `scripts/ssh-bridge.sh` (WSL side) — see README "Zed remote, declared".
-The `-nvim` flavor adds pure nvim + treesitter (~1.14 GB layer; its LSPs come
-from the shared Nix-declared set that Zed also reads); plain ships `nano` as
-`EDITOR`.
+Editors: `code-server` is in the closure; Zed remote connects through
+`scripts/ssh-bridge.sh` on the WSL side (`libexec/sshd-inetd` in the pod).
+The `-nvim` flavor adds LazyVim with Nix-built plugins; plain ships `nano`
+as `EDITOR`.
 
-## 7. Updating later
+## 5. Editors, offline (the smoke checklist)
 
-| Change | Where | Cost |
-|---|---|---|
-| libexec/agent text, home-defaults override | git commit | none — CI re-tars `repo-layer.tar` |
-| anything in the closure | rebuild → export → transfer → push | a physical transfer |
+Run everything from a `jensen` shell.
 
-## 8. When something is wrong
+**System:** `systemctl --failed` empty; `cat /var/log/bootlog.txt` for the
+automatic boot evidence.
 
-`doctor` first; it prints closure integrity, terminal env, sudo,
-podman, injected env and the model endpoint, and never changes anything.
-Then: NOTES.md §8 for what is and is not simulated locally, and the
-`tests/test-container.sh` suite (19 checks) which reproduces the pod shape
-without a cluster.
+**nvim:**
+
+```bash
+nvim --version | head -2                  # 0.12.x from the closure
+:checkhealth lazy                         # all green
+:lua =vim.lsp.get_clients()               # after opening a file
+```
+
+Opening `.py`/`.nix`/`.yaml`/`.toml`/`.sh`/`.json` must attach
+basedpyright+ruff / nixd / yamlls / taplo / bashls / jsonls, all from
+`/opt/twentyx/profile/bin`. No install popups, no downloads.
+
+**Zed (from Windows):** connect a WSL project, open a `.nix`, a Python file,
+a TOML, a YAML, a JSON, a Dockerfile. `Zed.log` must show no download lines;
+servers start from `/opt/twentyx/profile/bin/`. The remote server is seeded
+under `~/.zed_server/` named after the client's full version string
+(`nix/zed-client-version.nix`); the kit's extensions live in
+`%LOCALAPPDATA%\Zed\extensions\installed`.
+
+**VS Code Remote-WSL:** `ls ~/.vscode-server/bin/` shows exactly the pinned
+commit; `~/.vscode-server/extensions/` holds the six pinned extensions;
+`~/.vscode-server/data/Machine/settings.json` pins `ruff.path` and
+`nix.serverPath` to `/opt/twentyx/profile/bin`. First connect must download
+nothing. If Remote-WSL fails to start on the real machine, NOTES.md's
+"VS Code, offline" has the fallback.
+
+**opencode:**
+
+```bash
+opencode --version          # must print, not die in ld.so (kernel <= 6.6 fix)
+time opencode               # prompt start; a ~1.5 min stall is the npm seed missing
+```
+
+The provider/model edit is a real file: `~/.config/opencode/opencode.jsonc`,
+edit in place and delete the `AIRGAP-SETUP` block.
+
+**No-WWW rehearsal** (on the connected laptop): disable the WSL network
+adapter (`ncpa.cpl`) and boot the distro; or inside the distro
+`sudo ip route del default` and point `/etc/resolv.conf` at a dead
+internal-style resolver. Every editor above must behave identically.
+
+## 6. When something is wrong
+
+`doctor` first; it prints closure integrity, defaults, terminal env, sudo,
+podman, injected env and the model endpoint, and changes nothing. Then
+`tests/test-container.sh` on the connected machine reproduces the problematic
+pod (arbitrary UID, hostile preload, env-injection mount) without a cluster;
+NOTES.md's "tested without the gap" says what it does and does not simulate.

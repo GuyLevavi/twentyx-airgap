@@ -17,9 +17,6 @@
 #   2. local, GITLAB_TOKEN -- GITLAB_PROJECT (id or group/project) names the
 #      project, GITLAB_URL (default https://gitlab.com) or GITLAB_API_URL the
 #      instance (PRIVATE-TOKEN header)
-#   3. local, no token -- `glab packages upload` when this glab has it,
-#      otherwise a token lifted from `glab auth status --show-token` used
-#      against the API path of (2)
 #
 # Download side (for a later consumer, e.g. another project's CI):
 #
@@ -96,43 +93,4 @@ if [ -n "$API" ]; then
     exit 0
 fi
 
-# -- 3. glab ----------------------------------------------------------------
-# Older glab builds have no `packages` group, and the flag spelling moved
-# (--package-name vs --name). Try both, then reuse the stored token on the
-# API path.
-if command -v glab >/dev/null 2>&1 && glab packages upload --help >/dev/null 2>&1; then
-    glab_upload() {
-        glab packages upload "$1" --package-name "$PACKAGE" --version "$VERSION" 2>/dev/null ||
-            glab packages upload "$1" --name "$PACKAGE" --version "$VERSION"
-    }
-    say "endpoint: glab packages upload"
-    glab_ok=1
-    for f in "${FILES[@]}"; do
-        say "uploading $(basename "$f") ($(du -h "$f" | cut -f1))"
-        glab_upload "$f" || { glab_ok=""; break; }
-        say "uploaded $(basename "$f")"
-    done
-    if [ -n "$glab_ok" ]; then
-        say "done"
-        exit 0
-    fi
-    say "glab packages upload failed -- trying the stored token"
-fi
-
-if command -v glab >/dev/null 2>&1; then
-    TOKEN="$(glab auth status --show-token 2>/dev/null | sed -n 's/.*Token: //p' | head -1 || true)"
-    if [ -n "$TOKEN" ]; then
-        GITLAB_URL="${GITLAB_URL:-https://gitlab.com}"
-        API="${GITLAB_API_URL:-$GITLAB_URL/api/v4}"
-        PROJECT="${CI_PROJECT_ID:-${GITLAB_PROJECT:-}}"
-        [ -n "$PROJECT" ] || die "glab token found, but set GITLAB_PROJECT=<id|group/project> so the API path is known"
-        PROJECT="${PROJECT//\//%2F}"
-        AUTH=(-H "PRIVATE-TOKEN: $TOKEN")
-        say "endpoint: $API (glab stored token)"
-        upload_api
-        say "done"
-        exit 0
-    fi
-fi
-
-die "no GitLab endpoint/token. Set CI_API_V4_URL+CI_PROJECT_ID+CI_JOB_TOKEN (CI), or GITLAB_TOKEN+GITLAB_PROJECT [GITLAB_URL|GITLAB_API_URL] (local), or log in with glab"
+die "no GitLab endpoint/token. Set CI_API_V4_URL+CI_PROJECT_ID+CI_JOB_TOKEN (CI), or GITLAB_TOKEN+GITLAB_PROJECT [GITLAB_URL|GITLAB_API_URL] (local)"

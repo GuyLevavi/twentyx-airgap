@@ -24,10 +24,9 @@
 # Zed remote: "Connect to Remote Server" -> ssh://runai-workspace (or the
 # localhost:port form). The remote server ships in the closure as a packaged
 # default under ~/.zed_server -- nothing downloads. The only knob is
-# twentyx.zed.remoteClientVersion in nix/modules/home.nix, which must carry the
-# Windows client's exact `zed --version` string. The OpenCode integration
-# needs none of that: it runs `opencode acp` locally (see the packaged Zed
-# settings default).
+# nix/zed-client-version.nix, which must carry the Windows client's exact
+# `zed --version` string. The OpenCode integration needs none of that: it
+# runs `opencode acp` locally (see the seeded Zed settings).
 set -euo pipefail
 
 WORKLOAD="${1:?usage: ssh-bridge.sh <runai-workload> [port]}"

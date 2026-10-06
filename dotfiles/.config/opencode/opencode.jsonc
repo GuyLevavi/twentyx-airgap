@@ -14,8 +14,8 @@
   //     }
   //   }
   //
-  // Delete this AIRGAP-SETUP block once configured; the interactive shell and
-  // the boot log warn while it is present.
+  // Delete this AIRGAP-SETUP block once configured; the interactive shell
+  // warns while it is present.
   "lsp": {
     "pyright": { "disabled": true },
     "basedpyright": {

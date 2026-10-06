@@ -84,10 +84,10 @@ let
     ln -s ${zedExtensions.${id}} "$out/zed-extensions/${id}.tar.gz"
   '') (lib.attrNames zedExtensions);
 
-  # Theme files from the registry extensions the team uses (the /etc/nixos
-  # zed.nix list). Zed loads user themes from %APPDATA%\Zed\themes\ — no
-  # extension install, no registry access. Pinned to immutable commit SHAs;
-  # re-pin by updating the sha in the URL and the hash together.
+  # Theme files from the extensions the team uses. Zed loads user themes from
+  # %APPDATA%\Zed\themes\ -- no extension install, no registry access. Pinned
+  # to immutable commit SHAs; re-pin by updating the sha in the URL and the
+  # hash together.
   themes = {
     "tokyo-night.json" = pkgs.fetchurl {
       url = "https://raw.githubusercontent.com/ssaunderss/zed-tokyo-night/6d731d0724a6fa487f9031cbb4f8db0b80769568/themes/tokyo-night.json";
@@ -96,42 +96,6 @@ let
     "catppuccin-mauve.json" = pkgs.fetchurl {
       url = "https://raw.githubusercontent.com/catppuccin/zed/4314cb05c74d141b7962290a41d6087e8c0ad02f/themes/catppuccin-mauve.json";
       hash = "sha256-uPE9yx6RT1WWZszww5+iLZ0IrruEYddfiOBaA7uewbE=";
-    };
-    "catppuccin-no-italics-mauve.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/catppuccin/zed/4314cb05c74d141b7962290a41d6087e8c0ad02f/themes/catppuccin-no-italics-mauve.json";
-      hash = "sha256-Ve+18ICLrfdj+v0jRbZ6lxe1GgrsHZ/du3K2cmpH1ac=";
-    };
-    "Kanagawa.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/ethangilmore/zed-kanagawa/e844633f3e64d208459d65f246190491ad0a61df/themes/Kanagawa.json";
-      hash = "sha256-+AXR9bB09zgZkadbQYwBxUWgWQpCzcm5jy0DXMouGTM=";
-    };
-    "Kanagawa-no-italics.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/ethangilmore/zed-kanagawa/e844633f3e64d208459d65f246190491ad0a61df/themes/Kanagawa-no-italics.json";
-      hash = "sha256-oC56j0FKcD4uHf3mIV21MIkt4Qtg/+uMngzPVDcg438=";
-    };
-    "rose-pine.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/rose-pine/zed/1446d31a2eec6bee627883d523ec63ef5c78ec9b/themes/rose-pine.json";
-      hash = "sha256-pO53YNt5NIRKFBa0PyhQf2lteh7PYWt1G+EcieuMH7w=";
-    };
-    "rose-pine-dawn.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/rose-pine/zed/1446d31a2eec6bee627883d523ec63ef5c78ec9b/themes/rose-pine-dawn.json";
-      hash = "sha256-+su2Ve+IX+eCh0SNsuZ3qRYeEoQFBkeuOzbXFVOlGio=";
-    };
-    "rose-pine-moon.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/rose-pine/zed/1446d31a2eec6bee627883d523ec63ef5c78ec9b/themes/rose-pine-moon.json";
-      hash = "sha256-97UMyOW3Dcjcru/Zvl7QfpKT+e0gT1gMllIMlYKRIEA=";
-    };
-    "nord.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/mikasius/zed-nord-theme/d0b459c49797aec598622bed992537e4a83688da/themes/nord.json";
-      hash = "sha256-CONvCRq35bQe0IQQyMWo9zKleYjqOAJcuovSqQbpuhE=";
-    };
-    "dracula.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/dracula/zed/c419d710e77f22ec4e4e8481324b93ef0916d368/themes/dracula.json";
-      hash = "sha256-auc7bcSnyxwiZMNv5yOMxj6ejl0qts7NZh8ohAC0n7A=";
-    };
-    "eldritch.json" = pkgs.fetchurl {
-      url = "https://raw.githubusercontent.com/edheltzel/eldritch-zed/e9a9633f15f191fba78dd20c220b6d720c887777/themes/eldritch.json";
-      hash = "sha256-o0c9Nxa/LX1ncy8CkpI9Z88if33mU0Iwp6SIGiTsFlo=";
     };
   };
 
@@ -157,59 +121,6 @@ let
     install -m 0644 ${./windows/vscode-settings.json} $out/vscode/vscode-settings.json
     ${vsixInstalls}
     ${themeInstalls}
-    cat > $out/README.txt <<'EOF'
-    Windows-side artifacts for the airgap (build once on a connected machine,
-    carry with the transfer). Nothing here runs on Linux.
-
-      Zed-x86_64-*-setup.exe   Zed for Windows, pinned to the same upstream
-                               release as the remote server in the pod/WSL
-                               closure. Install it, then copy
-                               zed-client-settings.json to
-                               %APPDATA%\Zed\settings.json (merge into yours
-                               if one exists) -- it pins auto_update off,
-                               telemetry off, and the airgap extensions.
-                               zed-client-settings.personal-example.json is a
-                               fuller client config (vim mode, which-key,
-                               Catppuccin, right-docked panels, agent
-                               auto-approve) -- copy it INSTEAD if you want
-                               that exact setup.
-
-      themes\*.json            Zed themes (Tokyo Night, Catppuccin, Kanagawa,
-                               Rose Pine, Nord, Dracula, Eldritch). Copy the
-                               whole themes\ folder into %APPDATA%\Zed\themes\
-                               and pick one in Zed; no extension install and
-                               no registry access needed. Gruvbox ships with
-                               Zed itself.
-
-      wezterm.lua              WezTerm config (Tokyo Night, kitty keyboard
-                               protocol on -- required for shift+enter in
-                               TUIs). Copy to %USERPROFILE%\.wezterm.lua.
-
-      vscode\VSCodeSetup-x64-*.exe
-                               VS Code for Windows (Microsoft, Remote-WSL),
-                               pinned to the exact release whose Linux server
-                               the distro pre-seeds for you. Install it and
-                               copy vscode\vscode-settings.json to
-                               %APPDATA%\Code\User\settings.json -- it pins
-                               updates OFF, which is required: a newer client
-                               demands a server the gap cannot download.
-                               UNPACK.ps1 installs both for you.
-
-      vscode\vsix\*.vsix       The pinned extensions (ruff, basedpyright,
-                               nix-ide, YAML, two themes). setup-wsl.sh
-                               installs them into the distro's VS Code server
-                               offline; the Marketplace is unreachable here.
-
-      wsl.*.x64.msi            WSL2 itself, for Windows boxes with no Store
-                               and no internet. Setup order: the two DISM
-                               feature lines (Microsoft-Windows-Subsystem-
-                               Linux, VirtualMachinePlatform), reboot, then
-                               msiexec /i wsl.*.x64.msi, then
-                               wsl --set-default-version 2. See MANUAL.md.
-
-      (the NixOS-WSL root tarball is a separate flake output: nix build
-       .#wsl-tarball -- see MANUAL.md section 1)
-    EOF
   '';
   # The kit as ONE archive: no bare .exe/.msi ever crosses the gap in a
   # transfer or an email attachment — Windows 10/11 ships tar.exe (bsdtar),
