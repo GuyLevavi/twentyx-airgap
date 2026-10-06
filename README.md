@@ -162,12 +162,10 @@ both — that precedence is enforced by bootstrap, not by the filesystem.
 | anything in the closure | rebuild → transfer → CI | a physical transfer |
 | libexec / agent text | push → CI re-tars `repo-layer.tar` per commit | one commit, no transfer |
 
-Note what moved: the shell, prompt, tmux and nvim configs are Nix-generated now,
-so editing *them* is a closure change. On the WSL side that is still cheap —
-`writeText`/`buildEnv`/`symlinkJoin` need only `stdenvNoCC` (78 MB, shipped
-deliberately) and build from string literals with no fetches, so a config edit
-rebuilds **offline, in seconds**. Adding a *package* is what needs a transfer.
-The closure enforces the rule that discipline used to.
+Inside the gap, config edits are real files in `$HOME`: seed-home copies the
+shipped default in once and never overwrites it, so editing is local, durable
+and needs no rebuild. Changing what Nix builds — the package set, the closure —
+needs a new closure transfer. Nothing evaluates Nix inside the gap.
 
 ## Images: append, don't rebuild
 

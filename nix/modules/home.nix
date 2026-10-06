@@ -184,6 +184,9 @@ in
       # The models.dev catalog is baked into the binary at build time; fetching
       # it at runtime is a hang in the airgap, not an error.
       OPENCODE_DISABLE_MODELS_FETCH = "true";
+      OPENCODE_DISABLE_LSP_DOWNLOAD = "true";
+      OPENCODE_DISABLE_DEFAULT_PLUGINS = "true";
+      OPENCODE_DISABLE_SHARE = "true";
     }
     // lib.optionalAttrs (cfg.target == "runai") {
       # Nix binaries consult LOCALE_ARCHIVE; a foreign container has none, and
@@ -246,9 +249,6 @@ in
         ".config/opencode/opencode.jsonc".source =
           config.lib.file.mkOutOfStoreSymlink
             "${config.home.homeDirectory}/twentyx-airgap/opencode/opencode.jsonc";
-        ".config/opencode/tui.json".source =
-          config.lib.file.mkOutOfStoreSymlink
-            "${config.home.homeDirectory}/twentyx-airgap/opencode/tui.json";
       })
 
       # Editor integration. code-server (the pod's IDE) scans this dir, so a

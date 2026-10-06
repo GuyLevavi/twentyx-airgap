@@ -163,12 +163,12 @@ Sudo asks for a password once? It is locked by design; the imported image
 carries passwordless sudo for wheel. If you see a prompt, you are on an older
 image — log in as the user and run the rebuild from your own shell once.
 
-After the first activation, `rb` (or the spelled-out `nixos-rebuild switch`)
-works offline for any change that does not add a package — `writeText`,
-`buildEnv` and `symlinkJoin` need only `stdenvNoCC` (shipped deliberately for
-this reason) and build from string literals with no fetches. (`/etc/nixos`
-holds only the just-in-case `configuration.nix`; the repo arrives as the
-shipped `twentyx-airgap.bundle`.)
+Inside the gap, config edits are real files in `$HOME`: seed-home copies the
+shipped default in once and never overwrites it, so editing is local and
+durable. Changing what Nix builds — the package set, the closure — needs a new
+closure transfer (`wsl-update.nar`); nothing evaluates Nix inside the gap.
+(`/etc/nixos` holds only the just-in-case `configuration.nix`; the repo arrives
+as the shipped `twentyx-airgap.bundle`.)
 
 The rebuild delta is a content-addressed binary cache, so re-importing it is
 a no-op rather than a conflict.

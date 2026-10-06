@@ -21,28 +21,9 @@ say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
 say "building"
 
-# Default store first: after any local build the layer is already there, so a
-# transfer run starts in seconds. The persistent chroot store is the fallback
-# for a store that lost paths (NOTES.md §9) -- a build there pays for the
-# closure, which is exactly the ten-minute silence this avoids.
-CHROOT=/tmp/airgap-test-store
-build_layer() {
-    local attr="$1" out
-    if out="$(nix build --no-link --print-out-paths "$attr" 2>/dev/null)"; then
-        printf '%s\n' "$out"
-    elif [ -d "$CHROOT/nix/store" ]; then
-        out="$(nix build --store "$CHROOT" --no-link --print-out-paths "$attr")"
-        printf '%s\n' "$CHROOT$out"
-    else
-        nix build --no-link --print-out-paths "$attr"
-    fi
-}
-
-NIX_PLAIN="$(build_layer .#runai-layer)"
-NIX_NVIM="$(build_layer .#runai-layer-nvim)"
-
-install -m 0644 "$NIX_PLAIN" "$OUT/nix-layer.tar.gz"
-install -m 0644 "$NIX_NVIM"  "$OUT/nix-layer-nvim.tar.gz"
+readarray -t LAYERS < <(nix build --no-link --print-out-paths .#runai-layer .#runai-layer-nvim)
+install -m 0644 "${LAYERS[0]}" "$OUT/nix-layer.tar.gz"
+install -m 0644 "${LAYERS[1]}" "$OUT/nix-layer-nvim.tar.gz"
 
 ./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
 

@@ -32,11 +32,8 @@ function Say($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 Say "base: $Base"
 $kit = Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz" -File | Select-Object -First 1
 if (-not $kit) {
-    $packed = Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz.7z" -File | Select-Object -First 1
-    if ($packed) {
-        throw "$($packed.Name) is still packed -- extract the .7z transport containers with 7-Zip first"
-    }
-    throw "windows-kit-*.tar.gz not found in $Base"
+    $hint = if (Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz.7z" -File) { " (extract the .7z transport containers with 7-Zip first)" } else { "" }
+    throw "windows-kit-*.tar.gz not found in $Base$hint"
 }
 
 $kitRoot = Join-Path $Base "windows-kit"

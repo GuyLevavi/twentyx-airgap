@@ -26,20 +26,9 @@
       "command": ["ruff", "server"],
       "extensions": [".py", ".pyi"]
     },
-    "nixd": { "command": ["nixd"] },
-    "bash": { "command": ["bash-language-server", "start"] },
-    "yaml-ls": { "command": ["yaml-language-server", "--stdio"] },
     "taplo": {
       "command": ["taplo", "lsp", "stdio"],
       "extensions": [".toml"]
-    },
-    "package-version-server": {
-      "command": ["package-version-server"],
-      "extensions": [".json"]
-    },
-    "markdown-oxide": {
-      "command": ["markdown-oxide"],
-      "extensions": [".md", ".markdown"]
     }
   }
 }

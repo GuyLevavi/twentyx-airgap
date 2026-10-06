@@ -30,14 +30,6 @@ $ErrorActionPreference = "Stop"
 
 function Say($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 
-# The big artifacts cross inside .7z containers; Windows cannot open those.
-# A missing plain file whose .7z twin sits right there means the unpack step
-# was skipped -- say exactly that instead of "missing <file>".
-function Assert-Unpacked($path) {
-    if ((Test-Path $path) -or -not (Test-Path "$path.7z")) { return }
-    throw "$([IO.Path]::GetFileName($path)).7z is still packed -- extract the .7z transport containers with 7-Zip first"
-}
-
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     throw "administrator rights required -- re-run from an elevated PowerShell:`n  powershell -ExecutionPolicy Bypass -File `"$PSCommandPath`""
@@ -51,8 +43,10 @@ $registered = @(wsl -l -q) -replace "`0", "" | ForEach-Object { $_.Trim() } | Wh
 if ($registered -contains $Distro) {
     Say "distro '$Distro' already registered -- skipping import"
 } else {
-    Assert-Unpacked $rootfs
-    if (-not (Test-Path $rootfs)) { throw "missing $rootfs" }
+    if (-not (Test-Path $rootfs)) {
+        $hint = if (Test-Path "$rootfs.7z") { " (extract the .7z transport containers with 7-Zip first)" } else { "" }
+        throw "missing $rootfs$hint"
+    }
     Say "importing $rootfs -> $InstallDir (WSL2)"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     wsl --import $Distro $InstallDir $rootfs --version 2
@@ -85,7 +79,10 @@ $setupWsl = "$setupWsl".Trim()
 if (-not $setupWsl) { throw "wslpath returned nothing for $setupWin" }
 
 $cache = Join-Path $Base "wsl-rebuild.tar.gz"
-Assert-Unpacked $cache
+if (-not (Test-Path $cache)) {
+    $hint = if (Test-Path "$cache.7z") { " (extract the .7z transport containers with 7-Zip first)" } else { "" }
+    throw "missing $cache$hint"
+}
 
 Say "running setup-wsl.sh as root in '$Distro' (user: $User)"
 wsl -d $Distro -u root -- env "TRANSFER=$baseWsl" bash "$setupWsl" "$User"
