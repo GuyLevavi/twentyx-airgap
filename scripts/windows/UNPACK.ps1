@@ -8,7 +8,9 @@
 #      directory, so extracting in -Base lands it there. setup-wsl.sh looks
 #      for the .vsix files under <transfer>\windows-kit\vscode\vsix, so this
 #      depth is load-bearing.
-#   2. copies the Zed themes into %APPDATA%\Zed\themes
+#   2. copies the Zed themes into %APPDATA%\Zed\themes and extracts the
+#      vendored Zed extensions into %LOCALAPPDATA%\Zed\extensions\installed
+#      (Zed rebuilds index.json from there at startup)
 #   3. installs zed-client-settings.json / wezterm.lua when absent; when a
 #      real file exists it writes a *.example next to it and says so
 #   4. VS Code: installs vscode\VSCodeSetup-x64-*.exe silently when no local
@@ -48,6 +50,27 @@ New-Item -ItemType Directory -Force -Path $themesDst | Out-Null
 Say "Zed themes -> $themesDst"
 Copy-Item -Force (Join-Path $kitRoot "themes\*.json") $themesDst
 
+# -- Zed extensions: installed\ is the source of truth ---------------------
+# The remote server has no built-in adapters for nixd/tombi; the client
+# uploads installed extensions to it on connect. Zed rebuilds index.json from
+# installed\ at startup, so a stale index would only get in the way.
+$extSrc = Join-Path $kitRoot "zed-extensions"
+if (Test-Path $extSrc) {
+    $extDst = Join-Path $zedDir "extensions\installed"
+    New-Item -ItemType Directory -Force -Path $extDst | Out-Null
+    Get-ChildItem -Path $extSrc -Filter "*.tar.gz" -File | ForEach-Object {
+        $id = $_.Name -replace '\.tar\.gz$',''
+        $dst = Join-Path $extDst $id
+        New-Item -ItemType Directory -Force -Path $dst | Out-Null
+        tar -xzf $_.FullName -C $dst
+        if ($LASTEXITCODE -ne 0) { throw "tar failed for $($_.Name) ($LASTEXITCODE)" }
+    }
+    Remove-Item -Force (Join-Path $zedDir "extensions\index.json") -ErrorAction SilentlyContinue
+    Say "Zed extensions -> $extDst"
+} else {
+    Say "zed-extensions not found in the kit -- extension install skipped"
+}
+
 # -- Zed client settings: a real file wins ---------------------------------
 $settings = Join-Path $zedDir "settings.json"
 $settingsSrc = Join-Path $kitRoot "zed-client-settings.json"
@@ -55,7 +78,7 @@ if ((Test-Path $settings) -and -not $Force) {
     $example = Join-Path $zedDir "zed-client-settings.example.json"
     Copy-Item -Force $settingsSrc $example
     Say "settings.json already exists -- wrote $example"
-    Say "  merge from it: auto_update, telemetry, auto_install_extensions, agent.terminal_init_command"
+    Say "  merge from it: auto_update, telemetry, agent.terminal_init_command"
 } else {
     Copy-Item -Force $settingsSrc $settings
     Say "Zed settings installed -> $settings"

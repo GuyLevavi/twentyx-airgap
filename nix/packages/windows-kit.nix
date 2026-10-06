@@ -47,6 +47,43 @@ let
     hash = "sha256-WAuLmQBi9kfyxqAvsw/GrBA1DuXhRKVrqwPUGdWfN9Y=";
   };
 
+  # Zed extensions, vendored for the client. The remote server has built-in
+  # adapters for basedpyright, ruff, json, yaml, bash and
+  # package-version-server; nixd and tombi are NOT built in, so those
+  # extensions must exist client-side and are uploaded to the remote on
+  # connect. Re-pin: fetch https://api.zed.dev/extensions/<id>, take the last
+  # version, prefetch the download URL, paste the hash.
+  zedExtensions = {
+    nix = pkgs.fetchurl {
+      name = "nix.tar.gz";
+      url = "https://api.zed.dev/extensions/nix/download?version=0.1.5";
+      hash = "sha256-tdpTAcwrY98Bkty++AaMRa+hmEoipNaoqWnBfjrdRTg=";
+    };
+    toml = pkgs.fetchurl {
+      name = "toml.tar.gz";
+      url = "https://api.zed.dev/extensions/toml/download?version=1.0.3";
+      hash = "sha256-zqpESXTk1tqLnHe6j+o+qO8JU+r2elaItbHZJF015o4=";
+    };
+    tombi = pkgs.fetchurl {
+      name = "tombi.tar.gz";
+      url = "https://api.zed.dev/extensions/tombi/download?version=0.2.4";
+      hash = "sha256-Mg6jSGiPwophNnhy2pCcFdkFjIxJe7v9AYc62BWTIZg=";
+    };
+    dockerfile = pkgs.fetchurl {
+      name = "dockerfile.tar.gz";
+      url = "https://api.zed.dev/extensions/dockerfile/download?version=0.3.0";
+      hash = "sha256-hkNVh2B0qazsvWS8jtTjQnP5ToinpYB4ycOqlKwqo2Q=";
+    };
+    env = pkgs.fetchurl {
+      name = "env.tar.gz";
+      url = "https://api.zed.dev/extensions/env/download?version=0.0.2";
+      hash = "sha256-rntsB2OD9vMgaQv7g6FOanQNfBEkhYu12dtBoaHrtqY=";
+    };
+  };
+  zedExtensionInstalls = lib.concatMapStrings (id: ''
+    ln -s ${zedExtensions.${id}} "$out/zed-extensions/${id}.tar.gz"
+  '') (lib.attrNames zedExtensions);
+
   # Theme files from the registry extensions the team uses (the /etc/nixos
   # zed.nix list). Zed loads user themes from %APPDATA%\Zed\themes\ — no
   # extension install, no registry access. Pinned to immutable commit SHAs;
@@ -105,13 +142,13 @@ let
   );
 
   kit = pkgs.runCommand "windows-kit-${zedVersion}" { } ''
-    mkdir -p $out/themes $out/vscode/vsix
+    mkdir -p $out/themes $out/vscode/vsix $out/zed-extensions
     ln -s ${zedInstaller} $out/Zed-x86_64-${zedVersion}-setup.exe
     ln -s ${wslMsi} $out/${wslMsi.name}
     # Version-controlled client templates (repo files, not store paths).
     install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
-    install -m 0644 ${./windows/zed-client-settings.personal-example.json} $out/zed-client-settings.personal-example.json
     install -m 0644 ${./windows/wezterm.lua} $out/wezterm.lua
+    ${zedExtensionInstalls}
     # VS Code: installer + user-settings template + one .vsix per pinned
     # extension. The SAME vsix files are in the WSL closure, so the server
     # seeds them without ever touching this folder; the copies here are for a

@@ -50,13 +50,14 @@ let
   vscodeServerDir = "${vscodeHome}/bin/${vscode.commit}";
 
   # Remote (WSL-side) machine settings: the language-server pins, pointing at
-  # the SAME closure binaries Zed and nvim use, plus the schema fetches that
-  # must stay off. Client-level settings (updater off, telemetry) travel with
-  # the Windows kit instead -- see nix/packages/windows/vscode-settings.json.
+  # the SAME binaries Zed and nvim use via the stable /opt path (a store path
+  # here would go stale on the next closure update), plus the schema fetches
+  # that must stay off. Client-level settings (updater off, telemetry) travel
+  # with the Windows kit instead -- see nix/packages/windows/vscode-settings.json.
   vscodeRemoteSettings = (pkgs.formats.json { }).generate "vscode-remote-settings.json" {
-    "ruff.path" = [ "${pkgs.ruff}/bin/ruff" ];
+    "ruff.path" = [ "/opt/twentyx/profile/bin/ruff" ];
     "nix.enableLanguageServer" = true;
-    "nix.serverPath" = "${pkgs.nixd}/bin/nixd";
+    "nix.serverPath" = "/opt/twentyx/profile/bin/nixd";
     "json.schemaDownload.enable" = false;
     "yaml.schemaStore.enable" = false;
     "extensions.autoUpdate" = false;

@@ -61,8 +61,13 @@ let
     }
   );
 
-  # Built in Phase 3; an empty dir keeps the layer shape stable until then.
-  nvimPlugins = pkgs.runCommand "twentyx-nvim-plugins" { } "mkdir -p $out";
+  # The LazyVim plugin + parser tree. Only the nvim flavor carries it; the
+  # plain pod flavor gets an empty dir so the layer shape is stable.
+  nvimPlugins =
+    if nvim then
+      import ./packages/nvim-plugins.nix { inherit lib pkgs; }
+    else
+      pkgs.runCommand "twentyx-nvim-plugins" { } "mkdir -p $out";
 
   # Agent skills, vendored from the pinned input. Upstream's marketplace.json
   # only lists its shipped set; these siblings are Claude/git-hook machinery
@@ -116,6 +121,10 @@ in
     OPENCODE_DISABLE_LSP_DOWNLOAD = "true";
     OPENCODE_DISABLE_DEFAULT_PLUGINS = "true";
     OPENCODE_DISABLE_SHARE = "true";
+  }
+  // lib.optionalAttrs nvim {
+    # lazy.nvim's dev root: every spec and the treesitter parsers resolve here.
+    TWENTYX_NVIM_PLUGINS = "${nvimPlugins}";
   }
   // lib.optionalAttrs (!wsl) {
     LOCALE_ARCHIVE = "${locales}/lib/locale/locale-archive";
