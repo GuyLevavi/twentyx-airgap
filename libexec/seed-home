@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Seed $HOME from the toolchain tree.
+#
+#   seed-home
+#
+# 1. Refresh every packaged default (a store symlink) into $HOME.
+# 2. Copy every dotfile in only when the destination is absent: a real file is
+#    the user's and the gap never gives it back.
+# 3. Replace stale home-manager-era links (dangling, or *-home-manager-files).
+# 4. Print one line per owned dotfile whose shipped default has moved on.
+#
+# Run by bootstrap in a pod and by a user service on WSL. Idempotent.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
+DEFAULTS="${HOME_DEFAULTS:-$TOOLCHAIN_ROOT/home-defaults}"
+DOTFILES="${DOTFILES_DIR:-$ROOT/dotfiles}"
+HOME="${HOME:?seed-home: HOME must be set}"
+
+say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }
+
+# A home-manager-era symlink is ours: it points into the store at the old
+# *-home-manager-files tree, or at a store path this image no longer carries.
+hm_era_link() {
+    [ -L "$1" ] || return 1
+    local t
+    t="$(readlink "$1")"
+    case "$t" in
+        /nix/store/*)
+            [ -e "$1" ] || return 0
+            case "$t" in *-home-manager-files/*) return 0 ;; esac
+            ;;
+    esac
+    return 1
+}
+
+# find does not descend into a symlinked starting point; home-defaults is a
+# store symlink in a pod.
+if [ -e "$DEFAULTS" ]; then
+    DEFAULTS="$(readlink -f "$DEFAULTS")"
+fi
+
+# ── 1. packaged defaults: refresh symlinks, never touch a real file ───────
+if [ -d "$DEFAULTS" ]; then
+    while IFS= read -r src; do
+        rel="${src#"$DEFAULTS"/}"
+        [ "$rel" = "$src" ] && { warn "skipping unstrippable default: $src"; continue; }
+        case "$rel" in .cache/*) continue ;; esac
+        tgt="$(readlink -f "$src")"
+        dst="$HOME/$rel"
+        mkdir -p "$(dirname "$dst")"
+        if [ -L "$dst" ]; then
+            [ "$(readlink "$dst")" = "$tgt" ] || { rm -f "$dst"; ln -s "$tgt" "$dst"; }
+        elif [ -e "$dst" ]; then
+            : # a real file: the user's, never clobbered
+        else
+            ln -s "$tgt" "$dst"
+        fi
+    done < <(find "$DEFAULTS" \( -type f -o -type l \) 2>/dev/null)
+else
+    warn "$DEFAULTS missing -- is the Nix layer present?"
+fi
+
+# ── 2. dotfiles: copy once, then they are the user's ─────────────────────
+if [ -d "$DOTFILES" ]; then
+    while IFS= read -r src; do
+        rel="${src#"$DOTFILES"/}"
+        [ "$rel" = "$src" ] && continue
+        dst="$HOME/$rel"
+        if hm_era_link "$dst"; then rm -f "$dst"; fi
+        # A dangling link (e.g. the old live symlink into the repo) has no
+        # content and is never the user's file.
+        if [ -L "$dst" ] && [ ! -e "$dst" ]; then rm -f "$dst"; fi
+        if [ -e "$dst" ] || [ -L "$dst" ]; then
+            # 4. the user's copy: say when the shipped default has moved on
+            cmp -s "$src" "$dst" ||
+                printf 'newer default available: diff %s %s\n' "$src" "$dst"
+            continue
+        fi
+        mkdir -p "$(dirname "$dst")"
+        # 0644, not the store's 0444: the copy is the user's to edit.
+        install -m 0644 "$src" "$dst"
+    done < <(find "$DOTFILES" -type f)
+else
+    warn "$DOTFILES missing"
+fi
+
+say "home seeded from $DOTFILES and $DEFAULTS"

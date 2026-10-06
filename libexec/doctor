@@ -38,6 +38,7 @@ case "$SESSION_USER_SOURCE" in
         warn "pin it: set SESSION_USER=<you> in the RunAI workspace env." ;;
 esac
 kv "version" "$(cat "$TOOLCHAIN_ROOT/VERSION" 2>/dev/null || echo dev)"
+check "seed-home" "[ -x '$TOOLCHAIN_ROOT/libexec/seed-home' ]"
 
 if session_home_is_durable; then
     ok "HOME is on the PVC -- state survives a restart"
@@ -115,28 +116,6 @@ if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
 else
     bad "no $TOOLCHAIN_ROOT/home-defaults -- the Nix layer is incomplete"
     fails=$((fails+1))
-fi
-
-# home-manager bakes its eval-time home into some generated values. Bootstrap
-# rewrites them; if it did not, things like STARSHIP_CONFIG point at a
-# directory that does not exist and fail silently.
-# Check the outcome rather than the mechanism: are there still variables in
-# THIS environment pointing at the eval-time home? That is the symptom, and it
-# is what actually breaks (starship silently loses its config, completions
-# silently never load).
-EVAL_HOME="$(cat "$TOOLCHAIN_ROOT/eval-home" 2>/dev/null || true)"
-if [ -n "$EVAL_HOME" ] && [ "$EVAL_HOME" != "$HOME" ]; then
-    stragglers=""
-    while IFS= read -r v; do
-        case "${!v-}" in *"$EVAL_HOME"*) stragglers="$stragglers $v" ;; esac
-    done < <(compgen -e)
-    if [ -z "$stragglers" ]; then
-        ok "home relocated from $EVAL_HOME; no stale paths in the environment"
-    else
-        bad "variables still point at $EVAL_HOME:$stragglers"
-        bad "start a new shell; if it persists, the rehome hook did not run"
-        fails=$((fails+1))
-    fi
 fi
 
 # ── tools ─────────────────────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
   // AIRGAP-SETUP: point opencode at the internal endpoint before first use.
-  // This file is a LIVE symlink into ~/twentyx-airgap/opencode/ -- edits take
-  // effect on the next opencode start, no rebuild. Typical shape (ask the
+  // This file is seeded once into $HOME/.config/opencode/ -- edit it in place;
+  // the next opencode start picks it up, no rebuild. Typical shape (ask the
   // cluster owner for the exact provider, model and baseURL):
   //
   //   "model": "<provider>/<model>",

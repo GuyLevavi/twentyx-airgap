@@ -1,20 +1,33 @@
 # NixOS-WSL: the airgapped work laptop.
 #
-# This machine is INSIDE the gap. It has Nix, and it can rebuild — but only
-# from what is already in its store. The practical consequence, which is the
-# whole reason for switching to Nix: a config edit rebuilds offline in seconds
-# (writeText/buildEnv/symlinkJoin need only stdenvNoCC, 78 MB, and build from
-# string literals with no fetches), while adding a *package* requires a
-# physical transfer. The closure enforces the rule that discipline used to.
+# A frozen appliance: nothing evaluates Nix inside the gap. Config edits are
+# real files in $HOME (seeded once, never overwritten); a change to the closure
+# is built on the connected machine and carried in as a store delta
+# (wsl-update.nar). See AGENTS.md.
 {
   lib,
   pkgs,
   config,
   inputs,
-  username,
   ...
 }:
 let
+  # Fixed for everyone: the toolchain is one appliance, and the tarball is
+  # built with --chown home/jensen for the same uid.
+  username = "jensen";
+
+  # One profile, one session environment, one tree of packaged defaults --
+  # the same source the pod layer is built from.
+  twentyx = import ../profile.nix {
+    inherit
+      lib
+      pkgs
+      inputs
+      ;
+    wsl = true;
+    nvim = true;
+  };
+
   # The internal CA bundle, same file the pod gets via the env-injection
   # mount. WSL does not run bootstrap, so without this nothing on the
   # WSL side trusts the internal CA: push-artifactory.sh, the runai CLI and
@@ -224,10 +237,42 @@ in
   # as real root at boot: `d` creates it, `z` fixes ownership recursively
   # (in the build's user namespace only uid 0 is mapped, so anything the
   # chroot activation writes under the home lands root-owned).
+  #
+  # /opt/twentyx is the stable tool path both targets share: editor settings
+  # point at /opt/twentyx/profile/bin/... and never go stale when the store
+  # moves. L+ forces the link, so a rebuild updates it on the next boot.
   systemd.tmpfiles.rules = [
     "d /home/${username} 0700 ${username} users -"
     "z /home/${username} - ${username} users -"
+    "d /opt/twentyx 0755 root root -"
+    "L+ /opt/twentyx/profile - - - - ${config.system.path}"
+    "L+ /opt/twentyx/home-defaults - - - - ${twentyx.homeDefaults}"
   ];
+
+  # Same session variables a pod gets as image ENV: shell rc files reach only
+  # shells, and `runai exec`/code-server never source one.
+  environment.sessionVariables = twentyx.sessionEnv;
+
+  # Seed $HOME once per user-manager start: home-defaults become store
+  # symlinks, dotfiles are copied in only when absent. The repo clone arrives
+  # with setup-wsl.sh, so this is a no-op until it exists.
+  systemd.user.services.seed-home = {
+    description = "Seed $HOME from the toolchain tree";
+    wantedBy = [ "default.target" ];
+    after = [ "systemd-tmpfiles-setup.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = [
+      pkgs.bash
+      pkgs.coreutils
+    ];
+    script = ''
+      [ -x "$HOME/twentyx-airgap/libexec/seed-home" ] || exit 0
+      exec "$HOME/twentyx-airgap/libexec/seed-home"
+    '';
+  };
 
   # ── Static identity: the closure ships a complete /etc/passwd ──────────
   # The first boot of the imported distro died in dbus-broker ("Invalid
@@ -371,6 +416,7 @@ in
   '';
 
   environment.systemPackages = with pkgs; [
+    twentyx.profile
     gitMinimal
     wget
     curl
@@ -404,15 +450,11 @@ in
         echo "════════ boot $(date -u '+%Y-%m-%dT%H:%M:%SZ') ════════"
         echo "── identity ${username}:"
         id ${username} 2>&1 || true
-        # The two per-site setup steps that cannot ship in the image. Loud
-        # until treated: a missing CA silently breaks TLS to internal
-        # endpoints, and an unconfigured opencode has no working provider.
-        repo="/home/${username}/twentyx-airgap"
-        if [ ! -f "$repo/ca-bundle.crt" ]; then
-          echo "WARN: $repo/ca-bundle.crt missing -- drop the internal CA there and run rb"
-        fi
-        if [ -f "$repo/opencode/opencode.jsonc" ] && grep -q AIRGAP-SETUP "$repo/opencode/opencode.jsonc"; then
-          echo "WARN: $repo/opencode/opencode.jsonc still has the AIRGAP-SETUP placeholder"
+        # Per-site setup that cannot ship in the image: an unconfigured
+        # opencode has no working provider.
+        if [ -f "/home/${username}/.config/opencode/opencode.jsonc" ] &&
+           grep -q AIRGAP-SETUP "/home/${username}/.config/opencode/opencode.jsonc"; then
+          echo "WARN: ~/.config/opencode/opencode.jsonc still has the AIRGAP-SETUP placeholder"
         fi
         echo "── root directory (must be 755 root:root):"
         stat -c '%a %U:%G /' / 2>&1 || true

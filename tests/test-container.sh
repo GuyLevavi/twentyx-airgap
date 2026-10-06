@@ -158,16 +158,23 @@ expect_ok "opencode PT_LOADs are address-ascending" \
         [ -n "$prev" ] && [ "$v" -lt "$prev" ] && exit 1; prev=$v;
     done'
 
-say "packaged defaults + env injection"
-expect_ok "opencode preload plugin seeded" \
-    run_ic bash -c 'test -f /data/jensen/.config/opencode/plugins/preload.ts'
+say "packaged defaults + dotfiles + env injection"
+# Defaults are ours: store symlinks, refreshed every start.
+expect_ok "opencode preload plugin linked from the store" \
+    run_ic bash -c 'test -L /data/jensen/.config/opencode/plugins/preload.ts'
+expect_ok "code-server opencode extension linked from the store" \
+    run_ic bash -c 'test -L /data/jensen/.local/share/code-server/extensions/sst-dev.opencode'
+# Dotfiles are the user's: real files, copied once, never symlinks.
+expect_ok "fish config seeded as a real file" \
+    run_ic bash -c 'test -f /data/jensen/.config/fish/config.fish && [ ! -L /data/jensen/.config/fish/config.fish ]'
+expect_ok "zed settings seeded as a real file" \
+    run_ic bash -c 'test -f /data/jensen/.config/zed/settings.json && [ ! -L /data/jensen/.config/zed/settings.json ]'
 expect_ok "zed agent_servers default seeded" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
-# The pins are composed in home.nix (personal zed-settings.json + dynamic
-# store paths), so this guards the whole merge: if the personal file ever
-# comes back whole (the shadowing bug), the /nix/store pins disappear.
-expect_ok "zed LSP pins survived the settings merge" \
-    run_ic bash -c 'grep -q "/nix/store" /data/jensen/.config/zed/settings.json'
+# The pins are stable /opt paths now: a store path here would go stale on the
+# next transfer.
+expect_ok "zed LSP pins point at the stable tool path" \
+    run_ic bash -c 'grep -q "/opt/twentyx/profile/bin/nixd" /data/jensen/.config/zed/settings.json'
 expect_ok "zed remote server shipped as a packaged default" \
     run_ic bash -c 'ls /data/jensen/.zed_server | grep -q zed-remote-server'
 expect_ok "zed remote client-version shim shipped (full-version spelling)" \
@@ -182,13 +189,14 @@ else
     bad "env injection: doctor reports the source"
 fi
 
-say "bootstrap drop-ins"
-# The fish drop-in must PARSE. An earlier revision embedded a bash heredoc
-# inside it: fish refused the whole file (so no PATH, no env vars reached the
-# interactive shell) and podman's storage.conf was never written. The test
-# suite never sourced fish, which is why it took a human shell to catch it.
-expect_ok "fish drop-in parses (fish -n)" \
-    run_ic bash -c 'fish -n /data/jensen/.config/fish/conf.d/00-env.fish'
+say "bootstrap env + fish config"
+# The seeded fish config must PARSE: an earlier revision embedded a bash
+# heredoc inside a generated drop-in, fish refused the whole file and no PATH
+# or env var reached the interactive shell.
+expect_ok "seeded fish config parses (fish -n)" \
+    run_ic bash -c 'fish -n /data/jensen/.config/fish/config.fish'
+expect_ok "runtime env generated outside \$HOME" \
+    run_ic bash -c 'fish -n /opt/twentyx/etc/env.fish'
 expect_grep "podman storage.conf written (vfs)" 'driver = "vfs"' \
     run_ic bash -c 'cat /tmp/twentyx-cache-$(id -u)/containers/storage.conf'
 

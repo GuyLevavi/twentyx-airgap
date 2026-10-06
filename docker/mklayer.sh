@@ -19,7 +19,7 @@ trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$(dirname "$OUT")" "$STAGE/opt/twentyx" "$STAGE/usr/local/bin"
 
-for d in libexec agent; do
+for d in libexec agent dotfiles; do
     cp -a "$d" "$STAGE/opt/twentyx/$d"
 done
 cp -a VERSION "$STAGE/opt/twentyx/VERSION"

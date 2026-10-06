@@ -1,0 +1,14 @@
+add_newline = false
+
+[git_status]
+ignore_submodules = true
+
+[hostname]
+format = "[$hostname]($style) "
+ssh_only = true
+
+[kubernetes]
+disabled = false
+
+[python]
+disabled = false

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Relocate $HOME onto the PVC and materialize it from the Nix layer.
+# Relocate $HOME onto the PVC and materialize it from the toolchain tree.
 #
 # Idempotent. Safe to run repeatedly: at pod start, or by hand.
 #
@@ -9,27 +9,17 @@
 # a dotfile nobody listed. So $HOME is relocated wholesale and everything is
 # durable by default.
 #
-# Two layers, not three, now that Nix computes the defaults:
+# Two layers:
 #   $TOOLCHAIN_ROOT/home-defaults   immutable, from the Nix closure
-#   $HOME                        durable, on the PVC; a real file here is a
-#                                user override and is never touched
+#   $HOME                           durable, on the PVC; a real file here is a
+#                                   user override and is never touched
 #
-# That is what makes restoring a default meaningful: a default is a symlink
-# into the store, an override is a real file. Back the real file up, put the
-# symlink back.
+# A default is a store symlink; an override is a real file. Back the real file
+# up and run seed-home to restore the default.
 set -euo pipefail
 
 TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
 . "$TOOLCHAIN_ROOT/libexec/common.sh"
-
-# Resolved, not used as-is: the profile is a symlink into the store, and
-# `find` does not descend into a symlink given as its starting point -- it
-# matches only the link itself, so the path-strip below silently no-ops and
-# every default gets linked to a garbage path built from the store path.
-# home-defaults is a real directory (of per-file symlinks, so the repo layer
-# can override individual defaults); readlink -f passes it through unchanged.
-DEFAULTS="$(readlink -f "$TOOLCHAIN_ROOT/home-defaults" 2>/dev/null || echo "$TOOLCHAIN_ROOT/home-defaults")"
-PROFILE="$TOOLCHAIN_ROOT/profile"
 
 USER_R="$(session_user)"
 DHOME="$(session_home)"
@@ -48,62 +38,28 @@ fi
 export HOME="$DHOME"
 
 # Cache is deliberately NOT durable. The PVC is network-backed, and nvim, the
-# LSP servers and pip on a network filesystem are painfully slow. A cache is
-# reconstructible by definition, so it belongs on fast local disk.
+# LSP servers and pip on a network filesystem are painfully slow.
 CACHE="${EPHEMERAL_CACHE:-/tmp/twentyx-cache-$(id -u)}"
 mkdir -p "$CACHE"
 
-mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.local/state"
-
-# ── link the Nix-built defaults into $HOME ────────────────────────────────
-# A symlink pointing into the store is ours and gets refreshed. Anything else
-# is the user's and is left strictly alone.
-if [ -d "$DEFAULTS" ]; then
-    while IFS= read -r src; do
-        rel="${src#"$DEFAULTS"/}"
-        # Belt and braces: if the strip did not fire, `rel` is still absolute
-        # and would build a path outside $HOME. Skip rather than write there.
-        [ "$rel" = "$src" ] && { warn "skipping unstrippable default: $src"; continue; }
-        # .cache is deliberately ephemeral (see above); do not seed it onto
-        # the PVC just because home-manager keeps a .keep file there.
-        case "$rel" in .cache/*) continue ;; esac
-        # Resolve the entry's final target: a packaged default is a symlink
-        # into the store, a repo-layer override is a real file in the image.
-        # Linking $HOME at the resolved target keeps doctor's store-path
-        # checks meaningful either way.
-        tgt="$(readlink -f "$src")"
-        dst="$HOME/$rel"
-        # home-manager generates .bashrc, but our env must be exported before
-        # it runs (it execs fish). Park it and let the stub below source it.
-        [ "$rel" = ".bashrc" ] && dst="$HOME/.bashrc.hm"
-        mkdir -p "$(dirname "$dst")"
-        if [ -L "$dst" ]; then
-            [ "$(readlink "$dst")" = "$tgt" ] || { rm -f "$dst"; ln -s "$tgt" "$dst"; }
-        elif [ -e "$dst" ]; then
-            :   # a real file: a user override. Never clobber it.
-        else
-            ln -s "$tgt" "$dst"
-        fi
-    done < <(find "$DEFAULTS" -type f -o -type l)
-else
-    warn "$DEFAULTS missing -- is the Nix layer present in this image?"
-fi
+mkdir -p "$HOME/.config/fish/conf.d" "$HOME/.local/share" "$HOME/.local/state"
 
 # ── runtime-resolved environment ──────────────────────────────────────────
-# Nix owns everything static. This drop-in owns only what cannot be known
-# until the workspace name resolves at pod start.
+# Nix owns everything static (image ENV). This owns only what cannot be known
+# until the workspace name resolves at pod start. It is generated into the
+# TOOLCHAIN tree, not $HOME: the seeded rc files source it, so a real rc file
+# on the PVC is never overwritten.
 # storage.conf is written in bash, deliberately NOT from inside the fish
 # heredoc: fish has no heredoc syntax, so a nested `cat <<OC` there makes the
-# generated file a parse error and NONE of the fish env applies. The fish file
-# below stays pure fish (`set -gx`, `fish_add_path`).
-mkdir -p "$HOME/.config/fish/conf.d" "$CACHE/containers"
+# generated file a parse error and NONE of the fish env applies.
+mkdir -p "$TOOLCHAIN_ROOT/etc" "$CACHE/containers"
 cat > "$CACHE/containers/storage.conf" <<OC
 [storage]
 driver = "vfs"
 runroot = "$CACHE/containers/runroot"
 graphroot = "$CACHE/containers/graph"
 OC
-cat > "$HOME/.config/fish/conf.d/00-env.fish" <<EOF
+cat > "$TOOLCHAIN_ROOT/etc/env.fish" <<EOF
 # Generated by bootstrap. Do not edit -- rewritten on every pod start.
 # Put your own fish config in conf.d/50-*.fish, which survives on the PVC.
 set -gx TOOLCHAIN_ROOT "$TOOLCHAIN_ROOT"
@@ -120,19 +76,9 @@ set -gx HF_HOME "$DHOME/.local/share/huggingface"
 # Rootless-capable containers without touching /etc. vfs works everywhere a
 # pod does (no mount(2) needed); switch to overlay when the pod is privileged.
 set -gx CONTAINERS_STORAGE_CONF "$CACHE/containers/storage.conf"
-fish_add_path --global --prepend "$PROFILE/bin"
+fish_add_path --global --prepend "$TOOLCHAIN_ROOT/profile/bin"
 EOF
-
-# home-manager bakes its eval-time home into some generated values. The rewrite
-# that fixes them lives in nix/modules/shell.nix, NOT here: fish sources
-# conf.d/*.fish before config.fish, so a drop-in written from this script would
-# always run before the values it needs to correct even exist.
-#
-# A drop-in from an older image would now be both stale and wrong, so remove it.
-rm -f "$HOME/.config/fish/conf.d/99-rehome.fish"
-
-# ── bash: login shell, and the fallback code-server terminals get ─────────
-cat > "$HOME/.bashrc" <<EOF
+cat > "$TOOLCHAIN_ROOT/etc/env.bash" <<EOF
 # Generated by bootstrap. Do not edit; rewritten on every pod start.
 export TOOLCHAIN_ROOT="$TOOLCHAIN_ROOT"
 export SESSION_USER="$USER_R"
@@ -145,33 +91,21 @@ export TORCH_HOME="$DHOME/.local/share/torch"
 export HF_HOME="$DHOME/.local/share/huggingface"
 # Containers without touching /etc: vfs works everywhere a pod does.
 export CONTAINERS_STORAGE_CONF="$CACHE/containers/storage.conf"
-for d in "$PROFILE/bin"; do
-    [ -d "\$d" ] || continue
-    case ":\$PATH:" in *":\$d:"*) ;; *) PATH="\$d:\$PATH" ;; esac
-done
+case ":\$PATH:" in *":$TOOLCHAIN_ROOT/profile/bin:"*) ;; *) PATH="$TOOLCHAIN_ROOT/profile/bin:\$PATH" ;; esac
 export PATH
-# home-manager puts the session variables in .profile, which only a LOGIN bash
-# reads -- and our .bash_profile stub deliberately does not chain to it. Source
-# them here instead, so TERMINFO_DIRS and LOCALE_ARCHIVE reach a plain
-# \`bash -c\` too. Before .bashrc.hm, whose initExtra rewrites the eval-time
-# home out of them.
-[ -r "$PROFILE/etc/profile.d/hm-session-vars.sh" ] && . "$PROFILE/etc/profile.d/hm-session-vars.sh"
-[ -r "$DHOME/.bashrc.hm" ] && . "$DHOME/.bashrc.hm"
 for f in "$DHOME"/.config/bashrc.d/*.sh; do [ -r "\$f" ] && . "\$f"; done
 : # keep the exit status clean; the loop above may end on a failed test
 EOF
-grep -qs bashrc "$HOME/.bash_profile" 2>/dev/null || \
-    echo '[ -r ~/.bashrc ] && . ~/.bashrc' > "$HOME/.bash_profile"
 
 # ── environment-provided assets (see injection_exports) ────────────
-# Appended here, after both drop-ins exist: the fish block above is written
-# with `cat >` and would truncate anything appended earlier. The launcher
-# exports the same set for the agent's process tree.
+# Appended after both files exist: the fish block above is written with `cat >`
+# and would truncate anything appended earlier. The launcher exports the same
+# set for the agent's process tree.
 if INJ="$(injection_exports)"; then
     ca=""
     while IFS=$'\t' read -r k v; do
-        printf 'set -gx %s "%s"\n' "$k" "$v" >> "$HOME/.config/fish/conf.d/00-env.fish"
-        printf 'export %s="%s"\n' "$k" "$v" >> "$HOME/.bashrc"
+        printf 'set -gx %s "%s"\n' "$k" "$v" >> "$TOOLCHAIN_ROOT/etc/env.fish"
+        printf 'export %s="%s"\n' "$k" "$v" >> "$TOOLCHAIN_ROOT/etc/env.bash"
         [ "$k" = "SSL_CERT_FILE" ] && ca="$v"
     done <<EOF
 $INJ
@@ -188,4 +122,5 @@ EOF
     fi
 fi
 
-exit 0
+# ── seed $HOME ────────────────────────────────────────────────────────────
+exec "$TOOLCHAIN_ROOT/libexec/seed-home"
