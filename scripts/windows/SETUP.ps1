@@ -68,16 +68,12 @@ if ($SkipUnpack) {
 $setupWin = Join-Path $Base "setup-wsl.sh"
 if (-not (Test-Path $setupWin)) { throw "missing $setupWin" }
 
-Say "translating paths for WSL"
-$baseWsl = (wsl -d $Distro -- wslpath -a "$Base" | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0) { throw "wslpath failed for $Base ($LASTEXITCODE)" }
-$baseWsl = "$baseWsl".Trim()
-if (-not $baseWsl) { throw "wslpath returned nothing for $Base" }
-
-$setupWsl = (wsl -d $Distro -- wslpath -a "$setupWin" | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0) { throw "wslpath failed for $setupWin ($LASTEXITCODE)" }
-$setupWsl = "$setupWsl".Trim()
-if (-not $setupWsl) { throw "wslpath returned nothing for $setupWin" }
+# NixOS-WSL automounts the Windows drives at /mnt/<drive>, so the mapping is
+# deterministic. wslpath needs a booted distro and its first boot prints to
+# stdout, which made the captured line unreliable.
+$baseWsl = ("/mnt/" + $Base.Substring(0, 1).ToLowerInvariant() + $Base.Substring(2).Replace('\', '/')).TrimEnd('/')
+$setupWsl = "$baseWsl/setup-wsl.sh"
+Say "transfer dir inside WSL: $baseWsl"
 
 Say "running setup-wsl.sh as root in '$Distro' (user: $User)"
 wsl -d $Distro -u root -- env "TRANSFER=$baseWsl" bash "$setupWsl" "$User"
