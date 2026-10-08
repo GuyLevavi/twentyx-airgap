@@ -147,7 +147,9 @@ wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh
 `setup-wsl.sh` overlays `/opt/twentyx`, drops `ca-bundle.crt`/`pip.conf`
 into `/var/lib/airgap-env` and restarts `airgap-ca`, then (when a delta is
 carried) `nix-store --import`s it, sets the system profile, runs
-`switch-to-configuration switch`, and re-seeds `$HOME`.
+`switch-to-configuration switch`, and re-seeds `$HOME`. A switch that
+reports failed units has still switched: the script prints them and
+continues (exit 4); any other failure aborts.
 
 **Rollback:**
 
@@ -176,10 +178,21 @@ transfer and no rebuild to add or rotate the CA.
 
 ## 4. Pods
 
-Publish the layers, then let CI append them:
+The push scripts are in the repo, not in `dist/` — the repo travels as
+`twentyx-airgap.bundle`. In the gap, in the transfer folder: unpack the
+layer containers, clone the bundle, publish. One-time: a GitLab token with
+`api` scope and the project; check the instance's `max_package_size` before
+the first multi-GB push (Admin > Settings > Preferences) — if a layer does
+not fit, use Artifactory instead.
 
 ```bash
-./scripts/push-gitlab-packages.sh   # GitLab generic packages; push-artifactory.sh is the fallback
+7z x nix-layer.tar.gz.7z && 7z x nix-layer-nvim.tar.gz.7z   # plain names; never publish the .7z
+git clone twentyx-airgap.bundle twentyx-airgap
+export GITLAB_TOKEN=<token> GITLAB_PROJECT=<group/project|id>
+export GITLAB_URL=https://gitlab.internal          # default: gitlab.com
+./twentyx-airgap/scripts/push-gitlab-packages.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
+# fallback:
+./twentyx-airgap/scripts/push-artifactory.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
 ```
 
 CI (`assemble`) fetches the layers, rebuilds `repo-layer.tar` from the

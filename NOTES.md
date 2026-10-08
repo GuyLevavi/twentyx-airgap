@@ -77,6 +77,24 @@ setting goes stale on the next closure update; this is the fix.
   (it is for `--extra-files`), and the activation script already creates the
   home as 1000:100. The tarball is the only artifact that needs sudo.
 
+## WSL switches exit 4 (WSL >= 2.9.8)
+
+`switch-to-configuration` returns 4 when units fail although the switch
+happened. Two known WSL-side sources, both fixed at the config:
+
+- WSL's init generates `wsl-mnt-guard.service` (`ExecStart=/bin/true`);
+  NixOS-WSL's minimal `/bin` lacked `true`, so it died 203/EXEC whenever
+  `sysinit-reactivation.target` restarted it. `wsl.extraBin` now appends
+  coreutils `true` (NixOS-WSL#1100).
+- `wsl.interop.register = true` asked systemd-binfmt to bind `WSLInterop`
+  again; WSL's init already bound it and the kernel refuses a duplicate name
+  with `-EEXIST`. Left at the upstream default (false).
+
+`setup-wsl.sh` still tolerates exit 4 (warns + `systemctl --failed`, then
+continues to re-seed `$HOME`); anything else is fatal. The switch has
+already happened by then, so aborting would skip step 4 over a degraded
+unit.
+
 ## No signing, by decision
 
 Integrity is the content-addressed store hash: a damaged path fails on the

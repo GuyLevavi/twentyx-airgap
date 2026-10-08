@@ -2,15 +2,17 @@
 # Publish the transfer artifacts to the project's GitLab generic package
 # registry. Artifactory stays as the CI fallback (see .gitlab-ci.yml).
 #
-#   ./scripts/push-gitlab-packages.sh [file-or-dir ...]     default: dist
+#   ./scripts/push-gitlab-packages.sh <file> [file...]
 #
-# Every regular file among the arguments goes to
+# Run inside the gap, in the transfer folder, after unpacking the layer
+# containers: `7z x nix-layer.tar.gz.7z`, `7z x nix-layer-nvim.tar.gz.7z`.
+# CI fetches the plain names, so publish the unpacked layers -- never the
+# .7z. Every regular file among the arguments goes to
 #
 #   <api>/projects/<project>/packages/generic/twentyx-airgap/<version>/<filename>
 #
-# A directory argument means the files directly inside it -- the dist/ layout
-# is flat. Version resolution matches push-artifactory.sh: PACKAGE_VERSION, or
-# the repo's VERSION file.
+# A directory argument means the files directly inside it. Version resolution
+# matches push-artifactory.sh: PACKAGE_VERSION, or the repo's VERSION file.
 #
 # Auth, in this order:
 #   1. CI  -- CI_API_V4_URL + CI_PROJECT_ID + CI_JOB_TOKEN (JOB-TOKEN header)
@@ -39,7 +41,7 @@ VERSION="${PACKAGE_VERSION:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../VERSION")}"
 PACKAGE=twentyx-airgap
 
 # -- collect the files ------------------------------------------------------
-[ $# -gt 0 ] || set -- dist
+[ $# -gt 0 ] || { echo "usage: push-gitlab-packages.sh <file> [file...]" >&2; exit 1; }
 FILES=()
 for arg in "$@"; do
     if [ -d "$arg" ]; then

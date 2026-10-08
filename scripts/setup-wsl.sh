@@ -48,7 +48,18 @@ if [ -f "$T/wsl-update.nar" ]; then
     nix-store --import < "$T/wsl-update.nar"
     nix-store --check-validity "$NEW"
     nix-env -p /nix/var/nix/profiles/system --set "$NEW"
-    /nix/var/nix/profiles/system/bin/switch-to-configuration switch
+    # switch-to-configuration exits 4 when some units failed but the switch
+    # itself happened (WSL-generated units, headless user activation). The
+    # new system is already active: report and continue rather than abort
+    # before step 4. Any other nonzero code is fatal.
+    rc=0
+    /nix/var/nix/profiles/system/bin/switch-to-configuration switch || rc=$?
+    if [ "$rc" = 4 ]; then
+        say "switch done, but some units failed (exit 4) -- continuing"
+        systemctl --failed --no-pager || true
+    elif [ "$rc" != 0 ]; then
+        die "switch-to-configuration failed (exit $rc)"
+    fi
 else
     say "no wsl-update.nar carried -- text layer only"
 fi

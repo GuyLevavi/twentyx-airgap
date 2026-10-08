@@ -79,7 +79,17 @@ in
     startMenuLaunchers = true;
     # Windows interop stays on: it is how the browser and the Windows
     # clipboard are reachable, and how `wsl.exe`-side scripts are invoked.
-    interop.register = true;
+    # `interop.register` stays at its default (false): WSL's own init already
+    # binds the WSLInterop binfmt name and boot.protectBinfmt (default) keeps
+    # it. Binding the same name again is refused with -EEXIST, which fails
+    # systemd-binfmt and makes every switch exit 4.
+    #
+    # /bin/true for WSL >= 2.9.8: its init generates wsl-mnt-guard.service
+    # with ExecStart=/bin/true, and NixOS-WSL's minimal /bin (wslpath, sh,
+    # mount, bash) lacks it, so the unit dies 203/EXEC when
+    # switch-to-configuration restarts sysinit-reactivation and the switch
+    # exits 4 (NixOS-WSL#1100). mkAfter appends to the module's list.
+    extraBin = lib.mkAfter [ { src = "${pkgs.coreutils}/bin/true"; } ];
   };
 
   i18n.defaultLocale = "en_US.UTF-8";
