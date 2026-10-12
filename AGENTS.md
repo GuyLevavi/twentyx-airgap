@@ -4,7 +4,7 @@ The connected half of an **airgapped** toolchain: Nix builds the closures for
 a NixOS-WSL laptop and RunAI/OpenShift pods, and `scripts/transfer.sh` turns
 them into files that cross the gap. `README.md` is the map, `MANUAL.md` the
 operations, `NOTES.md` the why; read them before a non-trivial change.
-`CONTRACT.md` is the interface with the inner repo.
+`inside-seed/CONTRACT.md` is the interface with the inner repo.
 
 ## Never edit Linux-side config here
 
@@ -13,14 +13,14 @@ the **inner repo**. `inside-seed/` is only the outside's reference copy of
 it: the handover payload, the test fixture, and the spec the LazyVim check
 and the Windows kit read. Change it only to mirror a change the inside must
 make, and record that change as a numbered required edit in `HANDOVER.md`
-(intent, exact snippet, verify step). `CONTRACT.md` is copied verbatim into
-`inside-seed/`; change both or neither.
+(intent, exact snippet, verify step). The contract is
+`inside-seed/CONTRACT.md` alone: the inner repo's file, one copy.
 
 ## Verification
 
 ```bash
-nix flake check
-nix build .#pod-opt                  # builds the closure + the LazyVim sandbox check
+nix flake check                      # both targets + the LazyVim sandbox check
+nix build .#pod-opt                  # the pod closure
 ./tests/test-container.sh            # podman; TEST_KEEP=1 keeps the registry
 nix shell nixpkgs#shellcheck -c shellcheck -S warning scripts/*.sh install/apply.sh tests/*.sh \
     inside-seed/pod/* inside-seed/wsl/*.sh inside-seed/docker/*.sh inside-seed/scripts/*.sh

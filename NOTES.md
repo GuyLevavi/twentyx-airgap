@@ -128,8 +128,10 @@ bundled node) and drop the oneshot's extraction. Never both.
 name lazy.nvim derives from its URL, plus treesitter `parser/` and
 `queries/`. The inner repo's nvim config points lazy's `dev` at it
 (`TWENTYX_NVIM_PLUGINS`, `fallback = false`), with installs, checker and
-Mason off. The derivation runs a headless nvim **in the Nix sandbox** against
-`inside-seed/dotfiles/.config/nvim`: every spec must resolve, every parser
+Mason off. Its `.check` (a flake check, so every transfer runs it) runs a
+headless nvim **in the Nix sandbox** against
+`inside-seed/dotfiles/.config/nvim`, kept out of the tree so the closure
+never depends on inside text: every spec must resolve, every parser
 exist, every LSP be on PATH, `:messages` be clean. A plugin the inside wants
 is therefore a request: add it to `pluginAttrs` and to the seed's spec
 together.

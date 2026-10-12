@@ -8,8 +8,8 @@ config) are the inner repo's `MANUAL.md`.
 
 ```bash
 nix develop                          # shellcheck, nixfmt, crane, jq, 7z, ...
-nix flake check                      # evaluates both targets
-nix build .#pod-opt                  # also runs the LazyVim sandbox check
+nix flake check                      # both targets + the LazyVim sandbox check
+nix build .#pod-opt                  # the pod closure
 ./tests/test-container.sh            # the pod, reproduced (podman); against inside-seed/
 shellcheck -S warning scripts/*.sh install/apply.sh tests/*.sh \
     inside-seed/pod/* inside-seed/wsl/*.sh inside-seed/docker/*.sh inside-seed/scripts/*.sh
@@ -45,48 +45,16 @@ package registry) before a later delta imports.
 change the inside must act on (required edits to inside files, with intent,
 snippet and verify step), and mirror inside-file changes in `inside-seed/`.
 
-## 2. Windows install from a transfer folder
+## 2. Install and update in the gap
 
-Extract every `.7z` with 7-Zip into one folder (e.g. `C:\twentyx`), then in
-an elevated PowerShell:
+One procedure, kept in the inner repo's manual: `inside-seed/MANUAL.md` §4
+(Windows install with `SETUP.ps1`, from a transfer folder or the package
+registry; WSL updates with `apply.sh` or `wsl/update.sh`; rollback). What
+the outside guarantees for it: `SETUP.ps1`/`UNPACK.ps1` and the rootfs ship
+with every rebase, `apply.sh` and `MANIFEST.txt` with every release, and a
+delta imports on any machine that has its base.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File C:\twentyx\SETUP.ps1 `
-  [-GitlabUrl https://<gitlab> -GitlabProject <group/project>]
-```
-
-`SETUP.ps1` imports `nixos-wsl.tar.gz` as the `twentyx` distro (skipped when
-registered), runs `apply.sh` as root, clones the inner repo to `~/twentyx`
-and runs its `wsl/link.sh` (with `-GitlabUrl`/`-GitlabProject`), then
-`UNPACK.ps1` (installers, Zed themes/extensions, client configs from the
-clone's `windows\`). With the GitLab flags, files missing from the folder
-are fetched from `twentyx-store/<release>/`. Parameters: `-Distro`,
-`-InstallDir` (tens of GB free), `-User`, `-Release`, `-SkipUnpack`.
-
-No WSL yet: `dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart`
-and the same for `VirtualMachinePlatform`, reboot, `wsl --set-default-version 2`,
-and if needed `msiexec /i windows-kit\wsl.*.x64.msi` from the extracted kit.
-
-## 3. WSL update from a transfer folder
-
-```powershell
-wsl -d twentyx -u root -- bash /mnt/c/twentyx/apply.sh
-```
-
-It imports the NAR (unless the system is already there), pins the base as a
-GC root, sets the system profile and switches; exit 4 (some units failed, the
-switch happened) is reported, not fatal. A delta whose base is missing is
-refused with the path named: import the base release's `wsl-full.nar` first.
-Inside the gap the same is `~/twentyx/wsl/update.sh` (inner repo).
-
-**Rollback:**
-
-```bash
-sudo nix-env -p /nix/var/nix/profiles/system --rollback
-sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch
-```
-
-## 4. Answering requests
+## 3. Answering requests
 
 A carried-out `REQUESTS.md` line becomes a change here: a package in
 `nix/packages.nix`, a system setting in `nix/hosts/wsl.nix` (keep it at the
@@ -95,7 +63,7 @@ delta), a LazyVim plugin in `nix/packages/nvim-plugins.nix` plus the spec in
 `inside-seed/dotfiles/.config/nvim/`. Then transfer, with a `HANDOVER.md`
 entry if inside files must change.
 
-## 5. Re-pinning
+## 4. Re-pinning
 
 Pins that move together, in one commit:
 

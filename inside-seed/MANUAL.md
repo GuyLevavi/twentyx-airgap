@@ -87,12 +87,23 @@ powershell -ExecutionPolicy Bypass -File C:\twentyx\SETUP.ps1 `
 ```
 
 It fetches what it needs (manifest, rootfs, NAR, Windows kit), imports the
-`twentyx` distro, applies the release, clones this repo to `~/twentyx`, runs
-`wsl/link.sh`, then installs the Windows side. From a transfer folder it
-runs the same without fetching. No WSL at all yet: enable the
-`Microsoft-Windows-Subsystem-Linux` and `VirtualMachinePlatform` features
-(`dism.exe /online /enable-feature ... /all /norestart`), reboot, then install
-the MSI from the kit (`msiexec /i windows-kit\wsl.*.x64.msi`).
+`twentyx` distro (skipped when registered), runs `apply.sh` as root, clones
+this repo to `~/twentyx` and runs `wsl/link.sh`, then `UNPACK.ps1`
+(installers, Zed themes/extensions, client configs from the clone's
+`windows\`). **From a transfer folder** (every `.7z` extracted with 7-Zip
+into one folder): run that folder's `SETUP.ps1`; the GitLab flags are then
+only needed for the clone, and anything missing is fetched.
+Parameters: `-Distro twentyx`, `-InstallDir C:\wsl\nixos` (tens of GB free;
+the VM disk grows there), `-User jensen`, `-Base <folder>`, `-Release`,
+`-GitlabToken` (private project only), `-SkipUnpack`. Registry fetches pin
+the internal CA with a `ca-bundle.crt` next to the script, else Windows must
+trust it.
+
+No WSL at all yet, as Administrator:
+`dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart`,
+the same for `VirtualMachinePlatform`, reboot, `wsl --set-default-version 2`,
+and if needed the MSI from the kit (`tar -xf windows-kit-*.tar.gz`, then
+`msiexec /i windows-kit\wsl.*.x64.msi`).
 
 **Config:** `~/twentyx` is the live tree. Edit, commit, push; `git pull` to
 take others' changes. Run `~/twentyx/wsl/link.sh` again after a pull that
@@ -103,7 +114,9 @@ is listed; it is yours.
 the pinned release and runs its `apply.sh` under sudo). From a transfer
 folder instead: `wsl -d twentyx -u root -- bash /mnt/c/<folder>/apply.sh`.
 A delta needs its base on the machine; the error names the missing path, and
-the fix is the base release's `wsl-full.nar`.
+the fix is the base release's `wsl-full.nar`. A switch that reports failed units
+(exit 4) has still switched: `apply.sh` prints `systemctl --failed` and
+continues.
 
 **Rollback:**
 

@@ -5,7 +5,7 @@ two targets inside the gap: a NixOS-WSL distro on Windows laptops and
 RunAI/OpenShift workspace images. Nothing is fetched inside; everything
 crosses as planned artifacts.
 
-There are two repos, split by who can change what ([`CONTRACT.md`](CONTRACT.md)):
+There are two repos, split by who can change what ([`inside-seed/CONTRACT.md`](inside-seed/CONTRACT.md)):
 
 - **This repo (outside, the owner only):** the flake and `nix/` (the
   closures), the transfer, the WSL installer.

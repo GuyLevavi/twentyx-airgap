@@ -96,6 +96,13 @@
         default = self.packages.${system}.pod-opt;
       };
 
+      # Built by `nix flake check`, which every transfer runs first.
+      checks.${system}.nvim-offline =
+        (import ./nix/packages/nvim-plugins.nix {
+          inherit pkgs;
+          lib = nixpkgs.lib;
+        }).check;
+
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           nix-tree

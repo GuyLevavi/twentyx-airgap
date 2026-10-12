@@ -1,6 +1,9 @@
 # Plan: cumulative store deltas, links-only $HOME, two repos
 
-**Status:** draft from the 2026-10-12 design review, verified against the code and a scratch
+**Status: executed** (Stages 1–3 on branch `split`, 2026-10-13). Kept as the decision record
+(D1–D18) and the verified facts; the step lists below are historical, and where they differ the
+code, `HANDOVER.md` (the Stage 4 procedure, as shipped) and the docs win. Originally a draft
+from the 2026-10-12 design review, verified against the code and a scratch
 store on 2026-10-13 (see "Verified facts"). It supersedes the 2026-10-05 plan, whose phases
 are done. Execute in stages, one green commit or more per stage. The WSL distro must keep
 working after every stage. Do **not** commit, push or rebase without asking the owner.

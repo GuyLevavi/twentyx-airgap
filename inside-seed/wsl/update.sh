@@ -18,17 +18,21 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 RELEASE="${1:-$(cat "$REPO/STORE_RELEASE" 2>/dev/null || true)}"
 [ -n "$RELEASE" ] || die "no STORE_RELEASE in $REPO (or pass a release id)"
 
-# origin: https://host/group/project(.git) or git@host:group/project(.git)
+# The registry: GITLAB_URL / GITLAB_PROJECT, else derived from origin
+# (https://host/g/p, ssh://git@host:port/g/p or git@host:g/p; .git optional).
 if [ -z "${GITLAB_URL:-}" ] || [ -z "${GITLAB_PROJECT:-}" ]; then
     origin="$(git -C "$REPO" remote get-url origin)"
     origin="${origin%.git}"
     case "$origin" in
-        https://*) rest="${origin#https://}"; rest="${rest#*@}"; host="${rest%%/*}"; GITLAB_PROJECT="${rest#*/}" ;;
-        *@*:*) rest="${origin#*@}"; host="${rest%%:*}"; GITLAB_PROJECT="${rest#*:}" ;;
+        http*://*) rest="${origin#*://}"; rest="${rest#*@}"; host="${rest%%/*}" ;;
+        ssh://*) rest="${origin#ssh://}"; rest="${rest#*@}"; host="${rest%%/*}"; host="${host%%:*}" ;;
+        *@*:*) rest="${origin#*@}"; host="${rest%%:*}"; rest="$host/${rest#*:}" ;;
         *) die "cannot derive the registry from origin '$origin' -- set GITLAB_URL and GITLAB_PROJECT" ;;
     esac
-    GITLAB_URL="https://$host"
+    GITLAB_URL="${GITLAB_URL:-https://$host}"
+    GITLAB_PROJECT="${GITLAB_PROJECT:-${rest#*/}}"
 fi
+say "release $RELEASE from $GITLAB_URL, project $GITLAB_PROJECT"
 API="${GITLAB_URL%/}/api/v4/projects/${GITLAB_PROJECT//\//%2F}/packages/generic/twentyx-store/$RELEASE"
 AUTH=()
 [ -z "${GITLAB_TOKEN:-}" ] || AUTH=(-H "PRIVATE-TOKEN: $GITLAB_TOKEN")

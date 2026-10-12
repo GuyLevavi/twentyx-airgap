@@ -36,6 +36,8 @@ assemble:
     - ./docker/assemble.sh "$CI_COMMIT_SHORT_SHA"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+    # "Run pipeline" in the UI: test a branch before merging it.
+    - if: $CI_PIPELINE_SOURCE == "web"
 
 # ---------------------------------------------------------------------------
 # The image this commit just built IS the job image: doctor checks the closure,
@@ -45,7 +47,7 @@ assemble:
 smoke:
   stage: smoke
   image:
-    name: "$CI_REGISTRY_IMAGE/workspace:$CI_COMMIT_SHORT_SHA-base-slim"
+    name: "$IMAGE_REGISTRY/workspace:$CI_COMMIT_SHORT_SHA-base-slim"
     entrypoint: [""]
   variables:
     # A CI pod has no PVC; an explicit home counts as durable for doctor.
@@ -55,3 +57,5 @@ smoke:
     - shellcheck -S warning pod/* wsl/*.sh docker/*.sh scripts/*.sh
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+    # "Run pipeline" in the UI: test a branch before merging it.
+    - if: $CI_PIPELINE_SOURCE == "web"

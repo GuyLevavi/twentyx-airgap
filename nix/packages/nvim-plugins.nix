@@ -1,9 +1,9 @@
 # The nvim plugin tree, built by Nix and consumed by lazy.nvim through its
 # `dev` mechanism: every plugin resolves to $out/<name>, nothing is fetched.
 #
-# The derivation also runs a headless nvim check in the Nix sandbox (no
-# network): if any spec is missing, a parser is absent or an LSP binary is not
-# on PATH, the build fails instead of the airgap session failing.
+# `.check` runs a headless nvim in the Nix sandbox (no network) against the
+# tree: if any spec is missing, a parser is absent or an LSP binary is not on
+# PATH, `nix flake check` fails instead of the airgap session.
 {
   lib,
   pkgs,
@@ -118,34 +118,42 @@ let
     tombi
     package-version-server
   ];
-in
-pkgs.runCommand "twentyx-nvim-plugins"
-  {
-    nativeBuildInputs = [ pkgs.neovim ] ++ lspForCheck;
+
+  tree = pkgs.runCommand "twentyx-nvim-plugins" {
     meta.description = "LazyVim plugin + treesitter parser tree for the airgap";
-  }
-  ''
+  } ''
     mkdir -p "$out/parser" "$out/queries"
     ${pluginLinks}
     ${parserLinks}
+  '';
 
-    # Offline check: run the seeded starter headless against this tree.
-    export HOME="$TMPDIR/home"
-    export XDG_CONFIG_HOME="$TMPDIR/config"
-    export XDG_DATA_HOME="$TMPDIR/data"
-    export XDG_STATE_HOME="$TMPDIR/state"
-    export XDG_CACHE_HOME="$TMPDIR/cache"
-    mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-    # The spec is the inner repo's nvim config, as the outside last knew it
-    # (inside-seed/): a plugin the inside wants is a REQUESTS.md line, added
-    # to pluginAttrs and to that copy together.
-    cp -r ${../../inside-seed/dotfiles/.config/nvim} "$XDG_CONFIG_HOME/nvim"
-    export TWENTYX_NVIM_PLUGINS="$out"
-    # The marker makes a hard lua error (which would exit 0) a failure too;
-    # the timeout keeps a broken config from hanging the build.
-    if ! timeout 120 nvim --headless -c 'luafile ${../scripts/nvim-offline-check.lua}' > "$TMPDIR/check.log" 2>&1 ||
-      ! grep -q "nvim offline check OK" "$TMPDIR/check.log"; then
-      cat "$TMPDIR/check.log" >&2
-      exit 1
-    fi
-  ''
+  # Offline check, kept out of the tree so the shipped closure never depends
+  # on inside text: run the inner repo's nvim config, as the outside last
+  # knew it (inside-seed/), headless against the tree. A plugin the inside
+  # wants is a REQUESTS.md line, added to pluginAttrs and to that copy
+  # together. `nix flake check` (and so every transfer) builds it.
+  check =
+    pkgs.runCommand "twentyx-nvim-offline-check"
+      {
+        nativeBuildInputs = [ pkgs.neovim ] ++ lspForCheck;
+      }
+      ''
+        export HOME="$TMPDIR/home"
+        export XDG_CONFIG_HOME="$TMPDIR/config"
+        export XDG_DATA_HOME="$TMPDIR/data"
+        export XDG_STATE_HOME="$TMPDIR/state"
+        export XDG_CACHE_HOME="$TMPDIR/cache"
+        mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+        cp -r ${../../inside-seed/dotfiles/.config/nvim} "$XDG_CONFIG_HOME/nvim"
+        export TWENTYX_NVIM_PLUGINS="${tree}"
+        # The marker makes a hard lua error (which would exit 0) a failure too;
+        # the timeout keeps a broken config from hanging the build.
+        if ! timeout 120 nvim --headless -c 'luafile ${../scripts/nvim-offline-check.lua}' > "$TMPDIR/check.log" 2>&1 ||
+          ! grep -q "nvim offline check OK" "$TMPDIR/check.log"; then
+          cat "$TMPDIR/check.log" >&2
+          exit 1
+        fi
+        touch $out
+      '';
+in
+tree // { inherit check; }

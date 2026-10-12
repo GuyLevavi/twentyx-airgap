@@ -24,49 +24,63 @@ and never reused: an R already applied in an earlier shipment is skipped.
 
 1. **Branch.** In the inner repo: `git switch -c adopt-split`. Never work on
    `main`.
-2. **Inventory inside work first.** For each path below, list the inside
-   commits since the last imported bundle
-   (`git log --oneline <last-bundle-commit>..main -- <path>`) into
+2. **Inventory inside work first.** The last outside bundle imported inside
+   is `2b8ed00` ("wsl: the clone is the live tree; ..."). If
+   `git cat-file -e 2b8ed00` fails, use the newest inside commit that also
+   exists in that bundle. For every path listed in step 3, run
+   `git log --oneline 2b8ed00..main -- <path>` and collect the output in
    `adopt-split-inventory.md`. Every listed commit must be accounted for by
    the end.
 3. **Apply by category. The rule is fixed per category:**
-   - `flake.nix`, `flake.lock`, `nix/`, `scripts/build-*`,
-     `scripts/transfer*`, `scripts/setup-wsl.sh`, `scripts/windows/`,
-     `scripts/push-artifactory.sh`, `VERSION`, `.gcroots/`, `tests/`,
-     `ARCHITECTURE.md`: **delete**. If an inside commit changed one, write
-     what it wanted as a line in `REQUESTS.md` (e.g. "need `hyperfine` in the
-     closure") instead of keeping the change.
-   - `dotfiles/`, `env/`: **the inside version wins.** Move files whose path
-     changed; never take content from the seed over inside content, except
-     where an R-edit below says so.
+   - `flake.nix`, `flake.lock`, `nix/`, `scripts/build-layers.sh`,
+     `scripts/transfer-bundle.sh`, `scripts/setup-wsl.sh`,
+     `scripts/windows/`, `scripts/push-artifactory.sh`, `VERSION`,
+     `.gcroots/`, `tests/`, `ARCHITECTURE.md`, `PLAN.md`, and any other path
+     that is not in `inside-seed.tar` and not inside-only: **delete**. If an
+     inside commit changed one, write what it wanted as a line in
+     `REQUESTS.md` (e.g. "need `hyperfine` in the closure") instead of
+     keeping the change.
+   - `dotfiles/`, `env/`: **the inside version wins** for every file both
+     have. A file only the seed has: **add it** (e.g.
+     `dotfiles/.config/git/config`, `.vscode-server/data/Machine/settings.json`,
+     `.config/opencode/plugins/preload.ts`). A file only the inside has:
+     keep it. Never take seed content over inside content except where an
+     R-edit says so.
    - `.gitlab-ci.yml`: take the job structure from the seed (R3), then
      re-apply inside-only variables, runner tags, auth and rules.
-   - Pod scripts (`libexec/*`, `agent/*` → `pod/`), `docker/`,
-     `scripts/ssh-bridge.sh` → `wsl/`: **take the seed's structure, then
-     re-apply each inside fix** from the inventory by hand, one commit per
-     fix, naming the original commit (R9).
+   - Pod scripts: `libexec/*` and `agent/restore-preload.sh` → `pod/`;
+     `agent/plugins/preload.ts` → `dotfiles/.config/opencode/plugins/`;
+     `scripts/ssh-bridge.sh` → `wsl/`; `docker/`. **Take the seed's
+     version, then re-apply each inside fix** from the inventory by hand,
+     one commit per fix, naming the original commit (R9).
    - New in the seed (`pod/link-home`, `wsl/link.sh`, `wsl/update.sh`,
-     `windows/`, `CONTRACT.md`, `REQUESTS.md`, `NOTES.md`): take as-is.
+     `windows/`, `CONTRACT.md`, `REQUESTS.md`, `env/README.md`): take as-is.
    - Docs: take the seed's `README.md`, `AGENTS.md`, `MANUAL.md`, `NOTES.md`,
      then append any inside-only knowledge from the old docs (cluster names,
      runner quirks, site procedures) under a "Site notes" heading in the
      matching file. Do not drop inside knowledge because the seed lacks it.
-4. **Apply every R-edit below**, in order, one commit each.
+4. **Apply every R-edit below except R1**, in order, one commit each.
 5. **Publish and pin:** `scripts/push-gitlab-packages.sh` from the transfer
-   folder (inner `MANUAL.md` §1), then R1.
-6. **Verify**, stopping at the first failure: CI `assemble` and `smoke` pass;
-   a pod from the new image boots and `doctor` is green (a sudo *note* is
-   fine); on WSL, `wsl/update.sh` (or the transfer folder's `apply.sh`),
-   then `wsl/link.sh`, run clean, and opencode starts without a stall.
+   folder (inner `MANUAL.md` §1), then R1 (`STORE_RELEASE`).
+6. **Verify on the branch**, stopping at the first failure:
+   - CI: push `adopt-split`, then *Build > Pipelines > Run pipeline* on it
+     (the seed's CI runs on `main` and on pipelines started from the UI);
+     `assemble` and `smoke` pass (a sudo *note* in `doctor` is fine).
+   - Pod: a workspace from `workspace:<branch sha>-<variant>` boots and
+     `doctor` is green.
+   - WSL: `git -C ~/twentyx fetch && git -C ~/twentyx switch adopt-split`,
+     then `wsl/update.sh` (or the transfer folder's `apply.sh`) and
+     `wsl/link.sh` run clean, and opencode starts without a stall.
 7. **Close the inventory:** every commit is marked *re-applied*, *moved to
-   REQUESTS.md*, or *obsolete because …*. Then merge to `main`.
+   REQUESTS.md*, or *obsolete because …*. Then merge to `main` (and switch
+   WSL clones back to `main`).
 8. **From now on:** inside never edits Nix; binaries and system changes go
    in `REQUESTS.md`, carried out by hand.
 
 ## Every later shipment
 
-Publish and pin as in steps 5–6 above, apply the new R-edits, and skip the
-inventory unless an entry asks for one.
+Publish and pin as in step 5 above, apply the new R-edits, verify as in
+step 6 (on `main`), and skip the inventory unless an entry asks for one.
 
 ---
 
@@ -155,8 +169,8 @@ set -g extended-keys-format csi-u
 
 Keep any other inside tmux edits. *Verify:* in a pane, `cat -v` then Shift+Enter shows
 `^[[13;2u`, and C-a, Enter and Tab behave as before. If Shift+Enter still submits under
-WezTerm on Windows, add one WezTerm binding that sends `\x1b[13;2u` for Shift+Enter (the kit's
-`wezterm.lua` is outside-owned; ask through `REQUESTS.md`).
+WezTerm on Windows, add one binding to `windows/wezterm.lua` (inside-owned since R6) that sends
+`\x1b[13;2u` for Shift+Enter.
 
 The kit's `wezterm.lua` changed with it: OpenGL front end, 60 fps (was WebGpu/144),
 Alt+Enter no longer toggles fullscreen, and the kitty-keyboard line is gone (tmux in between
@@ -337,7 +351,7 @@ inside `doctor` change turns an environmental check back into a failure.
 - **Two repos.** The outside keeps `flake.nix`, `nix/`, `scripts/transfer.sh`,
   `scripts/pod-tar.sh`, `install/` (`SETUP.ps1`, `UNPACK.ps1`, `apply.sh`), `tests/` and
   `base.rev`. Everything else is the inner repo's, in the layout of `inside-seed.tar`.
-  `CONTRACT.md` (identical in both) is the interface.
+  `CONTRACT.md` (the inner repo's; the outside reads it as `inside-seed/CONTRACT.md`) is the interface.
 - **`wsl/update.sh`** (new): fetches the pinned `STORE_RELEASE`'s `MANIFEST.txt`, `apply.sh`
   and `wsl-<KIND>.nar` from this project's package registry and runs `apply.sh` under sudo. The
   registry is derived from `git remote get-url origin`; `GITLAB_URL`/`GITLAB_PROJECT` override,
@@ -345,11 +359,16 @@ inside `doctor` change turns an environmental check back into a failure.
   `setup-wsl.sh`.
 - **`REQUESTS.md`** (new): the outbound channel. One line per binary, closure or WSL system
   change wanted.
-- **Two outside builds read the seed:** the LazyVim sandbox check builds against
+- **Two outside builds read the seed:** the LazyVim sandbox check (a flake check, not part of the
+  closure, so mirroring an nvim edit never changes a release) runs against
   `inside-seed/dotfiles/.config/nvim`, and the Windows kit's first-install client configs are
   `inside-seed/windows/*`. So a LazyVim plugin or extra the inside wants is a `REQUESTS.md` line
   (the plugin tree is closure), and the kit's configs are refreshed from inside by the owner.
-- **The transfer carries this file and `inside-seed.tar` every time.**
+- **The transfer carries this file and `inside-seed.tar` every time.** The tar unpacks into an
+  `inside-seed/` folder, so extracting it in the repo root cannot overwrite inside files.
+- **CI** (part of R3's structure): `assemble` and `smoke` also run on pipelines started from the UI,
+  so a branch can be verified before merging; `smoke` pulls its image from `$IMAGE_REGISTRY`, the
+  registry `assemble` pushed to.
 
 ### Inside files
 
@@ -359,9 +378,9 @@ procedure above.
 
 ### Required edits
 
-**R12. Adopt `wsl/update.sh`.** Take it as-is. If the inside clones over SSH or through a
-proxy, check that the derived registry URL is right (`bash -x wsl/update.sh` prints it) or set
-`GITLAB_URL`/`GITLAB_PROJECT` in the user's environment. *Verify:* on WSL, after R1,
+**R12. Adopt `wsl/update.sh`.** Take it as-is. Its first line names the registry it derived
+from `origin` (`release <id> from <url>, project <path>`); if that is wrong (an SSH host that is
+not the web host, a proxy), set `GITLAB_URL` and/or `GITLAB_PROJECT` in the user's environment. *Verify:* on WSL, after R1,
 `~/twentyx/wsl/update.sh` either prints `already at <release>` or imports and switches.
 
 **R13. Docs.** Take the seed's `README.md`, `AGENTS.md`, `MANUAL.md`, `NOTES.md` and
@@ -376,9 +395,8 @@ keep `!dotfiles/.config/opencode/node_modules/`. *Verify:*
 ### Likely overlaps
 
 - **pip / uv config.** The inside already translated the index config into a `uv.toml`; that
-  wins. The outside does not wire `pip.conf` on WSL (`wsl/link.sh` only stages it to
-  `/var/lib/airgap-env/`). Keep the inside's mechanism, and drop the seed's `pip.conf` lines from
-  `wsl/link.sh` if the inside no longer ships one.
+  wins, nothing to change. The outside does not wire `pip.conf` on WSL (`wsl/link.sh` stages one
+  to `/var/lib/airgap-env/` only if `env/pip.conf` exists).
 - Inside edits to `scripts/windows/SETUP.ps1`/`UNPACK.ps1`: outside-owned now (`install/`).
   Write each one's intent into `REQUESTS.md`.
 - Inside edits to the nvim spec that add plugins or extras: they need the plugin in the

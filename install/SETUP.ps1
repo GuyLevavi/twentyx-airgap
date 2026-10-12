@@ -22,7 +22,8 @@
 #
 # Missing files are fetched from the inner project's GitLab generic package
 # registry when -GitlabUrl/-GitlabProject are set (the project is public; a
-# token only for a private mirror). The layout is CONTRACT.md's:
+# token only for a private mirror). The layout is the contract's
+# (inside-seed/CONTRACT.md):
 #   twentyx-store/<RELEASE>/       MANIFEST.txt, apply.sh, wsl-<KIND>.nar
 #   twentyx-store/<BASE_RELEASE>/  nixos-wsl.tar.gz, windows-kit-*.tar.gz
 # -Release defaults to the RELEASE= line of MANIFEST.txt in -Base; the inner

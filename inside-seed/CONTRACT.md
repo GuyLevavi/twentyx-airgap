@@ -1,8 +1,9 @@
 # Contract between the outside and the inside repo
 
-The only interface between the two repos, kept identical in both repos
-(and in the outside's `inside-seed/`). Changing anything below is the only
-kind of change that needs both sides; everything else is one repo's business.
+The only interface between the two repos. It lives in the inner repo; the
+outside reads the same file as `inside-seed/CONTRACT.md`. Changing anything
+below is the only kind of change that needs both sides; everything else is
+one repo's business.
 
 - **Outside** (connected; the owner only): `flake.nix`, `nix/`, the transfer,
   the WSL installer. Produces the artifacts below.
@@ -36,6 +37,8 @@ edits (`HANDOVER.md`).
 | `nixos-wsl.tar.gz` | rootfs of the base system (full only) | `wsl --import` |
 | `windows-kit-<zed version>.tar.gz` | Windows installers, Zed themes/extensions, first-install client configs (full only) | `UNPACK.ps1` |
 | `SETUP.ps1`, `UNPACK.ps1` | the Windows installer (full only) | Windows |
+| `HANDOVER.md` | required edits to the inner repo, with the adoption procedure | the inside agents |
+| `inside-seed.tar` | the inner repo as the outside knows it (`inside-seed/` prefix); a reference, never extracted over inside content | the inside agents |
 
 `MANIFEST.txt` keys, `KEY=value` one per line, `#` comments:
 `RELEASE`, `BASE_RELEASE`, `KIND` (`full`|`delta`), `WSL_SYSTEM`,

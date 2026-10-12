@@ -14,7 +14,7 @@ changes only together with it.
 - **Config lives here, nowhere else.** Linux-side config goes in `dotfiles/`
   at its `$HOME`-relative path; Windows client config in `windows/`.
   Machine-local overrides use each tool's include (fish `conf.d/local.fish`,
-  `~/.gitconfig`, tmux `source-file -q`), never an edit to a shared file.
+  `~/.gitconfig`), never an edit to a shared file.
 - **Point at stable paths:** `/opt/twentyx/profile/bin/<tool>` and
   `/opt/twentyx/home-defaults/...`. Never a `/nix/store` path in a config:
   it goes stale with the next release.

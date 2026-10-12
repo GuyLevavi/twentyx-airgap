@@ -236,7 +236,7 @@ in
   # Inbound: the Zed client on Windows connects over plain SSH to this machine
   # (WSL2 forwards localhost, so Windows clients just use localhost).
   # Outbound: the runai CLI (uv tool install runai) drives `runai exec`, which
-  # is what scripts/ssh-bridge.sh tunnels sshd -i through.
+  # is what the inner repo's wsl/ssh-bridge.sh tunnels sshd -i through.
   services.openssh = {
     enable = true;
     settings.PasswordAuthentication = false;
