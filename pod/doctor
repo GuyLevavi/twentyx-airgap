@@ -53,8 +53,10 @@ if [ -z "$missing" ]; then ok "defaults are linked"; else bad "missing:$missing 
 say "sudo"
 if [ "$(stat -c %a "$ROOT/bin/sudo" 2>/dev/null)" = 4555 ]; then ok "setuid sudo present"; else bad "no setuid $ROOT/bin/sudo"; fi
 # NOPASSWD for gid 0 comes from the repo layer's /etc/sudoers; a failure with
-# both present usually means no-new-privileges blocks the setuid bit.
-if sudo -n true 2>/dev/null; then ok "sudo: passwordless for gid 0"; else bad "sudo unusable (sudoers missing, or no-new-privileges)"; fi
+# both present usually means no-new-privileges blocks the setuid bit. Only a
+# note: nothing needs sudo to work (the entrypoint's CA refresh just warns),
+# and CI runners have none.
+if sudo -n true 2>/dev/null; then ok "sudo: passwordless for gid 0"; else note "sudo unusable here (no-new-privileges, or not gid 0) -- the CA refresh is skipped"; fi
 
 say "agent preload"
 kv LD_PRELOAD "${LD_PRELOAD:-unset}"

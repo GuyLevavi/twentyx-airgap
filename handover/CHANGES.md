@@ -259,10 +259,10 @@ starts without an npm stall.
 - `scripts/push-artifactory.sh` and `VERSION` are deleted. If the inside still uses Artifactory,
   see R4.
 
-**R11. Smoke runner.** `doctor` now exits 1 when a check fails, and `smoke` runs it. If the runner
-pod blocks setuid (no-new-privileges) or runs outside gid 0, the sudo check fails for
-environmental reasons: fix the runner, or, if that is not possible, drop `doctor` from `smoke`
-and note why.
+**R11. Smoke runner.** `doctor` now exits 1 when a check fails, and `smoke` runs it. CI runners are
+assumed to have no working sudo, so `sudo -n true` failing is only a note; the setuid bit on
+`/opt/twentyx/bin/sudo` is still checked (a file-mode fact of the layer). Nothing to do unless an
+inside `doctor` change turns an environmental check back into a failure.
 
 ### Likely overlaps
 

@@ -39,7 +39,8 @@ assemble:
 
 # ---------------------------------------------------------------------------
 # The image this commit just built IS the job image: doctor checks the closure,
-# sudo and the boot chain, and shellcheck (from the closure) lints the scripts.
+# the setuid sudo, $HOME links and the boot chain (a runner without working sudo
+# is only a note), and shellcheck (from the closure) lints the scripts.
 # No Docker Hub image needed.
 smoke:
   stage: smoke
