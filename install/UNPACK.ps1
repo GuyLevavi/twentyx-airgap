@@ -1,6 +1,9 @@
-# UNPACK.ps1 -- one-shot unpacking of the Windows side of the transfer.
+# UNPACK.ps1 -- the Windows side of a twentyx install: installers and client
+# configs.
 #
-#   powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1 [-Base <dir>] [-Force] [-SkipVSCode]
+#   powershell -ExecutionPolicy Bypass -File C:\twentyx\UNPACK.ps1
+#       [-Base <dir>] [-Force] [-SkipVSCode] [-ConfigOnly] [-ConfigDir <dir>]
+#       [-Distro twentyx] [-User jensen]
 #
 # What it does (idempotent; a personal file is never overwritten unless -Force):
 #   1. extracts windows-kit-*.tar.gz (found in -Base only, no recursion) into
@@ -9,13 +12,17 @@
 #   2. copies the Zed themes into %APPDATA%\Zed\themes and extracts the
 #      vendored Zed extensions into %LOCALAPPDATA%\Zed\extensions\installed
 #      (Zed rebuilds index.json from there at startup)
-#   3. installs zed-client-settings.json / wezterm.lua when absent; when a
-#      real file exists it writes a *.example next to it and says so; installs
-#      WezTerm silently when no local install exists
-#   4. VS Code: installs vscode\VSCodeSetup-x64-*.exe silently when no local
-#      install exists; installs vscode\vscode-settings.json into
-#      %APPDATA%\Code\User\settings.json (or a settings.example.json beside
-#      an existing one). -SkipVSCode skips both.
+#   3. installs WezTerm and VS Code silently when no local install exists
+#      (-SkipVSCode skips VS Code)
+#   4. installs the client configs -- .wezterm.lua, Zed settings.json, VS Code
+#      settings.json -- when absent; when a real file exists it writes a
+#      *.example next to it and says so
+#
+# The configs are versioned in the inner repo's windows\ folder. Their source,
+# first hit wins: -ConfigDir; the clone in the distro
+# (\\wsl.localhost\<Distro>\home\<User>\twentyx\windows); the kit's copies,
+# which are only first-install defaults. After a `git pull` that touches
+# windows\, re-run with -ConfigOnly (and -Force to replace your files).
 #
 # It does NOT touch nixos-wsl.tar.gz (wsl --import consumes it) and never
 # opens the layer tarballs (crane/CI consume those). The Linux side is
@@ -24,130 +31,112 @@
 param(
     [string]$Base = $PSScriptRoot,
     [switch]$Force,
-    [switch]$SkipVSCode
+    [switch]$SkipVSCode,
+    [switch]$ConfigOnly,
+    [string]$ConfigDir = "",
+    [string]$Distro = "twentyx",
+    [string]$User = "jensen"
 )
 $ErrorActionPreference = "Stop"
 
 function Say($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 
 Say "base: $Base"
-$kit = Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz" -File | Select-Object -First 1
-if (-not $kit) {
-    $hint = if (Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz.7z" -File) { " (extract the .7z transport containers with 7-Zip first)" } else { "" }
-    throw "windows-kit-*.tar.gz not found in $Base$hint"
-}
-
 $kitRoot = Join-Path $Base "windows-kit"
-Say "extracting $($kit.Name) -> $kitRoot"
-tar -xzf $kit.FullName -C $Base
-if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)" }
-
-# -- Zed themes ------------------------------------------------------------
 $zedDir = Join-Path $env:APPDATA "Zed"
-$themesDst = Join-Path $zedDir "themes"
-New-Item -ItemType Directory -Force -Path $themesDst | Out-Null
-Say "Zed themes -> $themesDst"
-Copy-Item -Force (Join-Path $kitRoot "themes\*.json") $themesDst
 
-# -- Zed extensions: installed\ is the source of truth ---------------------
-# The remote server has no built-in adapters for nixd/tombi; the client
-# uploads installed extensions to it on connect. Zed rebuilds index.json from
-# installed\ at startup, so a stale index would only get in the way.
-$extSrc = Join-Path $kitRoot "zed-extensions"
-if (Test-Path $extSrc) {
-    $extDst = Join-Path $zedDir "extensions\installed"
-    New-Item -ItemType Directory -Force -Path $extDst | Out-Null
-    Get-ChildItem -Path $extSrc -Filter "*.tar.gz" -File | ForEach-Object {
-        $id = $_.Name -replace '\.tar\.gz$',''
-        $dst = Join-Path $extDst $id
-        New-Item -ItemType Directory -Force -Path $dst | Out-Null
-        tar -xzf $_.FullName -C $dst
-        if ($LASTEXITCODE -ne 0) { throw "tar failed for $($_.Name) ($LASTEXITCODE)" }
+if (-not $ConfigOnly) {
+    $kit = Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz" -File | Select-Object -First 1
+    if (-not $kit) {
+        $hint = if (Get-ChildItem -Path $Base -Filter "windows-kit-*.tar.gz.7z" -File) { " (extract the .7z transport containers with 7-Zip first)" } else { "" }
+        throw "windows-kit-*.tar.gz not found in $Base$hint"
     }
-    Remove-Item -Force (Join-Path $zedDir "extensions\index.json") -ErrorAction SilentlyContinue
-    Say "Zed extensions -> $extDst"
-} else {
-    Say "zed-extensions not found in the kit -- extension install skipped"
-}
+    Say "extracting $($kit.Name) -> $kitRoot"
+    tar -xzf $kit.FullName -C $Base
+    if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)" }
 
-# -- Zed client settings: a real file wins ---------------------------------
-$settings = Join-Path $zedDir "settings.json"
-$settingsSrc = Join-Path $kitRoot "zed-client-settings.json"
-if ((Test-Path $settings) -and -not $Force) {
-    $example = Join-Path $zedDir "zed-client-settings.example.json"
-    Copy-Item -Force $settingsSrc $example
-    Say "settings.json already exists -- wrote $example"
-    Say "  merge from it: auto_update, telemetry, agent.terminal_init_command"
-} else {
-    Copy-Item -Force $settingsSrc $settings
-    Say "Zed settings installed -> $settings"
-}
+    # -- Zed themes --------------------------------------------------------
+    $themesDst = Join-Path $zedDir "themes"
+    New-Item -ItemType Directory -Force -Path $themesDst | Out-Null
+    Say "Zed themes -> $themesDst"
+    Copy-Item -Force (Join-Path $kitRoot "themes\*.json") $themesDst
 
-# -- WezTerm ---------------------------------------------------------------
-$wez = Join-Path $env:USERPROFILE ".wezterm.lua"
-$wezSrc = Join-Path $kitRoot "wezterm.lua"
-if ((Test-Path $wez) -and -not $Force) {
-    Copy-Item -Force $wezSrc "$wez.example"
-    Say ".wezterm.lua already exists -- wrote $wez.example"
-    Say "  make sure it has: front_end = \"OpenGL\", max_fps = 60, and Alt+Enter freed (see the example)"
-} else {
-    Copy-Item -Force $wezSrc $wez
-    Say "WezTerm config installed -> $wez"
-}
-$wezExe = Join-Path $env:ProgramFiles "WezTerm\wezterm-gui.exe"
-$wezSetup = Get-ChildItem -Path $kitRoot -Filter "WezTerm-*-setup.exe" -File | Select-Object -First 1
-if (Test-Path $wezExe) {
-    Say "WezTerm already installed -- installer skipped"
-} elseif ($wezSetup) {
-    Say "installing WezTerm (silent): $($wezSetup.Name)"
-    Start-Process -FilePath $wezSetup.FullName `
-        -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
-} else {
-    Say "WezTerm installer not found in the kit -- install skipped"
-}
-
-# -- VS Code ---------------------------------------------------------------
-if ($SkipVSCode) {
-    Say "VS Code: skipped (-SkipVSCode)"
-} else {
-    $vscodeDir = Join-Path $kitRoot "vscode"
-    $codeUser = Join-Path $env:APPDATA "Code\User"
-    $codeSettings = Join-Path $codeUser "settings.json"
-    $codeSrc = Join-Path $vscodeDir "vscode-settings.json"
-
-    if (Test-Path $codeSrc) {
-        New-Item -ItemType Directory -Force -Path $codeUser | Out-Null
-        if ((Test-Path $codeSettings) -and -not $Force) {
-            $codeExample = Join-Path $codeUser "settings.example.json"
-            Copy-Item -Force $codeSrc $codeExample
-            Say "VS Code settings.json already exists -- wrote $codeExample"
-        } else {
-            Copy-Item -Force $codeSrc $codeSettings
-            Say "VS Code settings installed -> $codeSettings"
+    # -- Zed extensions: installed\ is the source of truth -----------------
+    # The remote server has no built-in adapters for nixd/tombi; the client
+    # uploads installed extensions to it on connect. Zed rebuilds index.json
+    # from installed\ at startup, so a stale index would only get in the way.
+    $extSrc = Join-Path $kitRoot "zed-extensions"
+    if (Test-Path $extSrc) {
+        $extDst = Join-Path $zedDir "extensions\installed"
+        New-Item -ItemType Directory -Force -Path $extDst | Out-Null
+        Get-ChildItem -Path $extSrc -Filter "*.tar.gz" -File | ForEach-Object {
+            $id = $_.Name -replace '\.tar\.gz$',''
+            $dst = Join-Path $extDst $id
+            New-Item -ItemType Directory -Force -Path $dst | Out-Null
+            tar -xzf $_.FullName -C $dst
+            if ($LASTEXITCODE -ne 0) { throw "tar failed for $($_.Name) ($LASTEXITCODE)" }
         }
+        Remove-Item -Force (Join-Path $zedDir "extensions\index.json") -ErrorAction SilentlyContinue
+        Say "Zed extensions -> $extDst"
     } else {
-        Say "vscode\vscode-settings.json not found in the kit -- VS Code settings skipped"
+        Say "zed-extensions not found in the kit -- extension install skipped"
     }
 
-    $codeExe1 = "C:\Program Files\Microsoft VS Code\Code.exe"
-    $codeExe2 = Join-Path $env:LOCALAPPDATA "Programs\Microsoft VS Code\Code.exe"
-    $installed = (Test-Path $codeExe1) -or (Test-Path $codeExe2)
-    $installer = $null
-    if (Test-Path $vscodeDir) {
-        $installer = Get-ChildItem -Path $vscodeDir -Filter "VSCodeSetup-x64-*.exe" -File | Select-Object -First 1
+    # -- installers --------------------------------------------------------
+    function Install-Silent([string]$What, [string]$Exe, $Setup, [string[]]$SetupArgs) {
+        if (Test-Path $Exe) {
+            Say "$What already installed -- installer skipped (updates are off inside the gap)"
+        } elseif ($Setup) {
+            Say "installing $What (silent): $($Setup.Name)"
+            Start-Process -FilePath $Setup.FullName -ArgumentList $SetupArgs -Wait
+        } else {
+            Say "$What installer not found in the kit -- install skipped"
+        }
     }
-    if ($installed) {
-        Say "VS Code already installed -- installer skipped (updates are off inside the gap)"
-    } elseif ($installer) {
-        Say "installing VS Code (silent): $($installer.Name)"
-        Start-Process -FilePath $installer.FullName `
-            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/MERGETASKS=!runcode' -Wait
+    $silent = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+    Install-Silent "WezTerm" (Join-Path $env:ProgramFiles "WezTerm\wezterm-gui.exe") `
+        (Get-ChildItem -Path $kitRoot -Filter "WezTerm-*-setup.exe" -File | Select-Object -First 1) $silent
+    if (-not $SkipVSCode) {
+        $codeExe = "C:\Program Files\Microsoft VS Code\Code.exe"
+        if (-not (Test-Path $codeExe)) { $codeExe = Join-Path $env:LOCALAPPDATA "Programs\Microsoft VS Code\Code.exe" }
+        Install-Silent "VS Code" $codeExe `
+            (Get-ChildItem -Path (Join-Path $kitRoot "vscode") -Filter "VSCodeSetup-x64-*.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1) `
+            ($silent + '/MERGETASKS=!runcode')
+    }
+}
+
+# -- client configs: the inner repo's windows\ wins ------------------------
+if (-not $ConfigDir) {
+    $clone = "\\wsl.localhost\$Distro\home\$User\twentyx\windows"
+    if (Test-Path $clone) { $ConfigDir = $clone }
+}
+# Config source for one file: the config dir (flat), else its place in the kit.
+function Get-ConfigSrc([string]$Name, [string]$KitRel) {
+    if ($ConfigDir) { return (Join-Path $ConfigDir $Name) }
+    return (Join-Path $kitRoot $KitRel)
+}
+if ($ConfigDir) { Say "configs from $ConfigDir" } else { Say "configs from the kit (first-install defaults)" }
+
+# A real file is yours: write <Example> beside it instead, unless -Force.
+function Install-Config([string]$Src, [string]$Dst, [string]$Example) {
+    if (-not (Test-Path $Src)) { Say "$Src not found -- skipped"; return }
+    New-Item -ItemType Directory -Force -Path (Split-Path $Dst) | Out-Null
+    if ((Test-Path $Dst) -and -not $Force) {
+        Copy-Item -Force $Src $Example
+        Say "$Dst exists -- wrote $Example to merge from (or re-run with -Force)"
     } else {
-        Say "VS Code installer not found in the kit -- install skipped"
+        Copy-Item -Force $Src $Dst
+        Say "installed $Dst"
     }
+}
+Install-Config (Get-ConfigSrc "wezterm.lua" "wezterm.lua") `
+    (Join-Path $env:USERPROFILE ".wezterm.lua") (Join-Path $env:USERPROFILE ".wezterm.lua.example")
+Install-Config (Get-ConfigSrc "zed-client-settings.json" "zed-client-settings.json") `
+    (Join-Path $zedDir "settings.json") (Join-Path $zedDir "zed-client-settings.example.json")
+if (-not $SkipVSCode) {
+    $codeUser = Join-Path $env:APPDATA "Code\User"
+    Install-Config (Get-ConfigSrc "vscode-settings.json" "vscode\vscode-settings.json") `
+        (Join-Path $codeUser "settings.json") (Join-Path $codeUser "settings.example.json")
 }
 
 Say "done."
-Say "next: run the one-shot importer (imports the distro + runs the Linux side):"
-Say "  powershell -ExecutionPolicy Bypass -File $Base\SETUP.ps1"
-Say "VS Code extensions are seeded inside the distro (vscode-extensions service)."

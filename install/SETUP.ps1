@@ -11,13 +11,14 @@
 # What it does (idempotent):
 #   1. imports nixos-wsl.tar.gz from -Base as a WSL2 distro named -Distro;
 #      when that distro is already registered the import is skipped
-#   2. runs UNPACK.ps1 from -Base (Windows side: kit, Zed themes/settings,
-#      WezTerm, VS Code) unless -SkipUnpack
-#   3. runs apply.sh as root in the distro: the store release in -Base
+#   2. runs apply.sh as root in the distro: the store release in -Base
 #      (MANIFEST.txt + wsl-delta.nar or wsl-full.nar) becomes the system
-#   4. with -GitlabUrl/-GitlabProject: clones (or pulls) the inner repo to
+#   3. with -GitlabUrl/-GitlabProject: clones (or pulls) the inner repo to
 #      ~/twentyx and runs its wsl/link.sh, which links the dotfiles into
 #      $HOME and stages the internal CA
+#   4. runs UNPACK.ps1 from -Base (Windows side: kit, WezTerm, Zed, VS Code)
+#      unless -SkipUnpack -- last, so the client configs come from the
+#      clone's windows\ folder when there is one
 #
 # Missing files are fetched from the inner project's GitLab generic package
 # registry when -GitlabUrl/-GitlabProject are set (the project is public; a
@@ -118,18 +119,7 @@ if ($registered -contains $Distro) {
     if ($LASTEXITCODE -ne 0) { throw "wsl --import failed ($LASTEXITCODE)" }
 }
 
-# -- 2. the Windows side ---------------------------------------------------
-if ($SkipUnpack) {
-    Say "UNPACK.ps1 skipped (-SkipUnpack)"
-} else {
-    Need $baseRelease (Get-ManifestValue "WINDOWS_KIT")
-    $unpack = Join-Path $Base "UNPACK.ps1"
-    if (-not (Test-Path $unpack)) { throw "missing $unpack" }
-    Say "running UNPACK.ps1 -Base $Base"
-    & $unpack -Base $Base
-}
-
-# -- 3. the store release --------------------------------------------------
+# -- 2. the store release --------------------------------------------------
 # NixOS-WSL automounts the Windows drives at /mnt/<drive>, so the mapping is
 # deterministic. wslpath needs a booted distro and its first boot prints to
 # stdout, which made the captured line unreliable.
@@ -141,7 +131,7 @@ Say "running apply.sh as root in '$Distro'"
 wsl -d $Distro -u root -- bash "$baseWsl/apply.sh" "$baseWsl"
 if ($LASTEXITCODE -ne 0) { throw "apply.sh failed ($LASTEXITCODE)" }
 
-# -- 4. the inner repo: config ---------------------------------------------
+# -- 3. the inner repo: config ---------------------------------------------
 # The clone at ~/twentyx is the live config tree: wsl/link.sh links its
 # dotfiles into $HOME, so edit, commit, push is the whole workflow. The first
 # clone cannot trust the internal CA yet (link.sh stages it from the clone's
@@ -173,6 +163,17 @@ if ($LASTEXITCODE -eq 0) {
     if ($LASTEXITCODE -ne 0) { throw "wsl/link.sh failed ($LASTEXITCODE)" }
 } else {
     Say "no $repoDir yet -- clone the inner repo there and run wsl/link.sh for the dotfiles"
+}
+
+# -- 4. the Windows side ---------------------------------------------------
+if ($SkipUnpack) {
+    Say "UNPACK.ps1 skipped (-SkipUnpack)"
+} else {
+    Need $baseRelease (Get-ManifestValue "WINDOWS_KIT")
+    $unpack = Join-Path $Base "UNPACK.ps1"
+    if (-not (Test-Path $unpack)) { throw "missing $unpack" }
+    Say "running UNPACK.ps1 -Base $Base"
+    & $unpack -Base $Base -Distro $Distro -User $User
 }
 
 # -- 5. what next ----------------------------------------------------------

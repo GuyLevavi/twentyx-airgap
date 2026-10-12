@@ -121,3 +121,37 @@ writes `.wezterm.lua.example` to merge by hand.
 - Inside edits to `docker/assemble.sh` (PATH, mutate flags, extra labels, registry auth):
   re-apply them onto the new file; the per-variant loop is in the same place.
 - Old packages under `twentyx-airgap/<VERSION>/` stay where they are. Nothing reads them after R1.
+
+---
+
+## Stage 1b: Windows client configs move inside
+
+### What and why
+
+The Windows client configs (`wezterm.lua`, `zed-client-settings.json`, `vscode-settings.json`)
+were versioned only outside and installed once, so edits made in the gap were tracked nowhere.
+They now live in the inner repo's `windows/` folder, flat:
+
+- `UNPACK.ps1` reads them from the clone (`\\wsl.localhost\<distro>\home\<user>\twentyx\windows`)
+  when it exists. The kit's copies are first-install defaults only.
+- `SETUP.ps1` now runs UNPACK last, after the clone, so a fresh install already takes the inner
+  repo's versions.
+- `UNPACK.ps1 -ConfigOnly [-Force]` re-applies them after a `git pull`. A real file is still
+  left alone (a `*.example` is written beside it) unless you pass `-Force`.
+
+### Inside files
+
+New `windows/` folder (in `inside-seed`).
+
+### Required edits
+
+**R6. Adopt `windows/`.** Take `inside-seed/windows/*` as-is. If anyone in the gap has a tuned
+`%USERPROFILE%\.wezterm.lua` or Zed/VS Code client settings worth sharing, merge them into these
+files in their own commit, keeping the kit's OpenGL / 60 fps / Alt+Enter settings unless a
+machine needs otherwise. *Verify:* on a Windows PC with the clone,
+`UNPACK.ps1 -ConfigOnly` prints `configs from \\wsl.localhost\...\twentyx\windows`.
+
+### Likely overlaps
+
+Windows config snippets kept in the inside docs (MANUAL, wiki pages): move them into
+`windows/` and replace the doc text with a pointer.

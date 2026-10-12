@@ -31,6 +31,7 @@ Most of the simplification then comes from deleting code.
 | D13 | **Fetch code follows the pin.** Every package lives in the internal GitLab registry, as today, under `twentyx-store/<RELEASE>/`. `apply.sh` reads local files only; the inner repo's `wsl/update.sh` downloads the pinned `STORE_RELEASE` and calls it. `SETUP.ps1` keeps its install-time fetch (outside repo, new package path). `push-gitlab-packages.sh` moves inside. |
 | D15 | **One shipment.** Stages 1–3 are local commits; the gap receives one transfer: a rebase (`pod-full` + `wsl-full` + the install set; the first `base.rev` must carry the new build attrs), `inside-seed.tar`, `HANDOVER.md`. |
 | D16 | **Handover as required edits.** Outside changes to inside-owned files (dotfiles, `.gitlab-ci.yml`) are numbered edits — intent, exact snippet, how to verify — applied on top of the inside version, which wins everywhere else. `handover/CHANGES.md` is appended with every stage commit, so nothing is reconstructed at the end. |
+| D17 | **Windows client configs live inside** (`windows/`: `wezterm.lua`, `zed-client-settings.json`, `vscode-settings.json`). `UNPACK.ps1` takes them from the clone (`\\wsl.localhost\<distro>\home\<user>\twentyx\windows`) when it exists; the kit's copies in `nix/packages/windows/` are first-install defaults only, refreshed from inside by hand. `UNPACK.ps1 -ConfigOnly` re-applies them after a `git pull`. |
 | D14 | **$HOME linking:** stow on WSL (`wsl/link.sh`), a shell loop in the pod entrypoint. |
 
 ## Verified facts (2026-10-13)
@@ -250,7 +251,8 @@ prints the PVC home; a pod from a new repo layer picks up a config change on the
 1. Create the outside repo layout (above) in this repo: move `install/`, keep `nix/`, `scripts/`,
    `tests/`, and add `CONTRACT.md` and `base.rev`.
 2. Produce `inside-seed/`, the tree the inner repo should end up with: `dotfiles/`, `pod/`, `wsl/`
-   (`link.sh`, `update.sh`, `ssh-bridge.sh`), `scripts/push-gitlab-packages.sh`, `env/` (empty
+   (`link.sh`, `update.sh`, `ssh-bridge.sh`), `windows/` (the Windows client configs, D17),
+   `scripts/push-gitlab-packages.sh`, `env/` (empty
    placeholders, never real certs), `.gitlab-ci.yml`, `CONTRACT.md`, `STORE_RELEASE`, `REQUESTS.md`
    (empty template), `AGENTS.md` (inside rules) and `MANUAL.md` (inside operations).
 3. **Inner `.gitlab-ci.yml`:**
