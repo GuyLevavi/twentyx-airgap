@@ -96,7 +96,9 @@ build_store() {
         APPEND+=(-f "$delta")
         envlayer="$delta"
     fi
-    crane append -b "$base" -t "$store" "${APPEND[@]}" >/dev/null
+    # Built under a scratch tag and moved to the real one only by the final
+    # mutate: a run that dies halfway must not leave a tag later runs reuse.
+    crane append -b "$base" -t "$store-partial" "${APPEND[@]}" >/dev/null
 
     basepath="$(base_path "$base")"
     if [ -z "$basepath" ]; then
@@ -107,7 +109,7 @@ build_store() {
     fi
     mapfile -t ENVARGS < <(session_env_args "$envlayer")
     [ "${#ENVARGS[@]}" -gt 0 ] || die "no session-env in $envlayer"
-    crane mutate "$store" -t "$store" \
+    crane mutate "$store-partial" -t "$store" \
         "${ENVARGS[@]}" \
         --env TOOLCHAIN_ROOT=/opt/twentyx \
         --env "PATH=/opt/twentyx/libexec:/opt/twentyx/bin:/opt/twentyx/profile/bin:${basepath}" \
@@ -135,9 +137,13 @@ for variant in $VARIANTS; do
     BASE_ENTRY="$(crane config "$base" 2>/dev/null \
         | jq -r '((.config.Entrypoint // []) + (.config.Cmd // [])) | join(" ")')"
 
+    # The repo layer's own facts are set with it: cache on local disk (the
+    # PVC is network-backed), podman's vfs storage.conf from the layer.
     crane append -b "$store" -t "$dest" -f "$LAYER_REPO" >/dev/null
     crane mutate "$dest" -t "$dest" \
         --env "BASE_ENTRYPOINT=${BASE_ENTRY}" \
+        --env XDG_CACHE_HOME=/tmp/twentyx-cache \
+        --env CONTAINERS_STORAGE_CONF=/opt/twentyx/etc/containers/storage.conf \
         --entrypoint /opt/twentyx/libexec/entrypoint \
         --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
         --label "twentyx.variant=${variant}" >/dev/null

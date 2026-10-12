@@ -10,3 +10,7 @@ node_modules/
 
 # An accidental drop at the root; the repo's copies live in env/.
 /ca-bundle.crt
+
+# opencode skips its startup npm install (a ~1.5 min stall offline) when this
+# directory exists beside a lock naming @opencode-ai/plugin; the .keep holds it.
+!dotfiles/.config/opencode/node_modules/

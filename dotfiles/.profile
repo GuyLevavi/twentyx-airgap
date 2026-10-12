@@ -1,3 +1,3 @@
-# ~/.profile -- seeded once from the repo; yours after that.
+# ~/.profile -- a link into the repo; edit it there and commit.
 # Login environment comes from /etc/profile on WSL and from
-# /opt/twentyx/etc/env.bash (sourced by .bashrc) in a pod.
+# /opt/twentyx/etc/session.env (sourced by .bashrc) in a pod.

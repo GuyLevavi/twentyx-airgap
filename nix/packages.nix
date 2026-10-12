@@ -125,6 +125,7 @@ let
     direnv
     tmux
     neovim
+    stow # link-home: dotfiles/ into $HOME, both targets
 
     inputs.workmux.packages.${pkgs.stdenv.hostPlatform.system}.default
   ]

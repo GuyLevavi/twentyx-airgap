@@ -15,31 +15,22 @@
 # everything opencode ran. Both halves are true at once, so split process from
 # children:
 #
-#   here                       neutralize LD_PRELOAD, stash the original
-#   agent/plugins/preload.ts   shell.env hook restores it for shell execution
-#   agent/restore-preload.sh   BASH_ENV restores it for non-interactive bash
+#   here                 neutralize LD_PRELOAD, stash the original
+#   preload.ts           opencode plugin (a dotfile): shell.env restores it
+#   restore-preload.sh   beside this script: BASH_ENV restores it for bash
 #
 # opencode runs clean. Children run exactly as an interactive shell does.
 set -euo pipefail
 
 TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT:-/opt/twentyx}"
-. "$TOOLCHAIN_ROOT/libexec/common.sh"
+warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-# HOME is only correct once a login shell has sourced the drop-ins. A payload
-# reached via `runai exec -- run-opencode` or a code-server task starts with
-# whatever the runtime set -- for an arbitrary UID that is HOME=/ -- and
-# opencode would then scatter its state into / instead of the PVC. Same
-# resolution as doctor; the two must agree by construction.
-RESOLVED_HOME="$(session_home)"
-if [ "$HOME" != "$RESOLVED_HOME" ]; then
-    mkdir -p "$RESOLVED_HOME" 2>/dev/null || true
-    export HOME="$RESOLVED_HOME"
-fi
-
-# Environment-provided assets (internal CA, pip.conf) -- same set bootstrap
-# writes into the shell drop-ins, so the agent's process tree trusts what an
-# interactive shell trusts.
-apply_injection_exports
+# What the entrypoint resolved: the PVC HOME and the injected CA/pip.conf.
+# `runai exec -- run-opencode` starts with HOME=/ and no CA; without this
+# opencode would scatter its state into / and distrust the internal endpoints.
+# shellcheck source=/dev/null
+[ ! -r "$TOOLCHAIN_ROOT/etc/session.env" ] || . "$TOOLCHAIN_ROOT/etc/session.env"
 
 # Byte-for-byte. The plugin and BASH_ENV script must reproduce this exactly,
 # never approximate it.
@@ -90,7 +81,7 @@ fi
 export SHELL="${AGENT_SHELL:-/bin/bash}"
 
 if [ -n "${PRELOAD_ORIGINAL:-}" ]; then
-    export BASH_ENV="$TOOLCHAIN_ROOT/agent/restore-preload.sh"
+    export BASH_ENV="$TOOLCHAIN_ROOT/libexec/restore-preload.sh"
 fi
 
 command -v opencode >/dev/null 2>&1 || die "opencode not found on PATH"

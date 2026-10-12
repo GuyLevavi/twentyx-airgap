@@ -41,6 +41,8 @@ command -v jq >/dev/null 2>&1 || die "jq not found -- run inside 'nix develop'"
 DIRTY=""
 if [ -n "$(git status --porcelain)" ]; then
     [ -n "${ALLOW_DIRTY:-}" ] || die "uncommitted changes -- commit first, or ALLOW_DIRTY=1"
+    # A base must be a commit: base.rev is rebuilt from it later.
+    [ -z "$REBASE" ] || die "--rebase needs a clean tree: base.rev names a commit"
     DIRTY="-dirty"
 fi
 
@@ -98,18 +100,15 @@ say "pod-$KIND.tar.gz: opt tree + $(wc -l < "$TMP/pod.ship") store paths"
 ./scripts/pod-tar.sh "$POD" "$TMP/pod.ship" "$BUILD/pod-$KIND.tar.gz"
 ARTIFACTS=("$BUILD/pod-$KIND.tar.gz")
 
-rm -f "$BUILD/wsl-$KIND.nar"
-if [ -s "$TMP/wsl.ship" ]; then
-    say "wsl-$KIND.nar: $(wc -l < "$TMP/wsl.ship") store paths"
-    # argv, not xargs: xargs may split the list into several exports, and
-    # concatenated exports import only up to the first end marker. A closure
-    # is ~1000 paths, far below ARG_MAX.
-    mapfile -t SHIP < "$TMP/wsl.ship"
-    nix-store --export "${SHIP[@]}" > "$BUILD/wsl-$KIND.nar"
-    ARTIFACTS+=("$BUILD/wsl-$KIND.nar")
-else
-    say "the WSL closure equals the base -- no NAR"
-fi
+# Always shipped, so a release is always the same set of files: with no new
+# paths it is an 8-byte export that imports as a no-op.
+say "wsl-$KIND.nar: $(wc -l < "$TMP/wsl.ship") store paths"
+# argv, not xargs: xargs may split the list into several exports, and
+# concatenated exports import only up to the first end marker. A closure
+# is ~1000 paths, far below ARG_MAX.
+mapfile -t SHIP < "$TMP/wsl.ship"
+nix-store --export "${SHIP[@]}" > "$BUILD/wsl-$KIND.nar"
+ARTIFACTS+=("$BUILD/wsl-$KIND.nar")
 
 # windows-kit-<zed version>.tar.gz; the Zed client must match the server in
 # the closure, so a kit change is a rebase.

@@ -1,7 +1,10 @@
-# ~/.bashrc -- seeded once from the repo; yours after that.
-# Runtime environment a pod generates at start (HOME relocation, XDG, caches,
-# injected CA/pip). Absent on WSL, where the system sets these.
-[ -r /opt/twentyx/etc/env.bash ] && . /opt/twentyx/etc/env.bash
+# ~/.bashrc -- a link into the repo; edit it there and commit. Machine-local
+# additions go in ~/.config/bashrc.d/*.sh (real files, never linked).
+# What a pod's entrypoint resolved (PVC HOME, injected CA/pip). Absent on WSL,
+# where the system sets these.
+[ -r /opt/twentyx/etc/session.env ] && . /opt/twentyx/etc/session.env
+for f in ~/.config/bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done
+unset f
 
 HISTFILESIZE=100000
 HISTSIZE=10000

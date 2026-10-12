@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Link the dotfiles tree into $HOME. The one linker, for both targets:
+#
+#   link-home <dotfiles-dir>
+#
+#   pod   the entrypoint runs /opt/twentyx/libexec/link-home /opt/twentyx/dotfiles
+#   WSL   wsl/link.sh runs <clone>/pod/link-home <clone>/dotfiles
+#
+# stow links every file (--no-folding keeps directories real, so tools can
+# add their own files beside ours) and prunes links to files that left the
+# tree. A real file in $HOME is yours and wins: stow is told to skip it, and
+# it is listed. Absolute links into the tree, /opt/twentyx or /nix/store are
+# the old seed-home's and are replaced.
+#
+# Packaged defaults need two links at most, with names that never change:
+# ~/.zed_server (Zed looks only there) and, in a pod, the code-server
+# extension. opencode.jsonc points at the skills and plugins by path.
+set -euo pipefail
+
+DOT="$(cd "${1:?usage: link-home <dotfiles-dir>}" && pwd)"
+DEFAULTS=/opt/twentyx/home-defaults
+say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+
+IGNORE=()
+while IFS= read -r rel; do
+    dst="$HOME/$rel"
+    if [ -L "$dst" ]; then
+        case "$(readlink "$dst")" in "$DOT"/* | /opt/twentyx/* | /nix/store/*) rm -f "$dst" ;; esac
+    elif [ -e "$dst" ]; then
+        say "keeping your file ~/$rel"
+        # stow matches --ignore against the path below the target, \z-anchored.
+        IGNORE+=("--ignore=^$(printf '%s' "$rel" | sed 's/[][\.*^$+?(){}|]/\\&/g')")
+    fi
+done < <(cd "$DOT" && find . -type f | sed 's|^\./||')
+stow -d "$(dirname "$DOT")" -t "$HOME" --no-folding -R "${IGNORE[@]}" "$(basename "$DOT")"
+
+# The seed-home era linked each default file by file into the store; those
+# links are dead weight now (and duplicate skills). Ours only, never a walk
+# over $HOME.
+for d in .zed_server .config/opencode/skills .config/opencode/plugins \
+    .local/share/code-server/extensions .local/share/vsix; do
+    [ ! -d "$HOME/$d" ] || [ -L "$HOME/$d" ] \
+        || find "$HOME/$d" -maxdepth 1 -lname '/nix/store/*' -delete 2>/dev/null || true
+done
+rmdir "$HOME/.zed_server" 2>/dev/null || true
+for rel in .zed_server .local/share/code-server/extensions/sst-dev.opencode; do
+    [ -e "$DEFAULTS/$rel" ] || continue
+    [ -e "$HOME/$rel" ] || [ -L "$HOME/$rel" ] && continue
+    mkdir -p "$(dirname "$HOME/$rel")"
+    ln -s "$DEFAULTS/$rel" "$HOME/$rel"
+done
+
+# Identity goes to a real ~/.gitconfig: git writes `--global` there whenever
+# it exists, never through the shared ~/.config/git/config link.
+[ -e "$HOME/.gitconfig" ] || : > "$HOME/.gitconfig"

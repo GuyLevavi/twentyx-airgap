@@ -32,7 +32,7 @@ Most of the simplification then comes from deleting code.
 | D15 | **One shipment.** Stages 1–3 are local commits; the gap receives one transfer: a rebase (`pod-full` + `wsl-full` + the install set; the first `base.rev` must carry the new build attrs), `inside-seed.tar`, `HANDOVER.md`. |
 | D16 | **Handover as required edits.** Outside changes to inside-owned files (dotfiles, `.gitlab-ci.yml`) are numbered edits — intent, exact snippet, how to verify — applied on top of the inside version, which wins everywhere else. `handover/CHANGES.md` is appended with every stage commit, so nothing is reconstructed at the end. |
 | D17 | **Windows client configs live inside** (`windows/`: `wezterm.lua`, `zed-client-settings.json`, `vscode-settings.json`). `UNPACK.ps1` takes them from the clone (`\\wsl.localhost\<distro>\home\<user>\twentyx\windows`) when it exists; the kit's copies in `nix/packages/windows/` are first-install defaults only, refreshed from inside by hand. `UNPACK.ps1 -ConfigOnly` re-applies them after a `git pull`. |
-| D14 | **$HOME linking:** stow on WSL (`wsl/link.sh`), a shell loop in the pod entrypoint. |
+| D14 | **$HOME linking: one linker, `pod/link-home` (stow + ~20 lines), on both targets.** The pod entrypoint runs it; on WSL `wsl/link.sh` does. Packaged defaults are not linked file by file: `opencode.jsonc` names the skills and plugin by their `/opt/twentyx/home-defaults` paths, and only `~/.zed_server` (+ the pod's code-server extension) is linked, once. *(Amended 2026-10-13: stow refuses absolute links into the store, which ruled out stowing the defaults.)* |
 
 ## Verified facts (2026-10-13)
 
@@ -155,6 +155,9 @@ file into the repo).
 
 ## Stage 1: cumulative per-target deltas against base.rev (outside)
 
+**Status: done** on branch `split` (2026-10-13). The as-built record is `handover/CHANGES.md`. `--install` was folded into
+`--rebase`, and the transfer script is `scripts/transfer.sh`.
+
 1. **Fold nvim, fix the closure roots.** One profile (`nvim = true`); drop `runai-layer-nvim`,
    the twin delta, `-nvim` flavors in `assemble.sh` and the CI loop, and the stub `nvimPlugins`
    in `profile.nix`. Root `closureInfo` at the session-env file as well, so every path
@@ -200,6 +203,10 @@ the WSL delta on the distro with networking off; and CI assembles a pod image fr
 whose `store-paths` are all present (`doctor`).
 
 ## Stage 2: links-only $HOME, small pod boot (paths that will move inside)
+
+**Status: done** on branch `split` (2026-10-13). D14 supersedes steps 1 and 2: one `pod/link-home` and no
+tmpfiles rules or link lists. The pod scripts live in `pod/` (`/opt/twentyx/libexec` in the image),
+and `wsl/` holds `link.sh` and `ssh-bridge.sh`. The as-built record is `handover/CHANGES.md`.
 
 1. **dotfiles on WSL:** add `stow` to the closure (perl is already there). `wsl/link.sh` runs
    `stow -d ~/twentyx -t ~ --no-folding dotfiles` and stows `/opt/twentyx/home-defaults` the same

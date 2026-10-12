@@ -67,14 +67,9 @@ a new `STORE_RELEASE` file, and the deletion of `scripts/setup-wsl.sh`,
 `RELEASE=` value of the shipped `MANIFEST.txt`, one line, no `RELEASE=` prefix.
 *Verify:* `cat STORE_RELEASE` matches the manifest's line.
 
-**R2. Publish under the new path.** In `scripts/push-gitlab-packages.sh`, set `PACKAGE=twentyx-store`
-and take the version from the transfer's manifest:
-
-```bash
-VERSION="${PACKAGE_VERSION:-$(sed -n 's/^RELEASE=//p' MANIFEST.txt)}"
-```
-
-Run it from the transfer folder with the unpacked files (never the `.7z`), including
+**R2. Publish under the new path.** `inside-seed` carries `scripts/push-gitlab-packages.sh` already
+switched to `twentyx-store/<RELEASE from MANIFEST.txt>`; take it as-is, then re-apply any inside
+auth or proxy tweaks. Run it from the transfer folder with the unpacked files (never the `.7z`), including
 `MANIFEST.txt` and `apply.sh`. *Verify:* the package page lists `twentyx-store/<RELEASE>/`
 with every file of the transfer.
 
@@ -155,3 +150,123 @@ machine needs otherwise. *Verify:* on a Windows PC with the clone,
 
 Windows config snippets kept in the inside docs (MANUAL, wiki pages): move them into
 `windows/` and replace the doc text with a pointer.
+
+---
+
+## Stage 2: one pod entrypoint, session.env, links-only $HOME
+
+### What and why
+
+- **Pod boot chain merged.** `pod/` replaces `libexec/` and `agent/` in the repo. In the image it
+  is still `/opt/twentyx/libexec/`, so the ENTRYPOINT, PATH and sudo targets don't change.
+  `entrypoint` absorbs `bootstrap`, `common.sh` and `seed-home`. What remains:
+  `entrypoint`, `run-opencode`, `restore-preload.sh`, `sshd-inetd`, `doctor`.
+- **One resolver, written down.** `runai exec` never passes through the entrypoint, and arrives
+  with `HOME=/` and no CA. So the entrypoint resolves identity, the PVC `HOME` and the injected
+  CA/pip once, and writes `/opt/twentyx/etc/session.env` as `export K="v"` lines (bash and fish
+  both parse them). These source it: `.bashrc`, `config.fish`, `/etc/profile.d/twentyx.sh`
+  (login shells), `run-opencode`, `sshd-inetd` and `doctor`. The generated `env.fish`/`env.bash`
+  and the duplicated `session_home()` resolution are gone.
+- **Identity rules.** `SESSION_USER`, then the hostname rule, then `USERNAME`. The git-email
+  rule is dropped: it read `$HOME`, which is the thing being resolved, so it could never fire.
+- **Static things are static.** `XDG_CACHE_HOME=/tmp/twentyx-cache` and
+  `CONTAINERS_STORAGE_CONF=/opt/twentyx/etc/containers/storage.conf` are image ENV, set by
+  `assemble.sh`. `storage.conf` (vfs) ships in the repo layer instead of being generated.
+- **Config moved into dotfiles.**
+  - `/etc/gitconfig` was duplicated in `wsl.nix` and `mklayer.sh`. It is now
+    `dotfiles/.config/git/config`, and the link scripts create an empty real `~/.gitconfig`, so
+    `git config --global` writes identity there and never through the link.
+  - The VS Code remote machine settings (LSP pins) are now
+    `dotfiles/.vscode-server/data/Machine/settings.json`.
+  - `preload.ts` is now `dotfiles/.config/opencode/plugins/preload.ts`. It is a no-op wherever
+    `PRELOAD_ORIGINAL` is unset.
+- **doctor**: 272 lines down to about 90. It covers session, closure, `$HOME` links, sudo,
+  preload, terminal and injection, and exits 1 when a check fails. CI's `smoke` job gates on it.
+  The LLM-endpoint, network-posture and GPU probes are gone.
+- **The repo layer no longer copies `env/`.** A pod takes its CA and pip config from the base
+  or from the injection mounts. On WSL, `wsl/link.sh` stages `env/`.
+- **`wsl/ssh-bridge.sh`** (was `scripts/ssh-bridge.sh`).
+- **One linker for both targets: `pod/link-home <dotfiles-dir>`.**
+  - It is stow (`--no-folding -R`, which also prunes links to removed files) plus about 20
+    lines: a real file in `$HOME` is skipped and listed; old absolute or store links from
+    `seed-home` are replaced; `~/.zed_server` and the pod's code-server extension are linked
+    once (their names never change); and `~/.gitconfig` is created empty.
+  - The pod entrypoint runs it from `/opt/twentyx/libexec`; on WSL, `wsl/link.sh` runs the
+    clone's copy and stages `env/`.
+- **Packaged defaults no longer live in `$HOME` file by file.** `opencode.jsonc` names the
+  vendored skills (`skills.paths`) and workmux's plugin (`plugin`) at their stable
+  `/opt/twentyx/home-defaults/...` paths. The npm-stall pair (`package-lock.json`,
+  `node_modules/.keep`) is plain dotfiles: opencode checks the dependency name, not the
+  version. A transfer updates all of it without touching `$HOME`.
+
+### Inside files
+
+`pod/*` (new home of `libexec/*` and `agent/restore-preload.sh`), `wsl/link.sh`,
+`wsl/ssh-bridge.sh`, `docker/mklayer.sh`, `docker/assemble.sh`, `.gitlab-ci.yml`,
+`dotfiles/.bashrc`, `dotfiles/.profile`, `dotfiles/.bash_profile`,
+`dotfiles/.config/fish/config.fish`, `dotfiles/.config/git/config`,
+`dotfiles/.vscode-server/...`, `dotfiles/.config/opencode/plugins/preload.ts`.
+
+### Required edits
+
+**R7. Shells source session.env.** Apply both on top of any inside rc edits:
+- In `dotfiles/.bashrc`, replace the `/opt/twentyx/etc/env.bash` line with:
+
+  ```bash
+  [ -r /opt/twentyx/etc/session.env ] && . /opt/twentyx/etc/session.env
+  for f in ~/.config/bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done
+  unset f
+  ```
+
+- In `dotfiles/.config/fish/config.fish`, replace the `env.fish` block with:
+
+  ```fish
+  if test -f /opt/twentyx/etc/session.env
+      source /opt/twentyx/etc/session.env
+  end
+  ```
+
+*Verify:* in a pod, `runai exec -it <ws> -- bash -lc 'echo $HOME'` prints the PVC home.
+
+**R8. git identity.** Add `dotfiles/.config/git/config`. If the inside edited `/etc/gitconfig`
+handling in `mklayer.sh`, move those settings into this file. Each user's identity stays in
+their own `~/.gitconfig`. *Verify:* `git config --global user.email x@y` writes `~/.gitconfig`
+and the repo stays clean.
+
+**R9. Pod script fixes.** For every inventory commit that touched `libexec/*` or `agent/*`,
+re-apply its intent in `pod/` by hand (one commit each, naming the original). Logic that lived
+in `common.sh`/`bootstrap`/`seed-home` now lives in `pod/entrypoint`.
+
+**R10. opencode.jsonc.** Keep the inside's provider/model block, and add the two keys from
+`inside-seed`:
+
+```jsonc
+"skills": { "paths": ["/opt/twentyx/home-defaults/.config/opencode/skills"] },
+"plugin": ["/opt/twentyx/home-defaults/.config/opencode/plugins/workmux-status.ts"],
+```
+
+If the inside already has a `plugin` list, append to it. Also take
+`dotfiles/.config/opencode/{package-lock.json,node_modules/.keep}` and the `.gitignore` line
+`!dotfiles/.config/opencode/node_modules/`. *Verify:* opencode lists the vendored skills, and
+starts without an npm stall.
+
+**Also fixed in this stage** (no inside action):
+- A WSL NAR is always shipped. With no new paths it is an 8-byte no-op import, so SETUP.ps1
+  never asks for a file that isn't there.
+- `--rebase` refuses a dirty tree.
+- `assemble.sh` builds the store image under a `-partial` tag, so a half-built image is never
+  reused.
+- `scripts/push-artifactory.sh` and `VERSION` are deleted. If the inside still uses Artifactory,
+  see R4.
+
+**R11. Smoke runner.** `doctor` now exits 1 when a check fails, and `smoke` runs it. If the runner
+pod blocks setuid (no-new-privileges) or runs outside gid 0, the sudo check fails for
+environmental reasons: fix the runner, or, if that is not possible, drop `doctor` from `smoke`
+and note why.
+
+### Likely overlaps
+
+- Inside tweaks to the generated env files (extra exports): add them to the `session.env` block
+  in `pod/entrypoint` if they depend on `HOME`; otherwise put them in the dotfiles.
+- Inside fixes to `seed-home`'s link logic: obsolete. `pod/link-home` replaces it, and it migrates the old
+  store links on first run.

@@ -2,9 +2,10 @@
 # Client side (WSL): bridge Zed/SSH to a RunAI workload that exposes no SSH
 # port. A local socat listener forwards each TCP connection into
 # `runai exec -i`, whose stdin/stdout IS the SSH protocol (sshd -i, server
-# side: libexec/sshd-inetd). Every connection gets its own exec.
+# side: pod/sshd-inetd, /opt/twentyx/libexec/sshd-inetd in the image).
+# Every connection gets its own exec.
 #
-#   ./scripts/ssh-bridge.sh <runai-workload> [port]        port default 2222
+#   ~/twentyx/wsl/ssh-bridge.sh <runai-workload> [port]    port default 2222
 #
 # Then point Zed (or ssh) at localhost:<port>. Windows clients reach the WSL
 # listener directly: WSL2 forwards localhost automatically.

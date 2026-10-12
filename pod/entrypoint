@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Pod entrypoint: resolve the session once, write it down, link $HOME, hand
+# over to the base image's own entrypoint.
+#
+#   ENTRYPOINT /opt/twentyx/libexec/entrypoint [cmd...]
+#
+# `runai exec` (a CRI exec) never passes through here: it gets image ENV and
+# HOME=/ for the arbitrary UID. So everything resolved here is written to
+# /opt/twentyx/etc/session.env, which shells (.bashrc, config.fish,
+# /etc/profile.d) and run-opencode, sshd-inetd and doctor source. One
+# resolver; nothing else re-derives HOME.
+set -euo pipefail
+
+ROOT=/opt/twentyx
+SESSION="$ROOT/etc/session.env"
+warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }
+
+# ── identity ──────────────────────────────────────────────────────────────
+# Every runtime user is uid 10001/gid 0, so the OS cannot say who you are.
+# The hostname is `<workspace>-<n>-<n>` and workspaces are named
+# `<user>-<whatever>`: strip the replica suffix, take the first component.
+# Wrong for dashed usernames and renamed workspaces -- SESSION_USER (set in
+# the workspace env) overrides, and doctor prints which rule fired.
+host="$(hostname 2>/dev/null || true)"
+stem="$(printf '%s' "$host" | sed -E 's/(-[0-9]+)+$//')"
+if [ -n "${SESSION_USER:-}" ]; then
+    user="$SESSION_USER" source=SESSION_USER
+elif [ -n "$stem" ] && [ "$stem" != "$host" ]; then
+    user="${stem%%-*}" source=hostname
+else
+    user="${USERNAME:-${USER:-jensen}}" source=fallback
+fi
+
+# ── durable $HOME on the PVC ──────────────────────────────────────────────
+# The pod's own home dies with it, and enumerating what to rescue always
+# misses a tool, so $HOME moves to the PVC wholesale. SESSION_HOME overrides.
+home="" durable=no
+if [ -n "${SESSION_HOME:-}" ]; then
+    home="$SESSION_HOME" durable=yes
+else
+    for base in /data /code; do
+        if [ -d "$base" ] && [ -w "$base" ]; then home="$base/$user" durable=yes; break; fi
+    done
+fi
+if [ -z "$home" ]; then
+    home="/tmp/twentyx-home-$user"
+    warn "no writable /data or /code -- this session is EPHEMERAL ($home)"
+fi
+mkdir -p "$home" /tmp/twentyx-cache
+# setgid keeps what is created here group 0, so a later pod under another
+# arbitrary UID can still write it.
+[ "$durable" = no ] || chmod g+rwxs "$home" 2>/dev/null || true
+
+# ── session.env ───────────────────────────────────────────────────────────
+# `export K="v"` parses in bash and fish alike. Environment-provided assets
+# (ConfigMap mount /opt/airgap-env, else the PVC's /data/.airgap-env) are
+# wired by file name; unknown files stay reachable at their path.
+inj=""
+for d in /opt/airgap-env /data/.airgap-env; do
+    if [ -d "$d" ]; then inj="$d"; break; fi
+done
+lines="$(
+    printf 'export %s="%s"\n' \
+        HOME "$home" SESSION_USER "$user" SESSION_USER_SOURCE "$source" \
+        SESSION_DURABLE "$durable" \
+        TORCH_HOME "$home/.local/share/torch" HF_HOME "$home/.local/share/huggingface"
+    if [ -n "$inj" ]; then
+        printf 'export ENV_INJECTION_DIR="%s"\n' "$inj"
+        [ ! -f "$inj/pip.conf" ] || printf 'export PIP_CONFIG_FILE="%s"\n' "$inj/pip.conf"
+        if [ -f "$inj/ca-bundle.crt" ]; then
+            for v in SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE GIT_SSL_CAINFO \
+                NIX_SSL_CERT_FILE NODE_EXTRA_CA_CERTS; do
+                printf 'export %s="%s"\n' "$v" "$inj/ca-bundle.crt"
+            done
+        fi
+    fi
+)"
+# Applied here first, so this process and everything it execs have it even
+# when the file cannot be written (a read-only /opt).
+eval "$lines"
+{ printf '%s\n' "$lines" > "$SESSION.tmp" && mv "$SESSION.tmp" "$SESSION"; } 2>/dev/null \
+    || warn "cannot write $SESSION -- runai exec sessions will not find the PVC home"
+
+# Teach the base's system openssl the CA too, for tools that ignore the env
+# vars. Best effort: needs sudo and a Debian-style update-ca-certificates.
+if [ -n "${SSL_CERT_FILE:-}" ] && sudo -n true 2>/dev/null; then
+    sudo install -Dm644 "$SSL_CERT_FILE" /usr/local/share/ca-certificates/airgap-env.crt 2>/dev/null \
+        && { sudo update-ca-certificates >/dev/null 2>&1 || true; }
+fi
+
+# ── passwd/group for the arbitrary UID ────────────────────────────────────
+# Without them: `groups: cannot find name for group id ...` on every shell,
+# and git/ssh/starship failing to resolve the user. Quiet when /etc is
+# read-only.
+uid="$(id -u)"
+if ! getent passwd "$uid" >/dev/null 2>&1 && [ -w /etc/passwd ]; then
+    printf '%s:x:%s:0:workspace user:%s:/bin/bash\n' "${USERNAME:-jensen}" "$uid" "$HOME" >> /etc/passwd
+fi
+if [ -w /etc/group ]; then
+    for g in $(id -G 2>/dev/null); do
+        getent group "$g" >/dev/null 2>&1 || printf 'workspace-%s:x:%s:\n' "$g" "$g" >> /etc/group
+    done
+fi
+
+# ── link $HOME ────────────────────────────────────────────────────────────
+# Dotfiles from the repo layer, plus ~/.zed_server and the code-server
+# extension. A failure here must not keep the workspace from starting.
+"$ROOT/libexec/link-home" "$ROOT/dotfiles" || warn "link-home failed -- $HOME links incomplete"
+
+# ── hand over ─────────────────────────────────────────────────────────────
+# With arguments (`podman run ... cmd`), run them. Without, run what the BASE
+# image would have: on the vscode-* bases that is the code-server launcher,
+# recorded by assemble.sh because replacing ENTRYPOINT is how we run at all.
+# Word-split on purpose: it is a command line from the image config.
+[ "$#" -eq 0 ] || exec "$@"
+# shellcheck disable=SC2086
+[ -z "${BASE_ENTRYPOINT:-}" ] || exec ${BASE_ENTRYPOINT}
+exec /bin/bash -l

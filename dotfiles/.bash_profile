@@ -1,3 +1,3 @@
-# ~/.bash_profile -- seeded once from the repo; yours after that.
+# ~/.bash_profile -- a link into the repo; edit it there and commit.
 [[ -f ~/.profile ]] && . ~/.profile
 [[ -f ~/.bashrc ]] && . ~/.bashrc

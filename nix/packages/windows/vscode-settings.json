@@ -10,11 +10,11 @@
 //   - schema downloads off: JSON/YAML validation must not stall on a fetch.
 //   - telemetry off: no phone-home attempts to time out against.
 //
-// The language-server PINS live in the remote machine settings, which the
-// WSL closure seeds at ~/.vscode-server/data/Machine/settings.json (ruff.path
-// and nix.serverPath point at the same closure binaries Zed and nvim use).
-// This file only carries client bits; extensions arrive from the kit's
-// vscode\vsix\ folder and are installed inside the distro by setup-wsl.sh.
+// The language-server PINS live in the remote machine settings, a dotfile
+// linked to ~/.vscode-server/data/Machine/settings.json in the distro
+// (ruff.path and nix.serverPath point at the same closure binaries Zed and
+// nvim use). This file only carries client bits; the extensions are seeded
+// inside the distro by its vscode-extensions service.
 {
   "update.mode": "none",
   "extensions.autoCheckUpdates": false,

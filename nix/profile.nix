@@ -46,19 +46,6 @@ let
     };
   };
 
-  # opencode's loader npm-installs @opencode-ai/plugin in every config dir at
-  # startup; with no registry that is a ~1.5 min TUI stall. It is skipped when
-  # node_modules exists and the dependency is a root dependency in the lock.
-  # ponytail: frozen at @opencode-ai/plugin; re-check when opencode bumps.
-  packageLock = pkgs.writeText "opencode-package-lock.json" (
-    builtins.toJSON {
-      name = "opencode";
-      lockfileVersion = 3;
-      requires = true;
-      packages."".dependencies."@opencode-ai/plugin" = pkgs.opencode.version;
-    }
-  );
-
   # The LazyVim plugin + parser tree; lazy.nvim resolves every spec here.
   nvimPlugins = import ./packages/nvim-plugins.nix { inherit lib pkgs; };
 
@@ -81,6 +68,24 @@ let
       path = "${skillsRoot}/${category}/${name}";
     }) (dirsIn "${skillsRoot}/${category}")
   ) (builtins.filter (category: !(builtins.elem category reject)) (dirsIn skillsRoot));
+  # Binary-coupled files under stable names; see homeDefaults below.
+  defaults = {
+    # Zed looks under ~/.zed_server for its client's exact full version string.
+    ".zed_server/zed-remote-server-stable-${zedClientVersion}" =
+      "${zedRemote}/bin/${zedRemoteExecName}";
+    # Same revision as the workmux binary; opencode.jsonc loads it by path.
+    ".config/opencode/plugins/workmux-status.ts" =
+      "${inputs.workmux}/resources/opencode/plugins/workmux-status.ts";
+  }
+  // lib.listToAttrs (
+    # opencode.jsonc lists this directory in skills.paths.
+    map (s: lib.nameValuePair ".config/opencode/skills/${s.name}" s.path) skillPaths
+  )
+  // lib.optionalAttrs (!wsl) {
+    # code-server exists in pods only.
+    ".local/share/code-server/extensions/sst-dev.opencode" = opencodeVscode;
+    ".local/share/vsix/sst-dev.opencode-0.0.13.vsix" = opencodeVscode.src;
+  };
 in
 {
   # A buildEnv of the whole package set. On WSL it is folded into the system
@@ -123,30 +128,10 @@ in
     LANG = "en_US.UTF-8";
   };
 
-  # A directory of store symlinks we own. seed-home refreshes these into $HOME
-  # on every start; a real file at the same path is the user's and is never
-  # touched.
-  homeDefaults = pkgs.runCommand "twentyx-home-defaults" { } ''
-    mkdir -p "$out/.zed_server"
-    ln -s ${zedRemote}/bin/${zedRemoteExecName} \
-      "$out/.zed_server/zed-remote-server-stable-${zedClientVersion}"
-
-    mkdir -p "$out/.config/opencode/plugins"
-    ln -s ${../agent/plugins/preload.ts} "$out/.config/opencode/plugins/preload.ts"
-    ln -s ${inputs.workmux}/resources/opencode/plugins/workmux-status.ts \
-      "$out/.config/opencode/plugins/workmux-status.ts"
-
-    mkdir -p "$out/.config/opencode/node_modules"
-    touch "$out/.config/opencode/node_modules/.keep"
-    cp ${packageLock} "$out/.config/opencode/package-lock.json"
-
-    mkdir -p "$out/.config/opencode/skills"
-    ${lib.concatMapStrings (s: ''
-      ln -s ${s.path} "$out/.config/opencode/skills/${s.name}"
-    '') skillPaths}
-
-    mkdir -p "$out/.local/share/code-server/extensions" "$out/.local/share/vsix"
-    ln -s ${opencodeVscode} "$out/.local/share/code-server/extensions/sst-dev.opencode"
-    ln -s ${opencodeVscode.src} "$out/.local/share/vsix/sst-dev.opencode-0.0.13.vsix"
-  '';
+  # Binary-coupled files that change only with the closure, under stable paths
+  # (/opt/twentyx/home-defaults/...). Nothing here is linked file by file:
+  # opencode.jsonc points at the skills and the workmux plugin, and link-home
+  # links ~/.zed_server (and the code-server extension in a pod) once -- the
+  # names never change, so a transfer never touches $HOME.
+  homeDefaults = pkgs.linkFarm "twentyx-home-defaults" defaults;
 }

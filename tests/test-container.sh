@@ -190,7 +190,7 @@ expect_grep "launcher: opencode survives the hostile preloader" "[0-9]*\.[0-9]*"
     run_ic -e LD_PRELOAD=/tmp/hostile.so -e PRELOAD_PATTERN=hostile \
         bash -c '/opt/twentyx/libexec/run-opencode --version'
 expect_ok "children: BASH_ENV restores the original preload" \
-    run_ic bash -c 'PRELOAD_ORIGINAL=/tmp/hostile.so BASH_ENV=/opt/twentyx/agent/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
+    run_ic bash -c 'PRELOAD_ORIGINAL=/tmp/hostile.so BASH_ENV=/opt/twentyx/libexec/restore-preload.sh /bin/bash -c "test \"\$LD_PRELOAD\" = /tmp/hostile.so"'
 
 say "bun-compiled agent binary (kernel<=6.6 layout)"
 # The first WSL session's `SIGSEGV (address bounding error)`: nixpkgs'
@@ -204,33 +204,34 @@ expect_ok "opencode PT_LOADs are address-ascending" \
         [ -n "$prev" ] && [ "$v" -lt "$prev" ] && exit 1; prev=$v;
     done'
 
-say "packaged defaults + dotfiles + env injection"
-# Defaults are ours: store symlinks, refreshed every start.
-expect_ok "opencode preload plugin linked from the store" \
-    run_ic bash -c 'test -L /data/jensen/.config/opencode/plugins/preload.ts'
-expect_ok "code-server opencode extension linked from the store" \
-    run_ic bash -c 'test -L /data/jensen/.local/share/code-server/extensions/sst-dev.opencode'
-# Dotfiles are ours: symlinks into the toolchain tree, so a text-layer update
-# renews them with no reseed.
-expect_ok "fish config linked into the toolchain tree" \
-    run_ic bash -c 'd=/data/jensen/.config/fish/config.fish; test -L "$d" && [ "$(readlink "$d")" = /opt/twentyx/dotfiles/.config/fish/config.fish ]'
-expect_ok "zed settings linked into the toolchain tree" \
-    run_ic bash -c 'd=/data/jensen/.config/zed/settings.json; test -L "$d" && [ "$(readlink "$d")" = /opt/twentyx/dotfiles/.config/zed/settings.json ]'
-# Migration: an unmodified real copy becomes a link, an edited one stays.
-expect_ok "unmodified real copy is adopted as a symlink" \
-    run_ic bash -c 'd=/data/jensen/.config/tmux/tmux.conf; rm -f "$d"; cp /opt/twentyx/dotfiles/.config/tmux/tmux.conf "$d"; /opt/twentyx/libexec/seed-home >/dev/null 2>&1; [ -L "$d" ]'
-expect_ok "edited real copy is left alone" \
-    run_ic bash -c 'd=/data/jensen/.config/btop/btop.conf; rm -f "$d"; { cat /opt/twentyx/dotfiles/.config/btop/btop.conf; echo "# mine"; } > "$d"; /opt/twentyx/libexec/seed-home >/dev/null 2>&1; [ -f "$d" ] && [ ! -L "$d" ]'
-expect_ok "zed agent_servers default seeded" \
+say "dotfiles + packaged defaults + env injection"
+# Dotfiles are stow links into the repo layer, so a new repo layer renews
+# them on the next start with no reseed.
+links_to() { printf 'd=/data/jensen/%s; test -L "$d" && [ "$(readlink -f "$d")" = /opt/twentyx/dotfiles/%s ]' "$1" "$1"; }
+expect_ok "fish config linked into the repo layer" \
+    run_ic bash -c "$(links_to .config/fish/config.fish)"
+expect_ok "zed settings linked into the repo layer" \
+    run_ic bash -c "$(links_to .config/zed/settings.json)"
+expect_ok "opencode preload plugin linked (a dotfile)" \
+    run_ic bash -c "$(links_to .config/opencode/plugins/preload.ts)"
+# A real file is the user's: link-home skips it, every start.
+expect_ok "a real file wins over the dotfile" \
+    run_ic bash -c 'd=/data/jensen/.config/btop/btop.conf; rm -f "$d"; echo mine > "$d"; /opt/twentyx/libexec/link-home /opt/twentyx/dotfiles >/dev/null; [ ! -L "$d" ] && grep -qx mine "$d"'
+expect_ok "git identity goes to ~/.gitconfig, not through the shared link" \
+    run_ic bash -c 'git config --global user.email t@x && grep -q t@x /data/jensen/.gitconfig && ! grep -q t@x /opt/twentyx/dotfiles/.config/git/config'
+expect_ok "zed agent_servers default present" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
-# The pins are stable /opt paths now: a store path here would go stale on the
+# The pins are stable /opt paths: a store path here would go stale on the
 # next transfer.
 expect_ok "zed LSP pins point at the stable tool path" \
     run_ic bash -c 'grep -q "/opt/twentyx/profile/bin/nixd" /data/jensen/.config/zed/settings.json'
-expect_ok "zed remote server shipped as a packaged default" \
-    run_ic bash -c 'ls /data/jensen/.zed_server | grep -q zed-remote-server'
-expect_ok "zed remote client-version shim shipped (full-version spelling)" \
+expect_ok "zed remote server under its full client-version name" \
     run_ic bash -c 'f=/data/jensen/.zed_server/zed-remote-server-stable-*+stable.*; [ -x $f ]'
+expect_ok "code-server opencode extension linked" \
+    run_ic bash -c 'test -d /data/jensen/.local/share/code-server/extensions/sst-dev.opencode'
+# opencode.jsonc names these by path instead of linking them into $HOME.
+expect_ok "opencode.jsonc skill and plugin paths exist" \
+    run_ic bash -c 'for p in $(grep -o "/opt/twentyx/home-defaults/[^\"]*" /data/jensen/.config/opencode/opencode.jsonc); do [ -e "$p" ] || exit 1; done; ls /opt/twentyx/home-defaults/.config/opencode/skills | grep -q .'
 expect_ok "env injection: pip.conf wired" \
     run_ic bash -c 'test "$PIP_CONFIG_FILE" = /opt/airgap-env/pip.conf'
 expect_ok "env injection: CA bundle wired" \
@@ -241,16 +242,27 @@ else
     bad "env injection: doctor reports the source"
 fi
 
-say "bootstrap env + fish config"
-# The seeded fish config must PARSE: an earlier revision embedded a bash
-# heredoc inside a generated drop-in, fish refused the whole file and no PATH
-# or env var reached the interactive shell.
-expect_ok "seeded fish config parses (fish -n)" \
-    run_ic bash -c 'fish -n /data/jensen/.config/fish/config.fish'
-expect_ok "runtime env generated outside \$HOME" \
-    run_ic bash -c 'fish -n /opt/twentyx/etc/env.fish'
-expect_grep "podman storage.conf written (vfs)" 'driver = "vfs"' \
-    run_ic bash -c 'cat /tmp/twentyx-cache-$(id -u)/containers/storage.conf'
+say "session.env + exec sessions"
+# `runai exec` is a CRI exec: it never passes through the entrypoint and
+# starts with HOME=/. podman exec into a running pod is the same thing.
+CID="$(podman run -d --pull=never --tls-verify=false --user 10001:0 --tmpfs /data \
+    -e SESSION_USER=jensen --mount "type=bind,src=$WORK/env,dst=/opt/airgap-env,ro" \
+    "$IMAGE" sleep 300)"
+for _ in $(seq 1 20); do
+    podman exec "$CID" test -f /opt/twentyx/etc/session.env 2>/dev/null && break
+    sleep 0.5
+done
+expect_ok "exec: a login shell gets the PVC home (profile.d)" \
+    podman exec "$CID" bash -lc 'test "$HOME" = /data/jensen'
+expect_ok "exec: run-opencode resolves the PVC home itself" \
+    podman exec "$CID" bash -c 'grep -q "export HOME=\"/data/jensen\"" /opt/twentyx/etc/session.env && /opt/twentyx/libexec/run-opencode --version'
+expect_ok "session.env parses in fish" \
+    podman exec "$CID" fish -c 'source /opt/twentyx/etc/session.env; test "$HOME" = /data/jensen; and test -n "$SSL_CERT_FILE"'
+expect_ok "linked fish config parses (fish -n)" \
+    podman exec "$CID" fish -n /data/jensen/.config/fish/config.fish
+expect_grep "podman storage.conf is vfs" 'driver = "vfs"' \
+    podman exec "$CID" bash -c 'cat "$CONTAINERS_STORAGE_CONF"'
+podman rm -f "$CID" >/dev/null 2>&1 || true
 
 say "root for the runtime user"
 expect_ok "sudoers grants gid 0 passwordless sudo" \

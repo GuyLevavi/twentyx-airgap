@@ -107,8 +107,11 @@ if (-not $ConfigOnly) {
 
 # -- client configs: the inner repo's windows\ wins ------------------------
 if (-not $ConfigDir) {
-    $clone = "\\wsl.localhost\$Distro\home\$User\twentyx\windows"
-    if (Test-Path $clone) { $ConfigDir = $clone }
+    # \\wsl.localhost on current Windows, \\wsl$ on older Windows 10.
+    foreach ($share in @("wsl.localhost", "wsl$")) {
+        $clone = "\\$share\$Distro\home\$User\twentyx\windows"
+        if (Test-Path $clone) { $ConfigDir = $clone; break }
+    }
 }
 # Config source for one file: the config dir (flat), else its place in the kit.
 function Get-ConfigSrc([string]$Name, [string]$KitRel) {

@@ -1,0 +1,10 @@
+{
+  "ruff.path": ["/opt/twentyx/profile/bin/ruff"],
+  "nix.enableLanguageServer": true,
+  "nix.serverPath": "/opt/twentyx/profile/bin/nixd",
+  "json.schemaDownload.enable": false,
+  "yaml.schemaStore.enable": false,
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "telemetry.telemetryLevel": "off"
+}

@@ -45,24 +45,6 @@ let
   vscodeServerTar = pkgs.fetchurl {
     inherit (vscode.server) url name hash;
   };
-  vscodeHome = "/home/${username}/.vscode-server";
-  vscodeServerDir = "${vscodeHome}/bin/${vscode.commit}";
-
-  # Remote (WSL-side) machine settings: the language-server pins, pointing at
-  # the SAME binaries Zed and nvim use via the stable /opt path (a store path
-  # here would go stale on the next closure update), plus the schema fetches
-  # that must stay off. Client-level settings (updater off, telemetry) travel
-  # with the Windows kit instead -- see nix/packages/windows/vscode-settings.json.
-  vscodeRemoteSettings = (pkgs.formats.json { }).generate "vscode-remote-settings.json" {
-    "ruff.path" = [ "/opt/twentyx/profile/bin/ruff" ];
-    "nix.enableLanguageServer" = true;
-    "nix.serverPath" = "/opt/twentyx/profile/bin/nixd";
-    "json.schemaDownload.enable" = false;
-    "yaml.schemaStore.enable" = false;
-    "extensions.autoUpdate" = false;
-    "extensions.autoCheckUpdates" = false;
-    "telemetry.telemetryLevel" = "off";
-  };
 
   # The .vsix set as one list and one stamp. The stamp makes the seeding
   # service a no-op after its first successful run, and makes it run again
@@ -263,9 +245,9 @@ in
   # ── VS Code (Remote-WSL): server + extensions + pins ───────────────────
   # The server tarball is pinned in nix/vscode-version.nix. The oneshot runs
   # as jensen after tmpfiles: extracts the server when absent (then it is a
-  # real file the user owns), writes the remote machine settings carrying the
-  # LSP pins when absent, and installs the pinned extensions with the
-  # server's own CLI. No marketplace, no activation script, no chowns.
+  # real file the user owns) and installs the pinned extensions with the
+  # server's own CLI. The machine settings (LSP pins) are a dotfile in the
+  # inner repo. No marketplace, no activation script, no chowns.
   systemd.services.vscode-extensions = {
     description = "Seed the pinned VS Code server + extensions into ~/.vscode-server";
     wantedBy = [ "multi-user.target" ];
@@ -291,11 +273,6 @@ in
         mkdir -p "$seed"
         tar -xzf ${vscodeServerTar} -C "$seed" --strip-components=1
       fi
-      settings="$home/.vscode-server/data/Machine/settings.json"
-      if [ ! -e "$settings" ]; then
-        install -d "$home/.vscode-server/data/Machine"
-        install -m 0644 ${vscodeRemoteSettings} "$settings"
-      fi
       stamp="$home/.vscode-server/.airgap-vsix"
       want="${vsixStamp}"
       if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
@@ -307,32 +284,6 @@ in
       printf '%s\n' "$want" > "$stamp"
     '';
   };
-  # ── git: neutral settings, system scope ────────────────────────────────
-  # Same file the repo layer ships into pods (docker/mklayer.sh) — keep the
-  # two in sync. No packaged ~/.config/git/config anywhere: per-user identity
-  # is a real file on the durable home (git config --global user.email),
-  # because a store symlink would make that write fail.
-  environment.etc."gitconfig".text = ''
-    # Managed by the airgap flake. Per-user identity belongs in the user's
-    # own ~/.config/git/config (durable home), set once: git config --global.
-    [init]
-    	defaultBranch = main
-    [pull]
-    	rebase = true
-    [pager]
-    	diff = delta
-    	log = delta
-    	reflog = delta
-    	show = delta
-    [interactive]
-    	diffFilter = delta --color-only
-    [delta]
-    	navigate = true
-    	side-by-side = true
-    	line-numbers = true
-    [merge]
-    	conflictstyle = diff3
-  '';
 
   environment.systemPackages = with pkgs; [
     twentyx.profile

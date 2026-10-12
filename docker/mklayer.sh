@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the repo layer: the libexec runtime scripts and the agent helpers.
+# Build the repo layer: the pod scripts, the dotfiles and a few /etc files.
 #
 #   ./docker/mklayer.sh [out.tar]        default: dist/repo-layer.tar
 #
@@ -16,16 +16,31 @@ OUT="${1:-dist/repo-layer.tar}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-mkdir -p "$(dirname "$OUT")" "$STAGE/opt/twentyx" "$STAGE/usr/local/bin"
+mkdir -p "$(dirname "$OUT")" "$STAGE/opt/twentyx/etc/containers" "$STAGE/usr/local/bin" \
+    "$STAGE/etc/profile.d"
 
-for d in libexec agent dotfiles; do
-    cp -a "$d" "$STAGE/opt/twentyx/$d"
-done
-# Cluster assets (internal CA, pip.conf) when the repo carries them in env/.
-# The runtime mounts (/opt/airgap-env, /data/.airgap-env) win over this copy.
-if [ -d env ]; then
-    cp -a env "$STAGE/opt/twentyx/env"
-fi
+# pod/ is the image's libexec (the contract path: ENTRYPOINT, PATH, sudo
+# targets); dotfiles/ is what the entrypoint links into $HOME. env/ stays out:
+# a pod takes its CA and pip.conf from the base or the injection mounts.
+cp -a pod "$STAGE/opt/twentyx/libexec"
+cp -a dotfiles "$STAGE/opt/twentyx/dotfiles"
+
+# The entrypoint writes etc/session.env here at start (gid 0 can: g=u below).
+# Podman without touching /etc: vfs works everywhere a pod does (no mount(2)),
+# on local disk; CONTAINERS_STORAGE_CONF points here (image ENV).
+cat > "$STAGE/opt/twentyx/etc/containers/storage.conf" <<'EOF'
+[storage]
+driver = "vfs"
+runroot = "/tmp/twentyx-cache/containers/runroot"
+graphroot = "/tmp/twentyx-cache/containers/graph"
+EOF
+
+# Login shells started outside $HOME's rc files (`runai exec -- bash -l`, an
+# sshd session) still get what the entrypoint resolved.
+cat > "$STAGE/etc/profile.d/twentyx.sh" <<'EOF'
+# shellcheck shell=sh
+[ -r /opt/twentyx/etc/session.env ] && . /opt/twentyx/etc/session.env
+EOF
 # What doctor prints as the version: the commit this layer was cut from.
 git rev-parse --short HEAD > "$STAGE/opt/twentyx/VERSION" 2>/dev/null \
     || echo dev > "$STAGE/opt/twentyx/VERSION"
@@ -48,34 +63,6 @@ root ALL=(ALL:ALL) ALL
 @includedir /etc/sudoers.d
 EOF
 chmod 0440 "$STAGE/etc/sudoers"
-
-# ── git: neutral settings, system scope ───────────────────────────────────
-# There is deliberately no packaged ~/.config/git/config in the Nix layer: it
-# would be a store symlink and `git config --global user.email` on the PVC
-# could then never write through it. Identity is per-user on the durable home;
-# these shared, identity-free defaults ship here and in nix/hosts/wsl.nix
-# (environment.etc) — keep the two in sync.
-cat > "$STAGE/etc/gitconfig" <<'EOF'
-# Managed by the airgap repo layer. Per-user identity belongs in the user's
-# own ~/.config/git/config (durable PVC), set once: git config --global.
-[init]
-	defaultBranch = main
-[pull]
-	rebase = true
-[pager]
-	diff = delta
-	log = delta
-	reflog = delta
-	show = delta
-[interactive]
-	diffFilter = delta --color-only
-[delta]
-	navigate = true
-	side-by-side = true
-	line-numbers = true
-[merge]
-	conflictstyle = diff3
-EOF
 
 # One entry on PATH that exists before anything has been bootstrapped, so
 # the doctor is runnable in a pod where everything else went wrong.

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Publish the transfer artifacts to the project's GitLab generic package
-# registry. Artifactory stays as the CI fallback (see .gitlab-ci.yml).
+# Publish a store release to the project's GitLab generic package registry.
 #
 #   ./scripts/push-gitlab-packages.sh <file> [file...]
 #
-# Run inside the gap, in the transfer folder, after unpacking the layer
-# containers: `7z x nix-layer.tar.gz.7z`, `7z x nix-layer-nvim.tar.gz.7z`.
-# CI fetches the plain names, so publish the unpacked layers -- never the
-# .7z. Every regular file among the arguments goes to
+# Run inside the gap, in the transfer folder, after unpacking every .7z
+# (`7z x <file>.7z`): CI and wsl/update.sh fetch the plain names, so publish
+# the unpacked files -- never the .7z. Every regular file among the arguments
+# goes to
 #
-#   <api>/projects/<project>/packages/generic/twentyx-airgap/<version>/<filename>
+#   <api>/projects/<project>/packages/generic/twentyx-store/<RELEASE>/<filename>
 #
-# A directory argument means the files directly inside it. Version resolution
-# matches push-artifactory.sh: PACKAGE_VERSION, or the repo's VERSION file.
+# with RELEASE from MANIFEST.txt in the current directory (PACKAGE_VERSION
+# overrides). A directory argument means the files directly inside it. Then
+# pin the release: echo <RELEASE> > STORE_RELEASE, commit.
 #
 # Auth, in this order:
 #   1. CI  -- CI_API_V4_URL + CI_PROJECT_ID + CI_JOB_TOKEN (JOB-TOKEN header)
@@ -23,22 +23,21 @@
 # Download side (for a later consumer, e.g. another project's CI):
 #
 #   curl -fSL --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-#     "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-airgap/<version>/nix-layer.tar.gz" \
-#     -o dist/nix-layer.tar.gz
+#     "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-store/<release>/pod-delta.tar.gz" \
+#     -o dist/pod-delta.tar.gz
 #
 # FIRST TRANSFER: check the GitLab instance's max package size for the
-# generic registry before pushing a multi-GB layer. GitLab.com defaults to
-# 5 GB per file; self-managed instances may differ (Admin > Settings >
-# Preferences, max_package_size). If a layer does not fit, keep
-# push-artifactory.sh as the publisher -- the assemble stage in
-# .gitlab-ci.yml still falls back to Artifactory.
+# generic registry before pushing a rebase (pod-full, the ~3 GB rootfs).
+# GitLab.com defaults to 5 GB per file; self-managed instances may differ
+# (Admin > Settings > Preferences, max_package_size).
 set -euo pipefail
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-VERSION="${PACKAGE_VERSION:-$(cat "$(dirname "${BASH_SOURCE[0]}")/../VERSION")}"
-PACKAGE=twentyx-airgap
+VERSION="${PACKAGE_VERSION:-$(sed -n 's/^RELEASE=//p' MANIFEST.txt 2>/dev/null)}"
+[ -n "$VERSION" ] || die "no MANIFEST.txt here (or set PACKAGE_VERSION)"
+PACKAGE=twentyx-store
 
 # -- collect the files ------------------------------------------------------
 [ $# -gt 0 ] || { echo "usage: push-gitlab-packages.sh <file> [file...]" >&2; exit 1; }

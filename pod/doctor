@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Diagnose a workspace pod: session, closure, $HOME links, sudo, preload,
+# terminal, injected assets.
+#
+#   doctor          (on PATH via /usr/local/bin/doctor)
+#
+# Read-only, non-interactive, no network. Paste the output into a bug report.
+# Exits 1 when a check fails, so CI's smoke job can gate on it.
+set -uo pipefail
+
+ROOT=/opt/twentyx
+# shellcheck source=/dev/null
+[ ! -r "$ROOT/etc/session.env" ] || . "$ROOT/etc/session.env"
+
+fails=0
+say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+ok() { printf '  \033[32mok\033[0m   %s\n' "$*"; }
+bad() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fails=$((fails + 1)); }
+note() { printf '  \033[33mnote\033[0m %s\n' "$*"; }
+kv() { printf '  %-16s %s\n' "$1" "$2"; }
+
+say "session"
+kv version "$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)"
+if [ -r "$ROOT/etc/session.env" ]; then
+    kv user "${SESSION_USER:-?} (via ${SESSION_USER_SOURCE:-?}; uid $(id -u), gid $(id -g))"
+    kv HOME "$HOME"
+    [ "${SESSION_USER_SOURCE:-}" != fallback ] \
+        || note "the workspace name did not match <user>-<*>-<n>-<n>: set SESSION_USER in the workspace env"
+    if [ "${SESSION_DURABLE:-no}" = yes ]; then ok "HOME is on the PVC"; else bad "HOME is EPHEMERAL: no writable /data or /code"; fi
+    if [ -w "$HOME" ]; then ok "HOME is writable"; else bad "HOME is not writable"; fi
+else
+    bad "no $ROOT/etc/session.env -- the entrypoint did not run (image ENTRYPOINT replaced?)"
+fi
+
+say "closure"
+if [ -d "$ROOT/profile/bin" ]; then ok "profile $(readlink -f "$ROOT/profile")"; else bad "no $ROOT/profile/bin -- the store layer is missing"; fi
+total=0 missing=0
+while IFS= read -r p; do
+    total=$((total + 1))
+    [ -e "$p" ] || { missing=$((missing + 1)); [ "$missing" -gt 3 ] || bad "absent: $p"; }
+done < "$ROOT/store-paths"
+if [ "$missing" -eq 0 ]; then ok "all $total store paths present"; else bad "$missing of $total store paths absent"; fi
+
+say "\$HOME links"
+# link-home ran when the shell rc and the Zed server dir are links (or real
+# files the user keeps).
+missing=""
+for rel in .bashrc .config/opencode/opencode.jsonc .zed_server; do
+    [ -e "$HOME/$rel" ] || missing="$missing ~/$rel"
+done
+if [ -z "$missing" ]; then ok "defaults are linked"; else bad "missing:$missing -- run $ROOT/libexec/link-home $ROOT/dotfiles"; fi
+
+say "sudo"
+if [ "$(stat -c %a "$ROOT/bin/sudo" 2>/dev/null)" = 4555 ]; then ok "setuid sudo present"; else bad "no setuid $ROOT/bin/sudo"; fi
+# NOPASSWD for gid 0 comes from the repo layer's /etc/sudoers; a failure with
+# both present usually means no-new-privileges blocks the setuid bit.
+if sudo -n true 2>/dev/null; then ok "sudo: passwordless for gid 0"; else bad "sudo unusable (sudoers missing, or no-new-privileges)"; fi
+
+say "agent preload"
+kv LD_PRELOAD "${LD_PRELOAD:-unset}"
+if [ -x "$ROOT/libexec/run-opencode" ]; then ok "run-opencode present (start opencode through it)"; else bad "no run-opencode"; fi
+# The replacement libc must come from opencode's own glibc. `|| true`: awk's
+# early exit SIGPIPEs ldd, which pipefail would turn into a failure.
+oc="$ROOT/profile/bin/.opencode-wrapped"
+libc="$(env -u LD_PRELOAD ldd "$oc" 2>/dev/null | awk '/libc\.so\.6/ {print $3; exit}' || true)"
+if [ -e "$libc" ]; then ok "opencode's libc: $libc"; else bad "cannot resolve opencode's libc -- run-opencode will unset LD_PRELOAD"; fi
+# The failure that matters: CUDA works in the shell but not under the agent
+# (tests/test-gpu-cuda.sh reads these two lines).
+if command -v python >/dev/null 2>&1; then
+    probe='import torch; print(torch.cuda.is_available())'
+    kv "torch.cuda shell" "$(python -c "$probe" 2>/dev/null || echo n/a)"
+    kv "torch.cuda agent" "$(LD_PRELOAD="${PRELOAD_ORIGINAL:-${LD_PRELOAD:-}}" python -c "$probe" 2>/dev/null || echo n/a)"
+fi
+
+say "terminal"
+kv TERM "${TERM:-unset}"
+if infocmp "${TERM:-dumb}" >/dev/null 2>&1; then ok "terminfo for ${TERM:-dumb} resolves"; else bad "no terminfo for '${TERM:-dumb}' -- tmux will refuse to start"; fi
+if [ -e "${LOCALE_ARCHIVE:-}" ]; then ok "LOCALE_ARCHIVE exists"; else bad "LOCALE_ARCHIVE '${LOCALE_ARCHIVE:-}' does not exist"; fi
+
+say "env injection"
+if [ -n "${ENV_INJECTION_DIR:-}" ]; then
+    kv source "$ENV_INJECTION_DIR"
+    [ -z "${PIP_CONFIG_FILE:-}" ] || ok "pip.conf: $PIP_CONFIG_FILE"
+    if [ -n "${SSL_CERT_FILE:-}" ]; then
+        if [ -r "$SSL_CERT_FILE" ]; then ok "ca-bundle readable: $SSL_CERT_FILE"; else bad "ca-bundle not readable: $SSL_CERT_FILE"; fi
+    fi
+else
+    note "no /opt/airgap-env or /data/.airgap-env -- the base image's CA and pip config apply"
+fi
+
+echo
+if [ "$fails" -eq 0 ]; then say "all checks passed"; exit 0; fi
+say "$fails check(s) failed"
+exit 1
