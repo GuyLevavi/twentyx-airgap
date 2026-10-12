@@ -1,26 +1,23 @@
 # Runs INSIDE the airgap. Assembles images without ever pulling a pytorch base.
 #
-# This pipeline does not build the toolchain. The closure is computed and
-# built outside, carried in as two tarballs, and published to the project's
-# GitLab generic package registry (scripts/push-gitlab-packages.sh) once per
-# transfer; Artifactory remains the fallback. CI's job is to fetch them, tar
-# this checkout as the repo layer, and append.
+# This pipeline does not build the toolchain. The closure is built outside and
+# published once per transfer to this project's GitLab generic package
+# registry as twentyx-store/<RELEASE>/ (scripts/push-gitlab-packages.sh);
+# STORE_RELEASE pins the release this repo uses. CI tars this checkout as the
+# repo layer and appends it registry-side:
 #
-#   nix-layer.tar.gz       from the transfer, GitLab packages
-#                          first, Artifactory on failure             squash
-#   nix-layer-delta.tar.gz the closure change since that base         per change
-#   repo-layer.tar         plain tar of this checkout                 every commit
+#   workspace-store:<release>-<variant>-<base digest>   once per release
+#   workspace:<commit>-<variant>                         every commit (~400 KB)
 #
-# The deltas are optional and cumulative against the base: when present they
-# are appended right after it, and their opt/ tree wins. The pytorch bases are
-# never pulled, so this runs in a small pod and does not hit the
-# ephemeral-storage limit that kills `FROM base-pytorch`.
+# docker/assemble.sh fetches the ~1 GB store layers only when the store image
+# for this release and base is missing, so a config commit downloads nothing
+# big. The pytorch bases are never pulled, so this runs in a small pod and does
+# not hit the ephemeral-storage limit that kills `FROM base-pytorch`.
 
-stages: [lint, assemble]
+stages: [assemble, smoke]
 
 # Every cluster fact below is a DEFAULT. The airgap's GitLab sets the real
-# ones as project/group CI variables, which beat this file -- nothing here is
-# "filled in" from the connected side, so the repo stays machine-agnostic.
+# ones as project/group CI variables, which beat this file.
 variables:
   IMAGE_REGISTRY: "$CI_REGISTRY_IMAGE"
   BASE_REGISTRY: "quay.internal/ai"
@@ -28,63 +25,29 @@ variables:
   IMAGE_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
 
 # ---------------------------------------------------------------------------
-lint:
-  stage: lint
-  image: koalaman/shellcheck-alpine:stable
-  script:
-    - shellcheck -S warning libexec/* agent/*.sh tests/*.sh scripts/*.sh docker/*.sh
-  rules:
-    - changes: [libexec/**/*, agent/**/*, tests/**/*, scripts/**/*, docker/**/*]
-
-# ---------------------------------------------------------------------------
-# Registry-side append. Seconds per variant: each blob is uploaded once and
-# cross-mounted for the rest.
+# Registry-side append. Seconds per variant once the store image exists.
 assemble:
   stage: assemble
-  # Only needs crane, jq, tar and the artifacts; the slim base is plenty.
+  # Only needs crane, jq, curl and tar; the slim base is plenty.
   image: "$BASE_REGISTRY/base-slim:$BASE_TAG"
   script:
-    # dist/ is gitignored and absent on a fresh checkout; curl -o will not
-    # create the parent directory.
-    - mkdir -p dist
-    - |
-      # The layers are published to the project's generic package registry by
-      # scripts/push-gitlab-packages.sh; Artifactory is the fallback. The
-      # version path derives from VERSION, so CI can never skew from the
-      # publisher.
-      LAYER_BASE_URL="$ARTIFACTORY_URL/${ARTIFACTORY_GENERIC_REPO:-generic-local}/airgap/$(cat VERSION)"
-      # The plain layer is a hard requirement; the nvim flavor is optional
-      # (a transfer without it must not fail CI -- assemble.sh copes).
-      curl -fSL --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-airgap/$(cat VERSION)/nix-layer.tar.gz" \
-        -o dist/nix-layer.tar.gz ||
-        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-          "$LAYER_BASE_URL/nix-layer.tar.gz" -o dist/nix-layer.tar.gz
-      curl -fSL --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-airgap/$(cat VERSION)/nix-layer-nvim.tar.gz" \
-        -o dist/nix-layer-nvim.tar.gz ||
-        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-          "$LAYER_BASE_URL/nix-layer-nvim.tar.gz" -o dist/nix-layer-nvim.tar.gz ||
-        echo "note: nix-layer-nvim.tar.gz not in GitLab packages or Artifactory -- plain flavor only"
-      # The deltas are optional: a base at this VERSION covers the rest. On a
-      # failed fetch, remove the partial file so assemble.sh ignores it.
-      for f in nix-layer-delta.tar.gz nix-layer-delta-nvim.tar.gz; do
-        curl -fSL --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-airgap/$(cat VERSION)/$f" \
-          -o "dist/$f" ||
-        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-          "$LAYER_BASE_URL/$f" -o "dist/$f" ||
-        { rm -f "dist/$f"; echo "note: $f not published -- that flavor uses its base layer"; }
-      done
-    # Built here rather than carried: it is ~380 KB of this very checkout, and
-    # rebuilding it is what makes a script change a one-commit deploy.
-    # The delta is preferred for the setuid sudo copy: it re-tars opt/.
-    - |
-      if [ -s dist/nix-layer-delta.tar.gz ]; then
-        export LAYER_NIX_DELTA=dist/nix-layer-delta.tar.gz
-      fi
-      ./docker/mklayer.sh dist/repo-layer.tar
+    - ./docker/mklayer.sh dist/repo-layer.tar
     - crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
     - ./docker/assemble.sh "$CI_COMMIT_SHORT_SHA"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ---------------------------------------------------------------------------
+# The image this commit just built IS the job image: doctor checks the closure,
+# sudo and the boot chain, and shellcheck (from the closure) lints the scripts.
+# No Docker Hub image needed.
+smoke:
+  stage: smoke
+  image:
+    name: "$CI_REGISTRY_IMAGE/workspace:$CI_COMMIT_SHORT_SHA-base-slim"
+    entrypoint: [""]
+  script:
+    - /opt/twentyx/libexec/entrypoint doctor
+    - shellcheck -S warning libexec/* agent/*.sh docker/*.sh
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

@@ -17,8 +17,7 @@
 # connected machine; pulls ubuntu:24.04 once as the mock base.
 #
 #   ./tests/test-container.sh
-#   TEST_NIX_LAYER=/path/nix-layer.tar.gz ./tests/test-container.sh
-#   TEST_NIX_LAYER_DELTA=/path/nix-layer-delta.tar.gz ./tests/test-container.sh
+#   TEST_STORE_DIR=<extracted dist/> ./tests/test-container.sh   (a real release)
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -73,17 +72,32 @@ podman push --tls-verify=false -q docker.io/library/ubuntu:24.04 "$REG/base-slim
 
 # ── layers ────────────────────────────────────────────────────────────────
 say "layers"
-if [ -n "${TEST_NIX_LAYER:-}" ]; then
-    cp "${TEST_NIX_LAYER:?}" "$WORK/nix-layer.tar.gz"
+# A store release directory, as CI sees it: MANIFEST.txt + pod tars. Without
+# TEST_STORE_DIR, a full release of this checkout (what --rebase ships).
+STORE="$WORK/store"
+mkdir -p "$STORE"
+if [ -n "${TEST_STORE_DIR:-}" ]; then
+    cp "${TEST_STORE_DIR:?}"/MANIFEST.txt "${TEST_STORE_DIR}"/pod-*.tar.gz "$STORE/"
 else
-    P="$(nix build .#runai-layer --no-link --print-out-paths)"
-    cp "$P" "$WORK/nix-layer.tar.gz"
+    OPT="$(nix build .#pod-opt --no-link --print-out-paths)"
+    ./scripts/pod-tar.sh "$OPT" "$OPT/opt/twentyx/store-paths" "$STORE/pod-full.tar.gz"
+    printf 'RELEASE=test\nBASE_RELEASE=test\nKIND=full\n' > "$STORE/MANIFEST.txt"
+    # The layer is deterministic too: the registry dedupes it across rebuilds.
+    ./scripts/pod-tar.sh "$OPT" "$OPT/opt/twentyx/store-paths" "$WORK/pod-full2.tar.gz"
+    if cmp -s "$STORE/pod-full.tar.gz" "$WORK/pod-full2.tar.gz"; then
+        ok "store layer is deterministic"
+    else
+        bad "store layer is deterministic"
+    fi
+    rm -f "$WORK/pod-full2.tar.gz"
 fi
-LAYER_NIX="$WORK/nix-layer.tar.gz" ./docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
+RELEASE="$(sed -n 's/^RELEASE=//p' "$STORE/MANIFEST.txt")"
+KIND="$(sed -n 's/^KIND=//p' "$STORE/MANIFEST.txt")"
+./docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
 
 # Determinism: identical inputs -> byte-identical blob, or every rebuild
 # invalidates the registry cache for nothing.
-LAYER_NIX="$WORK/nix-layer.tar.gz" ./docker/mklayer.sh "$WORK/repo-layer2.tar" >/dev/null
+./docker/mklayer.sh "$WORK/repo-layer2.tar" >/dev/null
 h1="$(sha256sum "$WORK/repo-layer.tar" | cut -d' ' -f1)"
 h2="$(sha256sum "$WORK/repo-layer2.tar" | cut -d' ' -f1)"
 if [ "$h1" = "$h2" ]; then ok "repo layer is deterministic"; else bad "repo layer is deterministic"; fi
@@ -97,18 +111,24 @@ printf '[global]\nindex-url = https://artifactory.internal/api/pypi/pypi/simple\
 printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "$WORK/env/ca-bundle.crt"
 
 say "assembling"
-# With a delta, the image is base + delta + repo; the doctor assertion below
-# then checks the merged closure (the delta's store-paths list wins).
-DELTA_ENV=()
-if [ -n "${TEST_NIX_LAYER_DELTA:-}" ]; then
-    cp "${TEST_NIX_LAYER_DELTA:?}" "$WORK/nix-layer-delta.tar.gz"
-    DELTA_ENV=(LAYER_NIX_DELTA="$WORK/nix-layer-delta.tar.gz")
-fi
-env IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
-    LAYER_NIX="$WORK/nix-layer.tar.gz" LAYER_REPO="$WORK/repo-layer.tar" \
-    "${DELTA_ENV[@]}" \
-    ./docker/assemble.sh test
+asm() {
+    env IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
+        STORE_DIR="$STORE" STORE_RELEASE="$RELEASE" LAYER_REPO="$WORK/repo-layer.tar" \
+        ./docker/assemble.sh "$@"
+}
+asm test
 IMAGE="$REG/workspace:test-base-slim"
+
+# A config commit must not need the store layers: the store image for this
+# release and base is reused, so CI downloads nothing big.
+mkdir -p "$WORK/held"
+mv "$STORE"/pod-*.tar.gz "$WORK/held/"
+if asm test2 >/dev/null 2>&1; then
+    ok "second commit reuses the store image (no store layers needed)"
+else
+    bad "second commit reuses the store image (no store layers needed)"
+fi
+mv "$WORK/held"/pod-*.tar.gz "$STORE/"
 
 # run_ic: the problematic pod shape, verbatim: arbitrary UID with no passwd
 # entry, gid 0, writable PVC-style /data, extra mounts/env per caller.
@@ -138,10 +158,19 @@ if grep -q "defaults are linked" <<<"$DOCTOR_OUT"; then
 else
     bad "defaults linked into PVC home"
 fi
-if [ -n "${TEST_NIX_LAYER_DELTA:-}" ]; then
+# Image ENV names store paths outside the profile (locales, terminfo, the
+# LazyVim tree); each must have shipped, or ENV points into nothing.
+expect_ok "every store path in session-env is in the image" \
+    run_ic bash -c 'for p in $(grep -o "/nix/store/[^/:]*" /opt/twentyx/session-env); do [ -e "$p" ] || exit 1; done'
+# BASE_ENTRYPOINT carries the base's ENTRYPOINT + CMD. A CMD left in the image
+# would arrive as our entrypoint's arguments and run instead of the base's
+# ENTRYPOINT (code-server on the vscode-* bases).
+expect_grep "image CMD is cleared (BASE_ENTRYPOINT hands over)" '^null$' \
+    bash -c "crane config '$IMAGE' | jq -c '.config.Cmd'"
+if [ "$KIND" = delta ]; then
     # The delta's opt/ tree must win: the merged /opt/twentyx/profile has to
-    # be the one the delta carries, not the base's.
-    want_profile="$(LC_ALL=C tar -tzvf "$WORK/nix-layer-delta.tar.gz" \
+    # be the one the delta carries, not the full layer's.
+    want_profile="$(LC_ALL=C tar -tzvf "$STORE/pod-delta.tar.gz" \
         --occurrence=1 opt/twentyx/profile | awk '{print $NF}')"
     expect_ok "delta profile symlink wins over the base" \
         run_ic bash -c "[ \"\$(readlink /opt/twentyx/profile)\" = '$want_profile' ]"

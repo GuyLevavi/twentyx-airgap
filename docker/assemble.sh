@@ -4,23 +4,22 @@
 #   ./docker/assemble.sh <tag-prefix>
 #
 # crane fetches only each base's manifest and config; it never pulls or unpacks
-# the base layers. The 30GB pytorch bases therefore cost the same as the slim
-# ones, which is what keeps the build pod inside its ephemeral storage budget.
+# the base layers, so the 30GB pytorch bases cost the same as the slim ones.
+# Two images per variant, in ascending order of how often they change:
 #
-# Up to three layers, appended in ascending order of how often they change, so
-# a config edit re-uploads ~380KB and cross-mounts the rest:
+#   workspace-store:<RELEASE>-<variant>-<base digest>     once per release
+#       base + pod-full(BASE_RELEASE) + pod-delta(RELEASE); session-env as
+#       image ENV, PATH prepended. Built only when the tag is missing, so the
+#       ~1 GB layers are fetched once per release (or base change), not per
+#       commit. FORCE_STORE=1 rebuilds it.
+#   workspace:<tag-prefix>-<variant>                       every commit
+#       the store image + repo-layer.tar (~400 KB); entrypoint and labels.
 #
-#   1. nix-layer       the whole toolchain closure       squash   ~1070MB / ~1087MB
-#   2. nix-layer-delta new store paths + opt/ tree        per change  usually <100MB
-#   3. repo-layer      libexec, agent helpers, sudoers    hourly     ~380KB
-#
-# The delta is optional and cumulative against the base layer beneath it
-# (scripts/build-layers.sh --delta); store paths are immutable, so overlaying
-# it is exactly an upgrade. Its opt/ tree wins over the base's: the profile
-# symlink, store-paths and session-env are re-read from it.
-#
-# Two flavors per variant: the nvim layer is ~17MB larger, and not every
-# workspace wants an editor in it.
+# The store release is STORE_RELEASE (default: the STORE_RELEASE file). Its
+# files are read from STORE_DIR (default dist/, one release per directory);
+# a missing one is fetched from the project's GitLab generic package registry,
+# twentyx-store/<release>/<file>, with the CI job token. MANIFEST.txt names
+# the base release that holds pod-full.tar.gz and whether a delta exists.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -30,36 +29,42 @@ REGISTRY="${IMAGE_REGISTRY:?set IMAGE_REGISTRY, e.g. quay.internal/ai}"
 BASE_REGISTRY="${BASE_REGISTRY:-$REGISTRY}"
 VARIANTS="${IMAGE_VARIANTS:-base-slim base-pytorch vscode-slim vscode-pytorch}"
 BASE_TAG="${BASE_TAG:-latest}"
-
-LAYER_NIX="${LAYER_NIX:-dist/nix-layer.tar.gz}"
-LAYER_NIX_NVIM="${LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
-LAYER_NIX_DELTA="${LAYER_NIX_DELTA:-dist/nix-layer-delta.tar.gz}"
-LAYER_NIX_DELTA_NVIM="${LAYER_NIX_DELTA_NVIM:-dist/nix-layer-delta-nvim.tar.gz}"
+STORE_DIR="${STORE_DIR:-dist}"
+STORE_RELEASE="${STORE_RELEASE:-$(cat STORE_RELEASE 2>/dev/null || true)}"
 LAYER_REPO="${LAYER_REPO:-dist/repo-layer.tar}"
 
-command -v crane >/dev/null || { echo "crane not found (nix shell .# gives you one)" >&2; exit 1; }
-command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+command -v crane >/dev/null || die "crane not found"
+command -v jq >/dev/null || die "jq not found"
+[ -n "$STORE_RELEASE" ] || die "set STORE_RELEASE (or commit a STORE_RELEASE file)"
+[ -f "$LAYER_REPO" ] || die "missing repo layer: $LAYER_REPO (docker/mklayer.sh)"
+mkdir -p "$STORE_DIR"
 
-for f in "$LAYER_NIX" "$LAYER_REPO"; do
-    [ -f "$f" ] || { echo "missing layer: $f" >&2; exit 1; }
-done
-# The deltas are optional: a base that already matches the closure has none.
+# store_file <release> <name>: the local path, fetched first when missing.
+store_file() {
+    local f="$STORE_DIR/$2"
+    if [ ! -f "$f" ]; then
+        [ -n "${CI_API_V4_URL:-}" ] || die "missing $f, and no CI registry to fetch it from"
+        curl -fSL --connect-timeout 10 --header "JOB-TOKEN: $CI_JOB_TOKEN" -o "$f.part" \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/twentyx-store/$1/$2" \
+            || die "cannot fetch twentyx-store/$1/$2"
+        mv "$f.part" "$f"
+    fi
+    printf '%s' "$f"
+}
+manifest() { sed -n "s/^$1=//p" "$MANIFEST"; }
 
-# The nvim flavor is optional: a pipeline that only needs the small image
-# should not be forced to build and push the big one.
-FLAVORS="plain"
-if [ -f "$LAYER_NIX_NVIM" ]; then
-    FLAVORS="plain nvim"
-else
-    echo "note: $LAYER_NIX_NVIM absent -- building the plain flavor only" >&2
-fi
+MANIFEST="$(store_file "$STORE_RELEASE" MANIFEST.txt)"
+[ "$(manifest RELEASE)" = "$STORE_RELEASE" ] \
+    || die "$MANIFEST is release $(manifest RELEASE), not $STORE_RELEASE -- one release per STORE_DIR"
+BASE_RELEASE="$(manifest BASE_RELEASE)"
+KIND="$(manifest KIND)"
 
 # ── PATH must be PREPENDED, never replaced ────────────────────────────────
 # The pytorch bases put conda/site-packages directories on PATH, and torch does
 # not work without them. `crane mutate --env` overwrites, and there is no shell
 # at image-config level to expand $PATH -- so read the base's own value and
-# build the new one from it. `crane config` fetches the config blob only, which
-# is a few KB.
+# build the new one from it. `crane config` fetches the config blob only.
 base_path() {
     crane config "$1" 2>/dev/null \
         | jq -r '.config.Env[]? | select(startswith("PATH=")) | sub("^PATH=";"")' \
@@ -67,83 +72,74 @@ base_path() {
 }
 
 # ── the Nix session variables become image ENV ────────────────────────────
-# A shell rc only reaches processes that source it. TERMINFO_DIRS and
-# LOCALE_ARCHIVE are needed by anything that renders text, including
-# `runai exec -- cmd` and code-server's task runner, neither of which is a
-# login shell. So they belong in the image config, not just in fish.
-#
-# --occurrence=1 makes tar stop at the first match instead of streaming the
-# whole 400MB archive; the file is in the first member because layer.nix tars
-# opt/ before appending the store.
+# A shell rc only reaches processes that source it; `runai exec -- cmd` and
+# code-server's task runner never do. --occurrence=1 stops at the first match:
+# pod-tar.sh writes opt/ before the store paths.
 session_env_args() {
-    local layer="$1" line
+    local line
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         printf -- '--env\n%s\n' "$line"
-    done < <(tar -xzOf "$layer" --occurrence=1 opt/twentyx/session-env 2>/dev/null || true)
+    done < <(tar -xzOf "$1" --occurrence=1 opt/twentyx/session-env 2>/dev/null || true)
 }
 
-echo "layers:"
-for f in "$LAYER_NIX" "$LAYER_NIX_NVIM" "$LAYER_NIX_DELTA" "$LAYER_NIX_DELTA_NVIM" "$LAYER_REPO"; do
-    [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
-done
+# The store image for one base: built once, then cross-mounted by every commit.
+build_store() {
+    local base="$1" store="$2" full delta envlayer basepath
+    full="$(store_file "$BASE_RELEASE" pod-full.tar.gz)"
+    APPEND=(-f "$full")
+    envlayer="$full"
+    if [ "$KIND" = delta ]; then
+        delta="$(store_file "$STORE_RELEASE" pod-delta.tar.gz)"
+        # The delta overlays the full layer: new store paths, and an opt/
+        # tree (profile link, session-env, store-paths, sudo) that wins.
+        APPEND+=(-f "$delta")
+        envlayer="$delta"
+    fi
+    crane append -b "$base" -t "$store" "${APPEND[@]}" >/dev/null
 
+    basepath="$(base_path "$base")"
+    if [ -z "$basepath" ]; then
+        # No PATH in the base config means the runtime falls back to the
+        # kernel default. Reproduce it rather than silently dropping /sbin.
+        echo "  warn: $base declares no PATH; using a conservative default" >&2
+        basepath="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    fi
+    mapfile -t ENVARGS < <(session_env_args "$envlayer")
+    [ "${#ENVARGS[@]}" -gt 0 ] || die "no session-env in $envlayer"
+    crane mutate "$store" -t "$store" \
+        "${ENVARGS[@]}" \
+        --env TOOLCHAIN_ROOT=/opt/twentyx \
+        --env "PATH=/opt/twentyx/libexec:/opt/twentyx/bin:/opt/twentyx/profile/bin:${basepath}" \
+        --label "twentyx.store-release=${STORE_RELEASE}" >/dev/null
+}
+
+echo "store release $STORE_RELEASE ($KIND against $BASE_RELEASE)"
 for variant in $VARIANTS; do
     base="${BASE_REGISTRY}/${variant}:${BASE_TAG}"
+    digest="$(crane digest "$base")"
+    store="${REGISTRY}/workspace-store:${STORE_RELEASE}-${variant}-${digest:7:12}"
+    dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}"
+    echo "==> ${variant}"
+    echo "    base  ${base}"
 
-    BASEPATH="$(base_path "$base")"
-    if [ -z "$BASEPATH" ]; then
-        # No PATH in the base config means the runtime falls back to the
-        # kernel default. Reproduce it rather than shipping a PATH that
-        # silently drops /sbin.
-        echo "  warn: $base declares no PATH; using a conservative default" >&2
-        BASEPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    if [ -z "${FORCE_STORE:-}" ] && crane manifest "$store" >/dev/null 2>&1; then
+        echo "    store ${store} (exists)"
+    else
+        echo "    store ${store} (building)"
+        build_store "$base" "$store"
     fi
-    NEWPATH="/opt/twentyx/libexec:/opt/twentyx/bin:/opt/twentyx/profile/bin:${BASEPATH}"
 
-    # Same reasoning for the entrypoint: the vscode-* bases launch code-server
-    # from theirs. entrypoint bootstraps and then hands over, so record
-    # what it should hand over TO instead of discarding it.
+    # The vscode-* bases launch code-server from their ENTRYPOINT. Replacing
+    # it is how ours runs at all, so record what it should hand over TO.
     BASE_ENTRY="$(crane config "$base" 2>/dev/null \
         | jq -r '((.config.Entrypoint // []) + (.config.Cmd // [])) | join(" ")')"
 
-    for flavor in $FLAVORS; do
-        case "$flavor" in
-            plain) nixlayer="$LAYER_NIX";      nixdelta="$LAYER_NIX_DELTA";      suffix="" ;;
-            nvim)  nixlayer="$LAYER_NIX_NVIM"; nixdelta="$LAYER_NIX_DELTA_NVIM"; suffix="-nvim" ;;
-        esac
-        dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}${suffix}"
-
-        echo "==> ${variant}${suffix}"
-        echo "    base ${base}"
-
-        # Overlay order: base, then the delta that upgrades it, then text.
-        APPEND=(-f "$nixlayer")
-        [ -f "$nixdelta" ] && APPEND+=(-f "$nixdelta")
-        APPEND+=(-f "$LAYER_REPO")
-        crane append -b "$base" -t "$dest" "${APPEND[@]}" >/dev/null
-
-        # Read per flavor, from the topmost layer that carries it: the nvim
-        # base resolves to different store paths than the plain one, and the
-        # delta re-tars opt/ on every closure change.
-        envlayer="$nixlayer"
-        [ -f "$nixdelta" ] && envlayer="$nixdelta"
-        mapfile -t ENVARGS < <(session_env_args "$envlayer")
-        [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $envlayer" >&2
-
-        # Image config only; no layer traffic.
-        crane mutate "$dest" -t "$dest" \
-            "${ENVARGS[@]}" \
-            --env TOOLCHAIN_ROOT=/opt/twentyx \
-            --env "PATH=${NEWPATH}" \
-            --env "BASE_ENTRYPOINT=${BASE_ENTRY}" \
-            --entrypoint /opt/twentyx/libexec/entrypoint \
-            --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
-            --label "twentyx.variant=${variant}" \
-            --label "twentyx.flavor=${flavor}" >/dev/null
-
-        echo "    -> ${dest}"
-    done
+    crane append -b "$store" -t "$dest" -f "$LAYER_REPO" >/dev/null
+    crane mutate "$dest" -t "$dest" \
+        --env "BASE_ENTRYPOINT=${BASE_ENTRY}" \
+        --entrypoint /opt/twentyx/libexec/entrypoint \
+        --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
+        --label "twentyx.variant=${variant}" >/dev/null
+    echo "    ->    ${dest}"
 done
-
-echo "done: $(echo "$VARIANTS" | wc -w) variant(s) x $(echo "$FLAVORS" | wc -w) flavor(s)"

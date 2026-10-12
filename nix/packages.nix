@@ -1,11 +1,10 @@
-# The package set, selected with plain wsl/nvim booleans. Built on the
+# The package set, selected with a plain wsl boolean. Built on the
 # connected machine; the closure crosses the gap, nothing evaluates Nix in it.
 {
   lib,
   pkgs,
   inputs,
   wsl,
-  nvim,
 }:
 let
   # nixpkgs patchelf's bun, and `bun build --compile` recycles the moved
@@ -111,6 +110,7 @@ let
 
     # ── shell hygiene ──────────────────────────────────────────────────────
     shfmt
+    shellcheck # also the inner CI lint, run inside the assembled image
     glab
 
     # ── shell programs ─────────────────────────────────────────────────────
@@ -124,12 +124,11 @@ let
     atuin
     direnv
     tmux
+    neovim
 
     inputs.workmux.packages.${pkgs.stdenv.hostPlatform.system}.default
   ]
   ++ lspPackages
-  ++ lib.optionals nvim [ pkgs.neovim ]
-  ++ lib.optionals (!nvim) [ pkgs.nano ]
   ++ lib.optionals wsl [
     # ── cluster + image pipeline (you drive the cluster from WSL) ──────────
     pkgs.kubectl

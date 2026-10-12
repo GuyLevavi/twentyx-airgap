@@ -2,10 +2,10 @@
 #
 # .#windows-kit is what physically crosses the gap FOR the Windows machines:
 # the WSL2 MSI (so a Store-less, internet-less Windows can still get WSL2),
-# the Zed installer pinned to the SAME upstream release as the nixpkgs
-# zed-editor in the closure, the Zed theme files and the version-controlled
-# client templates (Zed settings, WezTerm config) that used to live only on
-# one laptop. Git stays text-only: the binaries are store artifacts fetched
+# the WezTerm installer, the Zed installer pinned to the SAME upstream release
+# as the nixpkgs zed-editor in the closure, the Zed theme files and the
+# version-controlled client templates (Zed settings, WezTerm config) that used
+# to live only on one laptop. Git stays text-only: the binaries are store artifacts fetched
 # by hash; the templates are plain files in nix/packages/windows/.
 #
 # Re-pin when nixpkgs bumps zed-editor (or a new WSL stable is wanted):
@@ -39,6 +39,19 @@ let
   vsixInstalls = lib.concatStringsSep "\n" (
     map (ext: ''ln -s ${ext.src} $out/vscode/vsix/${ext.src.name}'') vscodeExtensions
   );
+
+  # WezTerm for Windows: the terminal the kit's wezterm.lua configures.
+  # Nightly, not the 2024 stable: upstream publishes it under one moving asset
+  # name, so the hash pins whatever was current on the date in `name`. A
+  # fetched copy stays in the store, so rebuilds are cache hits; when the
+  # store has lost it the fetch fails on the hash. Re-pin at a rebase:
+  #     nix store prefetch-file --json --name WezTerm-nightly-<yyyymmdd>-setup.exe <url>
+  # and paste the name date + hash.
+  weztermInstaller = pkgs.fetchurl {
+    name = "WezTerm-nightly-20261013-setup.exe";
+    url = "https://github.com/wez/wezterm/releases/download/nightly/WezTerm-nightly-setup.exe";
+    hash = "sha256-WVhQCIhyMFedpCmegeBU+o96mD3ZcsGa1YI09qRXp3k=";
+  };
 
   wslMsi = pkgs.fetchurl {
     # Latest stable WSL2 MSI from github.com/microsoft/WSL releases. Covers
@@ -109,6 +122,7 @@ let
     mkdir -p $out/themes $out/vscode/vsix $out/zed-extensions
     ln -s ${zedInstaller} $out/Zed-x86_64-${zedVersion}-setup.exe
     ln -s ${wslMsi} $out/${wslMsi.name}
+    ln -s ${weztermInstaller} $out/${weztermInstaller.name}
     # Version-controlled client templates (repo files, not store paths).
     install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
     install -m 0644 ${./windows/wezterm.lua} $out/wezterm.lua

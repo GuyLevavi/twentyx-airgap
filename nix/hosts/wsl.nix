@@ -1,9 +1,9 @@
 # NixOS-WSL: the airgapped work laptop.
 #
-# A frozen appliance: nothing evaluates Nix inside the gap. Config edits are
-# real files in $HOME (seeded once, never overwritten); a change to the closure
-# is built on the connected machine and carried in as a store delta
-# (wsl-update.nar). See AGENTS.md.
+# A frozen appliance: nothing evaluates Nix inside the gap. A change to the
+# closure is built on the connected machine and carried in as a NAR against
+# base.rev (install/apply.sh). Config is the inner repo's dotfiles, linked into
+# $HOME by its wsl/link.sh. See AGENTS.md.
 {
   lib,
   pkgs,
@@ -25,7 +25,6 @@ let
       inputs
       ;
     wsl = true;
-    nvim = true;
   };
 
   # ── Windows-side assets ─────────────────────────────────────────────────
@@ -94,24 +93,21 @@ in
 
   i18n.defaultLocale = "en_US.UTF-8";
 
-  # ── Frozen appliance ────────────────────────────────────────────────────
-  # Nothing evaluates Nix inside the gap: updates arrive as a store delta
-  # (wsl-update.nar) applied with nix-store --import + nix-env --set. Nix
-  # itself is still here for `nix-store` and `nix-env`, but no substituter is
-  # reachable and none is configured.
+  # ── Frozen appliance, quiet Nix ─────────────────────────────────────────
+  # Nothing evaluates Nix inside the gap: updates arrive as a NAR
+  # (wsl-delta.nar / wsl-full.nar) applied by install/apply.sh with
+  # nix-store --import + nix-env --set. Nix stays for that, for rollback and
+  # for GC -- and nothing else: no flakes, no `nix` CLI, no substituter.
   nix.settings = {
-    experimental-features = [
-      "nix-command"
-      "flakes"
-    ];
+    # mkForce: NixOS appends cache.nixos.org to whatever is set here, and a
+    # lookup that cannot succeed stalls every operation first.
+    substituters = lib.mkForce [ ];
     trusted-users = [ username ];
     auto-optimise-store = true;
   };
-  # Never try the public cache; the DNS lookup cannot succeed and every
-  # operation would stall on it first. This also keeps the <nixpkgs> channel
-  # out — it used to symlink the ENTIRE nixpkgs source tree (482 MB) into the
-  # system closure, dead weight on a machine whose source of truth is this
-  # flake. (hostName/timeZone live right above; do not lose them.)
+  # No <nixpkgs> channel: it used to symlink the ENTIRE nixpkgs source tree
+  # (482 MB) into the system closure, dead weight on a machine that never
+  # evaluates Nix.
   nix.channel.enable = false;
 
   networking.hostName = "twentyx-wsl";
@@ -142,11 +138,11 @@ in
   nixpkgs.config.allowUnfree = true;
 
   # ── Internal CA at runtime ──────────────────────────────────────────────
-  # /var/lib/airgap-env/ca-bundle.crt is dropped in by setup-wsl.sh (or by
-  # hand) and never baked in: the bundle rotates and differs per cluster. The
-  # service concatenates it onto the system bundle; /etc and
-  # NODE_EXTRA_CA_CERTS point at the result, so adding or rotating the CA
-  # needs `systemctl restart airgap-ca`, not a transfer.
+  # /var/lib/airgap-env/ca-bundle.crt is dropped in by the inner repo's
+  # wsl/link.sh (or by hand) and never baked in: the bundle rotates and
+  # differs per cluster. The service concatenates it onto the system bundle;
+  # /etc and NODE_EXTRA_CA_CERTS point at the result, so adding or rotating
+  # the CA needs `systemctl restart airgap-ca`, not a transfer.
   systemd.services.airgap-ca = {
     description = "Build the runtime CA bundle (system store + injected CA)";
     wantedBy = [ "multi-user.target" ];
@@ -223,29 +219,6 @@ in
   # system trust store, hence the runtime CA bundle.
   environment.sessionVariables = twentyx.sessionEnv // {
     NODE_EXTRA_CA_CERTS = "/var/lib/airgap-env/ca-certificates.crt";
-  };
-
-  # Seed $HOME once per boot: home-defaults become store symlinks, dotfiles
-  # are copied in only when absent. A no-op until setup-wsl.sh has overlaid
-  # /opt/twentyx; setup-wsl restarts it after an update.
-  systemd.services.seed-home = {
-    description = "Seed $HOME from the toolchain tree";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "systemd-tmpfiles-setup.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      User = username;
-      Group = "users";
-    };
-    path = [
-      pkgs.bash
-      pkgs.coreutils
-    ];
-    script = ''
-      [ -x /opt/twentyx/libexec/seed-home ] || exit 0
-      exec /opt/twentyx/libexec/seed-home
-    '';
   };
 
   # ── Static identity: the closure ships a complete /etc/passwd ──────────

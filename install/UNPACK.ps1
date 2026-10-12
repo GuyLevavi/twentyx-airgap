@@ -5,23 +5,22 @@
 # What it does (idempotent; a personal file is never overwritten unless -Force):
 #   1. extracts windows-kit-*.tar.gz (found in -Base only, no recursion) into
 #      <Base>\windows-kit\ -- the tar already carries the windows-kit/ top
-#      directory, so extracting in -Base lands it there. setup-wsl.sh looks
-#      for the .vsix files under <transfer>\windows-kit\vscode\vsix, so this
-#      depth is load-bearing.
+#      directory, so extracting in -Base lands it there
 #   2. copies the Zed themes into %APPDATA%\Zed\themes and extracts the
 #      vendored Zed extensions into %LOCALAPPDATA%\Zed\extensions\installed
 #      (Zed rebuilds index.json from there at startup)
 #   3. installs zed-client-settings.json / wezterm.lua when absent; when a
-#      real file exists it writes a *.example next to it and says so
+#      real file exists it writes a *.example next to it and says so; installs
+#      WezTerm silently when no local install exists
 #   4. VS Code: installs vscode\VSCodeSetup-x64-*.exe silently when no local
 #      install exists; installs vscode\vscode-settings.json into
 #      %APPDATA%\Code\User\settings.json (or a settings.example.json beside
 #      an existing one). -SkipVSCode skips both.
 #
 # It does NOT touch nixos-wsl.tar.gz (wsl --import consumes it) and never
-# opens the layer tarballs (crane/CI consume those). The Linux side --
-# including the kit's VS Code extensions -- is handled inside the distro by
-# SETUP.ps1 / setup-wsl.sh.
+# opens the layer tarballs (crane/CI consume those). The Linux side is
+# SETUP.ps1's (apply.sh, then the inner repo's wsl/link.sh); the VS Code
+# server and its extensions are seeded by the distro itself.
 param(
     [string]$Base = $PSScriptRoot,
     [switch]$Force,
@@ -90,10 +89,21 @@ $wezSrc = Join-Path $kitRoot "wezterm.lua"
 if ((Test-Path $wez) -and -not $Force) {
     Copy-Item -Force $wezSrc "$wez.example"
     Say ".wezterm.lua already exists -- wrote $wez.example"
-    Say "  make sure it has: config.enable_kitty_keyboard = true  (shift+enter in TUIs)"
+    Say "  make sure it has: front_end = \"OpenGL\", max_fps = 60, and Alt+Enter freed (see the example)"
 } else {
     Copy-Item -Force $wezSrc $wez
     Say "WezTerm config installed -> $wez"
+}
+$wezExe = Join-Path $env:ProgramFiles "WezTerm\wezterm-gui.exe"
+$wezSetup = Get-ChildItem -Path $kitRoot -Filter "WezTerm-*-setup.exe" -File | Select-Object -First 1
+if (Test-Path $wezExe) {
+    Say "WezTerm already installed -- installer skipped"
+} elseif ($wezSetup) {
+    Say "installing WezTerm (silent): $($wezSetup.Name)"
+    Start-Process -FilePath $wezSetup.FullName `
+        -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+} else {
+    Say "WezTerm installer not found in the kit -- install skipped"
 }
 
 # -- VS Code ---------------------------------------------------------------
@@ -140,4 +150,4 @@ if ($SkipVSCode) {
 Say "done."
 Say "next: run the one-shot importer (imports the distro + runs the Linux side):"
 Say "  powershell -ExecutionPolicy Bypass -File $Base\SETUP.ps1"
-Say "VS Code extensions (vscode\vsix\*.vsix) are installed inside the distro by setup-wsl.sh."
+Say "VS Code extensions are seeded inside the distro (vscode-extensions service)."

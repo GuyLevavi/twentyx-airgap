@@ -47,14 +47,9 @@
       # One profile builder for both targets. `wsl` only flips WSL-only
       # packages and locale vars; the pod layer takes the same attrs.
       mkProfile =
-        { wsl, nvim }:
+        wsl:
         import ./nix/profile.nix {
-          inherit
-            pkgs
-            inputs
-            wsl
-            nvim
-            ;
+          inherit pkgs inputs wsl;
           lib = nixpkgs.lib;
         };
     in
@@ -71,34 +66,34 @@
         ];
       };
 
-      # ── RunAI: evaluated HERE, never inside. Nothing below ever runs Nix
-      # in a pod; we extract the built tree and ship it as an OCI layer.
+      # ── what scripts/transfer builds, here AND at base.rev ───────────────
+      # The attribute names are the contract between a transfer and its base:
+      # the script builds both from `git+file:.?rev=<base.rev>`, so renaming
+      # one needs a --rebase. Nothing below ever runs Nix in a pod.
       packages.${system} = {
-        runai-layer = pkgs.callPackage ./nix/runai/layer.nix (mkProfile {
-          wsl = false;
-          nvim = false;
-        });
-        runai-layer-nvim = pkgs.callPackage ./nix/runai/layer.nix (mkProfile {
-          wsl = false;
-          nvim = true;
-        });
-        default = self.packages.${system}.runai-layer;
+        # The pod's /opt/twentyx tree + closure list; scripts/pod-tar.sh packs
+        # it with the store paths as an OCI layer.
+        pod-opt = pkgs.callPackage ./nix/runai/layer.nix (mkProfile false);
 
-        # ── the very first transfer ────────────────────────────────────────
-        # Chicken and egg: a NixOS-WSL machine is needed to build one, and
-        # there is not one yet. This builds the rootfs tarball that
-        # `wsl --import` takes. The upstream builder, run under sudo:
+        # The WSL system; its closure ships as a NAR (install/apply.sh).
+        wsl-system = self.nixosConfigurations.wsl.config.system.build.toplevel;
+
+        # ── the very first install ───────────────────────────────────────
+        # The rootfs tarball `wsl --import` takes, built from base.rev so a
+        # fresh machine has the base every delta is computed against. The
+        # upstream builder, run under sudo:
         #   sudo ./result/bin/nixos-wsl-tarball-builder nixos-wsl.tar.gz
         wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
 
-        # ── the Windows-side half of the first transfer ───────────────────
-        # WSL2 MSI + the Zed installer pinned to the same upstream release as
-        # the closure's zed-editor, shipped as ONE tar.gz. See
-        # nix/packages/windows-kit.nix for the re-pin procedure.
+        # ── the Windows-side half of the first install ──────────────────
+        # WSL2 MSI + the Zed, VS Code and WezTerm installers, shipped as ONE
+        # tar.gz. See nix/packages/windows-kit.nix for the re-pin procedure.
         windows-kit =
           (pkgs.callPackage ./nix/packages/windows-kit.nix {
             zedVersion = pkgs.zed-editor.version;
           }).kitTarball;
+
+        default = self.packages.${system}.pod-opt;
       };
 
       devShells.${system}.default = pkgs.mkShell {

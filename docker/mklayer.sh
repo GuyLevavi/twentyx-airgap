@@ -13,7 +13,6 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT="${1:-dist/repo-layer.tar}"
-NIX_LAYER="${LAYER_NIX:-dist/nix-layer.tar.gz}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -23,11 +22,13 @@ for d in libexec agent dotfiles; do
     cp -a "$d" "$STAGE/opt/twentyx/$d"
 done
 # Cluster assets (internal CA, pip.conf) when the repo carries them in env/.
-# The runtime mounts/dirs win; setup-wsl.sh reads this as the fallback default.
+# The runtime mounts (/opt/airgap-env, /data/.airgap-env) win over this copy.
 if [ -d env ]; then
     cp -a env "$STAGE/opt/twentyx/env"
 fi
-cp -a VERSION "$STAGE/opt/twentyx/VERSION"
+# What doctor prints as the version: the commit this layer was cut from.
+git rev-parse --short HEAD > "$STAGE/opt/twentyx/VERSION" 2>/dev/null \
+    || echo dev > "$STAGE/opt/twentyx/VERSION"
 
 # ── sudo/root for the runtime user ────────────────────────────────────────
 # RunAI pods run as an arbitrary UID (observed: uid 10001) whose only
@@ -75,31 +76,6 @@ cat > "$STAGE/etc/gitconfig" <<'EOF'
 [merge]
 	conflictstyle = diff3
 EOF
-
-# The setuid sudo binary. Nix strips setuid bits from build outputs, so the
-# copy is done here, outside Nix: pull it out of the topmost layer (its RPATH
-# and plugin paths are absolute store paths that exist at runtime) and set the
-# bit on the copy. The repo layer is appended last, so this wins. The delta
-# re-tars the opt/ tree on every closure change, so prefer it over the base;
-# the base is the fallback. Skipped when neither is beside us; doctor catches
-# a missing or unusable sudo.
-mkdir -p "$STAGE/opt/twentyx/bin"
-extract_sudo() {
-    tar -xzOf "$1" --occurrence=1 opt/twentyx/bin/sudo \
-        > "$STAGE/opt/twentyx/bin/sudo" 2>/dev/null || true
-    [ -s "$STAGE/opt/twentyx/bin/sudo" ]
-}
-SUDO_SRC="$NIX_LAYER"
-[ -n "${LAYER_NIX_DELTA:-}" ] && [ -f "${LAYER_NIX_DELTA}" ] && SUDO_SRC="$LAYER_NIX_DELTA"
-if extract_sudo "$SUDO_SRC" || { [ "$SUDO_SRC" != "$NIX_LAYER" ] && extract_sudo "$NIX_LAYER"; }; then
-    # 4555, not 4755: the tar's --mode='g=u' copies user bits to group, and
-    # a group-writable setuid binary would let any gid-0 process replace
-    # it. With u=r-x there is nothing for g=u to escalate.
-    chmod 4555 "$STAGE/opt/twentyx/bin/sudo"
-else
-    echo "warn: no sudo in $SUDO_SRC or $NIX_LAYER -- is sudo in the closure?" >&2
-    rm -f "$STAGE/opt/twentyx/bin/sudo"
-fi
 
 # One entry on PATH that exists before anything has been bootstrapped, so
 # the doctor is runnable in a pod where everything else went wrong.

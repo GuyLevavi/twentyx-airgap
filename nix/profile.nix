@@ -6,7 +6,6 @@
   pkgs,
   inputs,
   wsl,
-  nvim ? false,
 }:
 let
   packages = import ./packages.nix {
@@ -15,7 +14,6 @@ let
       pkgs
       inputs
       wsl
-      nvim
       ;
   };
 
@@ -61,13 +59,8 @@ let
     }
   );
 
-  # The LazyVim plugin + parser tree. Only the nvim flavor carries it; the
-  # plain pod flavor gets an empty dir so the layer shape is stable.
-  nvimPlugins =
-    if nvim then
-      import ./packages/nvim-plugins.nix { inherit lib pkgs; }
-    else
-      pkgs.runCommand "twentyx-nvim-plugins" { } "mkdir -p $out";
+  # The LazyVim plugin + parser tree; lazy.nvim resolves every spec here.
+  nvimPlugins = import ./packages/nvim-plugins.nix { inherit lib pkgs; };
 
   # Agent skills, vendored from the pinned input. Upstream's marketplace.json
   # only lists its shipped set; these siblings are Claude/git-hook machinery
@@ -108,8 +101,8 @@ in
       "/etc/terminfo"
     ];
     COLORTERM = "truecolor";
-    EDITOR = if nvim then "nvim" else "nano";
-    VISUAL = if nvim then "nvim" else "nano";
+    EDITOR = "nvim";
+    VISUAL = "nvim";
     PAGER = "less";
     LESS = "-FRX";
 
@@ -121,8 +114,7 @@ in
     OPENCODE_DISABLE_LSP_DOWNLOAD = "true";
     OPENCODE_DISABLE_DEFAULT_PLUGINS = "true";
     OPENCODE_DISABLE_SHARE = "true";
-  }
-  // lib.optionalAttrs nvim {
+
     # lazy.nvim's dev root: every spec and the treesitter parsers resolve here.
     TWENTYX_NVIM_PLUGINS = "${nvimPlugins}";
   }
@@ -157,7 +149,4 @@ in
     ln -s ${opencodeVscode} "$out/.local/share/code-server/extensions/sst-dev.opencode"
     ln -s ${opencodeVscode.src} "$out/.local/share/vsix/sst-dev.opencode-0.0.13.vsix"
   '';
-
-  # Built in Phase 3; an empty dir keeps the layer shape stable until then.
-  nvimPlugins = pkgs.runCommand "twentyx-nvim-plugins" { } "mkdir -p $out";
 }
