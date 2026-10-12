@@ -115,7 +115,8 @@ nix-store --add-root .gcroots/wsl-system --indirect -r "$NEW" >/dev/null
 say "collecting the windows kit"
 KIT="$(nix build .#windows-kit --no-link --print-out-paths)"
 KITNAME="$(basename "$KIT")"
-cp -f "$KIT" "$BUILD/${KITNAME#*-}"
+KITB="${KITNAME#*-}"
+cp -f "$KIT" "$BUILD/$KITB"
 
 # ── 5. the docs + setup scripts ───────────────────────────────────────────
 say "carrying the documentation"
@@ -125,6 +126,13 @@ cp README.md ARCHITECTURE.md MANUAL.md "$OUT/docs/"
 cp README.md "$OUT/README.md"
 say "carrying the setup scripts"
 cp scripts/windows/UNPACK.ps1 scripts/windows/SETUP.ps1 scripts/setup-wsl.sh "$OUT/"
+# The internal CA travels plain when env/ has it: setup-wsl.sh stages it into
+# the distro, and SETUP.ps1 pins its own registry fetches with it on a
+# Windows machine that does not trust it yet.
+if [ -f env/ca-bundle.crt ]; then
+    cp env/ca-bundle.crt "$OUT/"
+    say "  ca-bundle.crt (distro staging + Windows fetch trust)"
+fi
 # The text layer travels plain: setup-wsl.sh overlays it onto the distro on
 # the first install and on every text-only update.
 cp "$BUILD/repo-layer.tar" "$OUT/"
@@ -161,6 +169,7 @@ say "writing MANIFEST.txt + SHA256SUMS"
     echo "GIT_REV=$(git rev-parse HEAD)"
     echo "WSL_SYSTEM=$NEW"
     echo "WSL_BASE=$BASE"
+    echo "WINDOWS_KIT=$KITB"
     echo "NIXPKGS_REV=$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
 } > "$OUT/MANIFEST.txt"
 

@@ -22,6 +22,11 @@ mkdir -p "$(dirname "$OUT")" "$STAGE/opt/twentyx" "$STAGE/usr/local/bin"
 for d in libexec agent dotfiles; do
     cp -a "$d" "$STAGE/opt/twentyx/$d"
 done
+# Cluster assets (internal CA, pip.conf) when the repo carries them in env/.
+# The runtime mounts/dirs win; setup-wsl.sh reads this as the fallback default.
+if [ -d env ]; then
+    cp -a env "$STAGE/opt/twentyx/env"
+fi
 cp -a VERSION "$STAGE/opt/twentyx/VERSION"
 
 # ── sudo/root for the runtime user ────────────────────────────────────────

@@ -76,8 +76,9 @@ powershell -ExecutionPolicy Bypass -File .\SETUP.ps1
 
 `SETUP.ps1` imports `nixos-wsl.tar.gz` as the `twentyx` distro (skipped when
 already registered), runs `UNPACK.ps1` (kit, Zed themes/settings/extensions,
-WezTerm, VS Code), and runs `setup-wsl.sh` as root inside the distro (overlay
-the text layer, stage the runtime CA, apply the closure delta when carried).
+WezTerm, VS Code), and — with `-GitlabUrl`/`-GitlabProject` — clones/pulls
+`~/twentyx` inside the distro and runs that checkout's `setup-wsl.sh`
+(otherwise the carried `setup-wsl.sh` runs against the transfer folder).
 Every knob is a parameter:
 
 ```powershell
@@ -104,13 +105,30 @@ if you see a prompt you are on an older image.
 | Artifact | Travels as | Becomes |
 |---|---|---|
 | `README.md`, `MANIFEST.txt`, `SHA256SUMS` | plain files | read directly (`sha256sum -c` after the unpack) |
-| `repo-layer.tar` | plain file | overlaid by `setup-wsl.sh` (text-only updates carry just this) |
+| `repo-layer.tar` | plain file | overlaid by `setup-wsl.sh` when run from a transfer folder; a checkout needs nothing |
+| `ca-bundle.crt` | plain file (when `env/` has it) | staged into the distro; pins `SETUP.ps1`'s registry fetches (`curl.exe --cacert`) |
 | `nixos-wsl.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `wsl --import` |
-| `windows-kit-*.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted by `UNPACK.ps1` |
+| `windows-kit-*.tar.gz` (inside `.7z`) | unpack with 7-Zip | extracted by `UNPACK.ps1`; fetched from GitLab packages when missing |
 | `wsl-update.nar` (inside `.7z`) | unpack with 7-Zip | imported by `setup-wsl.sh` on an existing distro |
 | `twentyx-airgap.bundle` | stays as-is | a git bundle: `git clone` it for history |
 | `nix-layer*.tar.gz` (inside `.7z`) | unpack with 7-Zip | consumed by `crane append` / CI |
 | `SETUP.ps1`, `UNPACK.ps1`, `setup-wsl.sh` | plain scripts | run directly |
+
+**A new machine** (or another user) whose WSL can reach the internal GitLab
+needs only the repo — clone it or take GitLab's archive zip — and runs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\SETUP.ps1 `
+  -GitlabUrl https://gitlab.internal -GitlabProject <group/project>
+```
+
+`SETUP.ps1` fetches what is missing from the project's package registry:
+`nixos-wsl.tar.gz` (rootfs), `windows-kit-*.tar.gz` (the Windows half,
+~600 MB, named by `MANIFEST.txt`'s `WINDOWS_KIT=` line), and `MANIFEST.txt`
+itself. Versions come from the repo's `VERSION` unless `-Version` is given.
+`-SkipUnpack` installs the distro only. Fetches pin the internal CA with a
+carried (or committed) `env/ca-bundle.crt`; without one, Windows must
+already trust it.
 
 ## 2. Cross the gap
 
@@ -127,9 +145,9 @@ state.
 |---|---|---|
 | `nix-layer.tar.gz.7z` (+`-nvim`) | ~1.1 GB each | GitLab packages → CI `crane append` |
 | `repo-layer.tar` | ~400 KB | `setup-wsl.sh` overlays `/opt/twentyx` (CI builds its own for pods) |
-| `nixos-wsl.tar.gz.7z` | ~1.5 GB | `wsl --import` |
-| `wsl-update.nar.7z` | closure delta | `setup-wsl.sh` on an existing distro |
-| `windows-kit-*.tar.gz.7z` | ~600 MB | Windows: `UNPACK.ps1` |
+| `nixos-wsl.tar.gz.7z` | ~1.5 GB | `wsl --import`, or GitLab packages → `SETUP.ps1` fetch |
+| `wsl-update.nar.7z` | closure delta | `setup-wsl.sh` on an existing distro (registry fetch available) |
+| `windows-kit-*.tar.gz.7z` | ~600 MB | Windows: `UNPACK.ps1`, or GitLab packages → `SETUP.ps1` fetch |
 | `twentyx-airgap.bundle` | ~300 KB | git history inside the distro |
 | docs + scripts + `MANIFEST.txt` + `SHA256SUMS` | KB | read directly |
 
@@ -138,15 +156,45 @@ state.
 A text-only change (`libexec/`, `agent/`, `dotfiles/`) needs the new
 `repo-layer.tar` only. A closure change needs `wsl-update.nar` too, built by
 `transfer-bundle.sh` from the last shipped system (`.gcroots/wsl-system`).
+Neither big file has to be carried when the internal GitLab is reachable:
+from a transfer folder `setup-wsl.sh` reads the local `MANIFEST.txt`; from a
+checkout it fetches `MANIFEST.txt` first (the version comes from the repo's
+`VERSION`), then `wsl-update.nar` — with `GITLAB_URL`/`GITLAB_PROJECT` set;
+the project is public, no token (`GITLAB_TOKEN` is for a private mirror). A
+404 or an unreachable registry just falls back to the text layer.
 
 ```bash
 # Windows, elevated, from the extracted transfer folder
 wsl -d twentyx -u root -- bash /mnt/c/twentyx/setup-wsl.sh
+
+# or, from inside the distro, pulling the delta instead of carrying it:
+sudo env GITLAB_URL=https://gitlab.internal GITLAB_PROJECT=<group/project> \
+    bash /mnt/c/twentyx/setup-wsl.sh
 ```
 
-`setup-wsl.sh` overlays `/opt/twentyx`, drops `ca-bundle.crt`/`pip.conf`
-into `/var/lib/airgap-env` and restarts `airgap-ca`, then (when a delta is
-carried) `nix-store --import`s it, sets the system profile, runs
+A distro with the repo checked out carries nothing at all: the clone is the
+live text tree. `seed-home` prefers the clone over `/opt`, so `$HOME`
+dotfile links target `~/twentyx/dotfiles` — a config edit or `git pull` is
+live at once. On an existing distro, `SETUP.ps1 -GitlabUrl/-GitlabProject`
+also passes those coordinates to `setup-wsl.sh`, so the same run picks up a
+closure delta when the registry has one.
+
+```bash
+git -C ~/twentyx pull
+sudo systemctl restart seed-home        # after files are added or renamed
+sudo ~/twentyx/scripts/setup-wsl.sh     # after env/; add GITLAB_URL/GITLAB_PROJECT
+                                        # (as above) for a closure change
+```
+
+Sharing: edit `~/.config/<file>` — the symlink writes into the clone — then
+`git -C ~/twentyx commit -am '<what changed>' && git push`; teammates
+pick it up with `git pull`.
+
+Run from a transfer folder, `setup-wsl.sh` overlays `/opt/twentyx`; run from
+a checkout it installs the clone's seed-home as the `/opt` entry point and
+skips the rest. Either way it stages `ca-bundle.crt`/
+`pip.conf` into `/var/lib/airgap-env` and restarts `airgap-ca`, then (when a
+delta is carried) `nix-store --import`s it, sets the system profile, runs
 `switch-to-configuration switch`, and re-seeds `$HOME`. A switch that
 reports failed units has still switched: the script prints them and
 continues (exit 4); any other failure aborts.
@@ -159,22 +207,28 @@ wsl -d twentyx -u root -- bash -c \
    /nix/var/nix/profiles/system/bin/switch-to-configuration switch'
 ```
 
-A config edit is not an update: edit the real file in `$HOME`, no transfer.
-The seeded files report when a shipped default has moved on:
-`newer default available: diff <shipped> <yours>`.
+A config fix is an edit to `dotfiles/` in the repo, not to `$HOME`: the file
+there is a symlink into the toolchain tree — the clone itself when
+`setup-wsl.sh` ran from a checkout, otherwise `/opt/twentyx/dotfiles`. To keep
+a private override instead, delete the link and write a real file — it is
+yours from then on. An edited real file reports when the shipped default has
+moved on: `newer default available: diff <shipped> <yours>`.
 
-### Internal CA and pip.conf
+### Internal CA and pip.conf (WSL only)
 
-Drop them next to `setup-wsl.sh` in the transfer folder (or into
-`/var/lib/airgap-env` by hand) and restart the service:
+The repo carries them as `env/ca-bundle.crt` and `env/pip.conf`; the text
+layer puts them at `/opt/twentyx/env/`, and `setup-wsl.sh` stages them into
+`/var/lib/airgap-env` (a file next to `setup-wsl.sh` in the transfer folder
+still wins). Rotate by editing `env/` and re-running the text update.
 
 ```bash
-wsl -d twentyx -u root -- systemctl restart airgap-ca
+wsl -d twentyx -u root -- systemctl restart airgap-ca   # re-run without an update
 ```
 
 `airgap-ca` concatenates the system bundle with `ca-bundle.crt`;
-`/etc/ssl/certs/*` and `NODE_EXTRA_CA_CERTS` point at the result. No
-transfer and no rebuild to add or rotate the CA.
+`/etc/ssl/certs/*` and `NODE_EXTRA_CA_CERTS` point at the result.
+
+Pods do not use `env/`: their base image already handles CA and pip.
 
 ## 4. Pods
 
@@ -187,12 +241,16 @@ not fit, use Artifactory instead.
 
 ```bash
 7z x nix-layer.tar.gz.7z && 7z x nix-layer-nvim.tar.gz.7z   # plain names; never publish the .7z
-git clone twentyx-airgap.bundle twentyx-airgap
+git clone twentyx-airgap.bundle twentyx
 export GITLAB_TOKEN=<token> GITLAB_PROJECT=<group/project|id>
 export GITLAB_URL=https://gitlab.internal          # default: gitlab.com
-./twentyx-airgap/scripts/push-gitlab-packages.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
-# fallback:
-./twentyx-airgap/scripts/push-artifactory.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
+./twentyx/scripts/push-gitlab-packages.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
+# the WSL artifacts too, so SETUP.ps1 / setup-wsl.sh can fetch them (never the .7z):
+7z x nixos-wsl.tar.gz.7z && 7z x wsl-update.nar.7z && 7z x windows-kit-*.tar.gz.7z
+./twentyx/scripts/push-gitlab-packages.sh \
+    nixos-wsl.tar.gz wsl-update.nar windows-kit-*.tar.gz MANIFEST.txt
+# fallback (pods only; the WSL fetch paths read GitLab packages):
+./twentyx/scripts/push-artifactory.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
 ```
 
 CI (`assemble`) fetches the layers, rebuilds `repo-layer.tar` from the

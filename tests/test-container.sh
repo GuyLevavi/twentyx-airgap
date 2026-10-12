@@ -164,11 +164,17 @@ expect_ok "opencode preload plugin linked from the store" \
     run_ic bash -c 'test -L /data/jensen/.config/opencode/plugins/preload.ts'
 expect_ok "code-server opencode extension linked from the store" \
     run_ic bash -c 'test -L /data/jensen/.local/share/code-server/extensions/sst-dev.opencode'
-# Dotfiles are the user's: real files, copied once, never symlinks.
-expect_ok "fish config seeded as a real file" \
-    run_ic bash -c 'test -f /data/jensen/.config/fish/config.fish && [ ! -L /data/jensen/.config/fish/config.fish ]'
-expect_ok "zed settings seeded as a real file" \
-    run_ic bash -c 'test -f /data/jensen/.config/zed/settings.json && [ ! -L /data/jensen/.config/zed/settings.json ]'
+# Dotfiles are ours: symlinks into the toolchain tree, so a text-layer update
+# renews them with no reseed.
+expect_ok "fish config linked into the toolchain tree" \
+    run_ic bash -c 'd=/data/jensen/.config/fish/config.fish; test -L "$d" && [ "$(readlink "$d")" = /opt/twentyx/dotfiles/.config/fish/config.fish ]'
+expect_ok "zed settings linked into the toolchain tree" \
+    run_ic bash -c 'd=/data/jensen/.config/zed/settings.json; test -L "$d" && [ "$(readlink "$d")" = /opt/twentyx/dotfiles/.config/zed/settings.json ]'
+# Migration: an unmodified real copy becomes a link, an edited one stays.
+expect_ok "unmodified real copy is adopted as a symlink" \
+    run_ic bash -c 'd=/data/jensen/.config/tmux/tmux.conf; rm -f "$d"; cp /opt/twentyx/dotfiles/.config/tmux/tmux.conf "$d"; /opt/twentyx/libexec/seed-home >/dev/null 2>&1; [ -L "$d" ]'
+expect_ok "edited real copy is left alone" \
+    run_ic bash -c 'd=/data/jensen/.config/btop/btop.conf; rm -f "$d"; { cat /opt/twentyx/dotfiles/.config/btop/btop.conf; echo "# mine"; } > "$d"; /opt/twentyx/libexec/seed-home >/dev/null 2>&1; [ -f "$d" ] && [ ! -L "$d" ]'
 expect_ok "zed agent_servers default seeded" \
     run_ic bash -c 'grep -q opencode /data/jensen/.config/zed/settings.json'
 # The pins are stable /opt paths now: a store path here would go stale on the

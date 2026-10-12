@@ -45,13 +45,19 @@ So the model changed: **nothing evaluates Nix inside the gap.**
 - `nix/profile.nix` builds the package profile, the session environment and
   a tree of packaged defaults; `nix/packages.nix` is the package list with
   plain `wsl`/`nvim` booleans.
-- `dotfiles/` is plain text in the repo. `libexec/seed-home` copies each file
-  into `$HOME` once (never overwriting a real file) and refreshes the
-  packaged-default symlinks every start. A stale home-manager-era link
-  (dangling, or into `*-home-manager-files`) is treated as ours and replaced.
-- Config edits are therefore real files in `$HOME`; the gap never gives them
-  back, and a shipped default that moved on reports
-  `newer default available: diff <shipped> <yours>`.
+- `dotfiles/` is plain text in the repo. `libexec/seed-home` symlinks each
+  file from `$HOME` into the toolchain tree, so a text-layer update renews it
+  with no reseed. On WSL `seed-home` prefers a checkout at `~/twentyx` over
+  `/opt` (script-level, so the text layer alone enables it), so that tree is
+  the clone itself: edit
+  `~/.config/<file>`, commit, push, done. A real file at the same path is the
+  user's and is never clobbered, and a default that moved on reports
+  `newer default available: diff <shipped> <yours>`. An identical real copy
+  is adopted as a link, so pre-symlink homes migrate on the next start. A
+  stale home-manager-era link (dangling, or into `*-home-manager-files`) is
+  treated as ours and replaced.
+- Local overrides: delete the link and write a real file; it is yours from
+  then on, and a repo update will never touch it.
 
 **Stable paths.** Everything points at `/opt/twentyx/profile/bin/<tool>`:
 on WSL a tmpfiles rule links `/opt/twentyx/profile` to the system path, in a
@@ -65,8 +71,9 @@ setting goes stale on the next closure update; this is the fix.
   (`.gcroots/wsl-system`) so a collection cannot delete the base. With no
   base (first transfer, or a far side older than the last shipment) the whole
   closure is exported.
-- `setup-wsl.sh` overlays the text layer, stages CA/pip.conf, imports the
-  delta, `nix-env --set`s the system profile, runs
+- `setup-wsl.sh` overlays the text layer (from a checkout there is nothing to
+  overlay: `seed-home` prefers the clone instead), stages
+  CA/pip.conf, imports the delta, `nix-env --set`s the system profile, runs
   `switch-to-configuration switch`, and restarts `seed-home`. Rollback is
   `nix-env --rollback` + switch.
 - The tarball is built by the **upstream** NixOS-WSL builder under `sudo`.
@@ -118,8 +125,9 @@ unwritable on the PVC); neutral git settings ship as `/etc/gitconfig`.
 
 ## The `$HOME` rule
 
-A symlink into `/nix/store` is ours; a real file is the user's. `seed-home`
-enforces it: defaults are refreshed, dotfiles are copied once. `XDG_CACHE_HOME`
+A symlink into `/nix/store` or the toolchain tree is ours; a real file is the
+user's. `seed-home` enforces it: defaults and dotfiles are refreshed links, a
+real file is never clobbered. `XDG_CACHE_HOME`
 is deliberately ephemeral (the PVC is network-backed; nvim/LSP/pip on it are
 painfully slow).
 

@@ -103,8 +103,8 @@ agent binary. The boot chain:
    generates the runtime env into `/opt/twentyx/etc/`, prewrites podman's
    `storage.conf` (vfs — no mounts needed), and execs `seed-home`.
 3. `libexec/seed-home` — the only writer into `$HOME`: refreshes the
-   packaged-default store symlinks and copies each dotfile in once. A real
-   file is the user's and is never touched.
+   packaged-default store symlinks and links each dotfile into the text
+   tree. A real file is the user's and is never touched.
 4. `libexec/run-opencode` — the agent launcher: replaces the hostile
    `LD_PRELOAD` with the libc *matching opencode's own glibc* (via `ldd`),
    stashes the original in `PRELOAD_ORIGINAL`, and points `BASH_ENV` at a
@@ -114,9 +114,10 @@ agent binary. The boot chain:
    Zed/SSH can reach a pod with no exposed port (`scripts/ssh-bridge.sh` on
    the WSL side).
 
-The `$HOME` rule to remember: **a symlink into `/nix/store` is ours, a real
-file is the user's.** Packaged defaults are refreshed symlinks; dotfiles are
-copied once. `/opt/twentyx/profile/bin/<tool>` is the stable path editor
+The `$HOME` rule to remember: **a symlink into `/nix/store`, `/opt/twentyx`
+or (on a WSL checkout) the clone is ours, a real file is the user's.**
+Defaults and dotfiles are refreshed links; edit the repo, not the link.
+`/opt/twentyx/profile/bin/<tool>` is the stable path editor
 settings point at, so they survive closure updates.
 
 Cluster-specific files (internal CA, pip.conf) are never baked in: they
@@ -130,10 +131,12 @@ Same profile, evaluated as a real NixOS system: systemd, sshd, podman,
 nix-ld, and a Python stack (the pod deliberately does *not* carry Python —
 the base image owns torch). But it is a **frozen appliance**:
 
-- the image ships the closure; `setup-wsl.sh` overlays the text layer and
-  imports a store delta, then switches the system profile;
-- config lives in `dotfiles/`, seeded once into `$HOME` — edits are local
-  files, and the gap never gives them back;
+- the image ships the closure; `setup-wsl.sh` overlays the text layer (run
+  from a checkout, the clone itself is the text tree) and imports a store
+  delta, then switches the system profile;
+- config lives in `dotfiles/`, linked into `$HOME`; run `setup-wsl.sh` from
+  a checkout and the links target that clone — an edit or `git pull` is live
+  (the edit lands in the git worktree, yours to commit or discard);
 - the internal CA is built at runtime by the `airgap-ca` oneshot from the
   system bundle + `/var/lib/airgap-env/ca-bundle.crt`;
 - a user-visible smoke checklist is MANUAL.md §5.

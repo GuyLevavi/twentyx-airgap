@@ -30,14 +30,13 @@ libexec scripts are the entry points (`doctor`, `run-opencode`, `bootstrap`,
 
 | Change type | Where | Deploy cost |
 |---|---|---|
-| `libexec/`, `agent/`, `dotfiles/` | git text | CI re-tars `repo-layer.tar` per commit (no transfer) |
+| `libexec/`, `agent/`, `dotfiles/`, `env/` | git text | CI re-tars `repo-layer.tar` per commit (no transfer) |
 | anything in `flake.nix` / `nix/` | closure | rebuild → **physical transfer** |
 
 `nix/packages.nix` is the package list; adding a package changes both
 targets. `nix/profile.nix` builds the profile, the session environment and
-the packaged defaults. `dotfiles/` is seeded into `$HOME` **once** and then
-belongs to the user — editing a seeded file in the repo changes nothing for
-an existing home.
+the packaged defaults. `dotfiles/` is symlinked into `$HOME` — a text-layer
+update renews it; a real file at the same path is the user's and wins.
 
 ## Never evaluate Nix inside the gap
 
@@ -47,10 +46,18 @@ an existing home.
   successful export. Rollback is `nix-env --rollback` + switch.
 - Pods never run Nix: `nix/runai/layer.nix` extracts the built closure as an
   OCI layer tarball; `docker/assemble.sh` appends it registry-side.
-- No runtime fetch anywhere: opencode's model fetch/updates are off, Zed's
+- No implicit runtime fetch: opencode's model fetch/updates are off, Zed's
   auto-update and `auto_install_extensions` are off, npm is seeded around,
-  and LazyVim resolves through lazy's `dev` mechanism. A runtime fetch in the
-  gap is a hang, not an error.
+  and LazyVim resolves through lazy's `dev` mechanism. A failed fetch in the
+  gap is a hang, not an error. The deliberate exceptions are the token-gated
+  pulls from the internal GitLab package registry: `SETUP.ps1` fetches
+  `nixos-wsl.tar.gz` and `windows-kit-*.tar.gz` (named by `MANIFEST.txt`'s
+  `WINDOWS_KIT=` line) when they are not local, `setup-wsl.sh` fetches
+  `MANIFEST.txt` (version from the repo's `VERSION`) and `wsl-update.nar`
+  when they are not carried. All are opt-in via
+  `GITLAB_URL`/`GITLAB_PROJECT` (public project; `GITLAB_TOKEN` only for a
+  private mirror) and fail fast (`--connect-timeout 10`) into the no-fetch
+  path.
 
 ## Transfers
 
@@ -91,22 +98,29 @@ build errors:
 
 ## `$HOME` layering rule
 
-A symlink into `/nix/store` is ours and refreshed on every start; a real file
-is the user's and is never touched. `libexec/seed-home` is the only writer:
-packaged defaults as store symlinks, dotfiles copied once. `XDG_CACHE_HOME`
+A symlink into `/nix/store`, `/opt/twentyx` or (on a WSL checkout) the clone
+is ours and refreshed on every start; a real file is the user's and is never
+touched. `libexec/seed-home` is
+the only writer: packaged defaults as store symlinks, dotfiles as links into
+the text tree — a checkout at `~/twentyx` wins: `seed-home` prefers
+it over `/opt` (script-level, so the text layer alone enables it), and
+edits and `git pull` are live there. `XDG_CACHE_HOME`
 is deliberately ephemeral (local disk). For an arbitrary UID with no passwd
 entry the runtime sets `HOME=/`; `entrypoint` and `run-opencode` re-resolve
 it via `session_home()` — keep those in sync when touching identity.
 
 ## Environment-provided assets
 
-Cluster-specific files (internal CA bundle, pip.conf) are never baked in:
-`/opt/airgap-env` (ConfigMap mount) wins over `/data/.airgap-env` (shared
-PVC). Known files are wired to env vars by `injection_exports()` in
-`common.sh`, consumed by bootstrap (drop-ins), the entrypoint (exec'd
-payloads) and the launcher (agent tree) — keep all three in sync. CRI exec
-(`runai exec -- cmd`) sees none of these; scripts reached that way must
-self-resolve.
+Cluster-specific files (internal CA bundle, pip.conf) are never baked into
+the closure: in a pod `/opt/airgap-env` (ConfigMap mount) wins over
+`/data/.airgap-env` (shared PVC), and known file names are wired to env vars
+by `injection_exports()` in `common.sh` — unknown ones stay reachable at
+their path — consumed by bootstrap (drop-ins), the
+entrypoint (exec'd payloads) and the launcher (agent tree) — keep all three
+in sync. CRI exec (`runai exec -- cmd`) sees none of these; scripts reached
+that way must self-resolve. WSL has no mounts, so its defaults ride the
+repo as `env/` (staged by `mklayer.sh`, read by `setup-wsl.sh` with the
+transfer dir winning); pods' base image handles CA/pip itself.
 
 ## Editors & agents
 
@@ -127,8 +141,9 @@ self-resolve.
 - `push-gitlab-packages.sh` / `push-artifactory.sh` (image layers) are a
   different flow from the WSL transfer (`transfer-bundle.sh` →
   `setup-wsl.sh`) — don't confuse them.
-- `mklayer.sh` stages `libexec/`, `agent/`, `dotfiles/`, `VERSION` and the
-  generated `etc/` files; it is the one-commit deploy path.
+- `mklayer.sh` stages `libexec/`, `agent/`, `dotfiles/`, `env/` (when
+  present), `VERSION` and the generated `etc/` files; it is the one-commit
+  deploy path.
 - `ldd`/`ldconfig -p | awk '…exit'` returns 141 (SIGPIPE) under `pipefail` —
   always add `|| true`.
 - `find` does not descend into a symlinked starting point; `seed-home`

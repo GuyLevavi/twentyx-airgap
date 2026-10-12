@@ -11,7 +11,5 @@ node_modules/
 # The last shipped WSL system, a GC root for the next delta.
 .gcroots/
 
-ca-bundle.crt
-
-# The last shipped WSL system, a GC root for the next delta.
-.gcroots/
+# An accidental drop at the root; the repo's copies live in env/.
+/ca-bundle.crt
