@@ -1,316 +1,180 @@
-# Notes: open items and the why
+# Notes: open items and the why (outside)
 
-`README.md`, `ARCHITECTURE.md` and `MANUAL.md` are canonical for how the
-system works. This file is the other half: what is still open, and the
-reasoning behind the pieces that are load-bearing and must not be
-"simplified".
+What is still open, and the reasoning behind the pieces that are
+load-bearing and must not be "simplified". The pod-side why (session.env,
+preload split, identity, `$HOME` rule) is in `inside-seed/NOTES.md`.
 
 ## Open items
 
-- **nginx site config.** nginx is in the pod closure so port exposure does
-  not depend on the base; the exact site config RunAI expects (or whether it
-  wants one) is unpinned. When known it belongs in the env-injection mount,
-  not the closure.
-- **sshd bridge.** `libexec/sshd-inetd` + `scripts/ssh-bridge.sh` are
-  implemented but only exercised against a real `runai exec`.
-- **opencode slowness on WSL [open].** Reported slow in the distro; the log
-  directory has not been read (the VHDX cannot be inspected from Linux). Ask
-  for a dump from inside:
-  `wsl -d twentyx -- bash -lc 'cd ~; { ls -la .local/share/opencode/log/; tail -150 "$(ls -t .local/share/opencode/log/*.log | head -1)"; } > /mnt/c/twentyx/diag.txt 2>&1'`
-- **`no-new-privileges`.** Whether RunAI sets it (which would block the
-  setuid sudo) is unverifiable locally; `doctor`'s sudo line answers it on a
-  real pod.
-- **CUDA under the real fractioning preloaders.** The preload split is fully
-  covered by tests, but the proprietary RunAI libraries only exist in a
-  fractioned pod.
-- **First transfer against the real bases** (PATH prepending on a pytorch
-  base, ENTRYPOINT hand-over on a `vscode-*` one) and the laptop no-WWW
-  rehearsal are the two end-to-end checks still pending.
-- **Zed `cloud.zed.dev` preflight.** On first connect the client may check
-  its account/extension service; with the vendored extensions and the
-  release-matched server it should not need it, but only the gap proves it.
+- **`nixos-wsl.tar.gz` is ~2954 MB, 4% under the 3072 MB/file cap**, and 7z
+  cannot shrink a gzip. If it crosses, the transfer refuses; the fix is
+  trimming the WSL closure, not splitting the file.
+- **WSL full NAR size** after 7z (expected ~1.3 GB) and unpacked (several GB)
+  against the inside GitLab's `max_package_size`: measure at the first rebase.
+- **opencode is AVX2-only** (bun compile without `--baseline`): it SIGILLs on
+  a pre-Haswell node. The fix would be a local overlay, not a downgrade.
+- **First release on the real bases and runners** (inside NOTES.md lists the
+  pod-side checks).
 
-## Frozen appliance: why home-manager was dropped
+## Nothing evaluates Nix inside the gap
 
-The old WSL side rebuilt config inside the gap, and that never actually
-worked: the shipped system's runtime closure was missing the build-time
-inputs every home-manager rebuild needs — `lndir` (every `symlinkJoin`),
-`babelfish` (fish session vars; its source is on GitHub, which is the
-"rebuild looks for github" report), `json2x` (every TOML/YAML `formats.*`
-file), `jq.dev` (every `formats.json`), and buildEnv's `builder.pl`. The only
-rebuild that succeeded was a no-op at the same commit.
+The old WSL side rebuilt config inside, and it never worked: the shipped
+closure lacked the build-time inputs every home-manager rebuild needs
+(`lndir`, `babelfish`, `json2x`, `jq.dev`, buildEnv's `builder.pl`), and the
+only rebuild that succeeded was a no-op. So the model is: this machine builds
+everything, files cross, the far side only imports.
 
-So the model changed: **nothing evaluates Nix inside the gap.**
+- WSL keeps the `nix-store`/`nix-env` binaries for import, profile switching,
+  rollback and GC. `nix.settings.substituters = lib.mkForce [ ]` (a plain
+  `[ ]` still merges in `cache.nixos.org`); no flakes, no `nix-command`.
+- Config is the inner repo's text, linked into `$HOME`; the closure only
+  provides binaries and binary-coupled defaults under stable paths
+  (`/opt/twentyx/profile`, `/opt/twentyx/home-defaults`). A store path baked
+  into a config goes stale on the next update; a stable path does not.
 
-- `nix/profile.nix` builds the package profile, the session environment and
-  a tree of packaged defaults; `nix/packages.nix` is the package list with
-  plain `wsl`/`nvim` booleans.
-- `dotfiles/` is plain text in the repo. `libexec/seed-home` symlinks each
-  file from `$HOME` into the toolchain tree, so a text-layer update renews it
-  with no reseed. On WSL `seed-home` prefers a checkout at `~/twentyx` over
-  `/opt` (script-level, so the text layer alone enables it), so that tree is
-  the clone itself: edit
-  `~/.config/<file>`, commit, push, done. A real file at the same path is the
-  user's and is never clobbered, and a default that moved on reports
-  `newer default available: diff <shipped> <yours>`. An identical real copy
-  is adopted as a link, so pre-symlink homes migrate on the next start. A
-  stale home-manager-era link (dangling, or into `*-home-manager-files`) is
-  treated as ours and replaced.
-- Local overrides: delete the link and write a real file; it is yours from
-  then on, and a repo update will never touch it.
+## Deltas: cumulative against one pinned base
 
-**Stable paths.** Everything points at `/opt/twentyx/profile/bin/<tool>`:
-on WSL a tmpfiles rule links `/opt/twentyx/profile` to the system path, in a
-pod the layer links it to the buildEnv. A store path baked into an editor
-setting goes stale on the next closure update; this is the fix.
+Nothing comes back out of the gap to say what a machine has, so every delta
+is computed against `base.rev`, which every machine is known to have (it
+installed from that base's rootfs, or imported its full NAR). Store paths
+are immutable, so a delta is just the paths HEAD adds; skipping or
+reordering deltas is harmless. Removed packages linger until a rebase (disk
+only). The transfer builds the base's closures from `git+file:.?rev=<base>`,
+so the flake attribute names are a contract with every past base: renaming
+one needs a rebase.
 
-## WSL updates: the delta and the builder
+- **Pods:** a tar layer. `pod-tar.sh` writes the `/opt/twentyx` tree first
+  (so `assemble.sh` finds `session-env` with `--occurrence=1`), then the store
+  paths, deterministically (`--sort=name --mtime=@1 --owner=0`, `gzip -n`).
+  The delta's `opt/` overlays the full layer's: identical paths, no
+  whiteouts.
+- **The setuid sudo** is a tar member with mode 4555: a mode bit in a tar
+  header is data, while Nix forbids setuid *files* in outputs.
+- **WSL:** a NAR, because NixOS-WSL remounts `/nix/store` read-only (a plain
+  `tar -x` fails) and `nix-store --import` is atomic, verifies hashes and
+  refuses a delta whose references are missing. `nix-store --load-db` was
+  rejected: it registers paths whose files do not exist as valid. An empty
+  export (8 bytes) imports as a no-op, so a release always has the same
+  files. The NAR is one `nix-store --export` with the paths as argv:
+  concatenated exports import only up to the first end marker.
+- `apply.sh` roots the base (`/nix/var/nix/gcroots/twentyx-base`), so the
+  monthly GC cannot collect what later deltas assume.
 
-- The update artifact is a store delta (`wsl-update.nar`) exported against
-  the last shipped system, kept as an indirect GC root
-  (`.gcroots/wsl-system`) so a collection cannot delete the base. With no
-  base (first transfer, or a far side older than the last shipment) the whole
-  closure is exported.
-- `setup-wsl.sh` overlays the text layer (from a checkout there is nothing to
-  overlay: `seed-home` prefers the clone instead), stages
-  CA/pip.conf, imports the delta, `nix-env --set`s the system profile, runs
-  `switch-to-configuration switch`, and restarts `seed-home`. Rollback is
-  `nix-env --rollback` + switch.
-- The tarball is built by the **upstream** NixOS-WSL builder under `sudo`.
-  The previous custom rootless builder existed only to work around
-  user-namespace EINVALs; with real root those workarounds
-  (`createHome = false`, tmpfiles home rules, activation chowns) are gone.
-  No `--chown home/jensen`: upstream applies chowns before `nixos-install`
-  (it is for `--extra-files`), and the activation script already creates the
-  home as 1000:100. The tarball is the only artifact that needs sudo.
+## The rootfs builder needs real root
 
-## The pod layer delta (why cumulative, not chained)
-
-The WSL side always had a closure delta because `nix-store --export` supports
-one; the OCI side did not, so any package addition re-gzipped and re-carried
-the whole ~1 GB layer per flavor. The fix uses the property the layers already
-rely on: Nix store paths are immutable and image layers are additive. A delta
-is therefore just the new store paths plus the regenerated `opt/` tree, and
-`crane append` overlays it in order.
-
-It is **cumulative against the base layer** (everything since the last full
-build), not chained delta-on-delta. Chained would need the registry and CI to
-track and append an ordered list of layers; cumulative needs no state — CI
-always appends base + one delta. The cost is that the delta grows until a
-squash, which is accepted: `SQUASH=1` rebuilds the base, and
-`transfer-bundle.sh` squashes automatically when the delta passes half the
-base, which is exactly what a nixpkgs bump produces. Removed packages linger
-as orphan store paths until then (disk only, no whiteouts needed).
-
-`build/.layerdrv` stamps the base; `build/.layerdelta` stamps what the delta
-was built from. The delta is valid only for the base tarball beside it, so
-`transfer-bundle.sh` rebuilds the base when the tarball is missing and
-`build-layers.sh --delta` refuses to run without it. On WSL the same change
-also produces the usual `wsl-update.nar`, so both targets move with one
-small carry; `UPDATE=1` skips the unchanged big artifacts entirely.
+The upstream NixOS-WSL builder chroots and bind-mounts, hence `sudo`. A
+previous rootless builder existed only to dodge user-namespace EINVALs; with
+real root those workarounds are gone. No `--chown home/jensen`: it runs
+before `nixos-install` (it is for `--extra-files`), and activation creates
+the home as 1000:100 anyway. The rootfs is built from `base.rev`, so a fresh
+install already has the base.
 
 ## WSL switches exit 4 (WSL >= 2.9.8)
 
 `switch-to-configuration` returns 4 when units fail although the switch
-happened. Two known WSL-side sources, both fixed at the config:
+happened. Two WSL-side sources, both fixed in `wsl.nix`:
 
 - WSL's init generates `wsl-mnt-guard.service` (`ExecStart=/bin/true`);
-  NixOS-WSL's minimal `/bin` lacked `true`, so it died 203/EXEC whenever
-  `sysinit-reactivation.target` restarted it. `wsl.extraBin` now appends
-  coreutils `true` (NixOS-WSL#1100).
-- `wsl.interop.register = true` asked systemd-binfmt to bind `WSLInterop`
-  again; WSL's init already bound it and the kernel refuses a duplicate name
-  with `-EEXIST`. Left at the upstream default (false).
+  NixOS-WSL's minimal `/bin` lacked `true`. `wsl.extraBin` adds it
+  (NixOS-WSL#1100).
+- `wsl.interop.register = true` re-bound `WSLInterop`, which WSL's init
+  already binds (`-EEXIST`). Left at the upstream default (false).
 
-`setup-wsl.sh` still tolerates exit 4 (warns + `systemctl --failed`, then
-continues to re-seed `$HOME`); anything else is fatal. The switch has
-already happened by then, so aborting would skip step 4 over a degraded
-unit.
+`apply.sh` still treats exit 4 as a warning and prints `systemctl --failed`.
 
 ## No signing, by decision
 
-Integrity is the content-addressed store hash: a damaged path fails on the
-path it damaged, not on "the transfer". `SHA256SUMS` in `dist/` is a
-post-copy convenience for the carry medium, not the trust anchor. There is no
-`require-sigs`/substituter configuration on WSL at all any more — nothing
-fetches.
-
-## Identity on the shared PVC
-
-Every runtime user is uid 10001/gid 0 and the hostname is
-`<workspace-name>-<n>-<n>`; the OS knows nothing about who you are.
-`session_user()` resolves, first hit wins: `$SESSION_USER` → workspace-name
-leading component → local part of `git config user.email` → `$USERNAME`/
-`$USER`. A baked email deliberately does not exist: the closure is
-distributed to a team, and a baked identity would file everyone's state into
-one person's PVC directory. For the same reason there is no packaged
-`~/.config/git/config` (a store symlink would make `git config --global`
-unwritable on the PVC); neutral git settings ship as `/etc/gitconfig`.
-`doctor` prints which rule fired.
-
-## The `$HOME` rule
-
-A symlink into `/nix/store` or the toolchain tree is ours; a real file is the
-user's. `seed-home` enforces it: defaults and dotfiles are refreshed links, a
-real file is never clobbered. `XDG_CACHE_HOME`
-is deliberately ephemeral (the PVC is network-backed; nvim/LSP/pip on it are
-painfully slow).
-
-## LD_PRELOAD / CUDA split
-
-RunAI injects GPU-fractioning `.so`s through `LD_PRELOAD`; they crash
-opencode, but CUDA needs them back in everything the agent runs. The antidote
-does **not** unset `LD_PRELOAD` — it replaces it with the libc matching the
-target binary's own glibc (a system libc preloaded into a Nix binary is a
-`GLIBC_PRIVATE` symbol-lookup error) and stashes the original in
-`PRELOAD_ORIGINAL` for children (`agent/plugins/preload.ts` via opencode's
-`shell.env`, `agent/restore-preload.sh` via `BASH_ENV`).
-
-**SIGPIPE trap:** `ldd`/`ldconfig -p | awk '…exit'` returns 141 under
-`set -o pipefail`, silently killing the launcher. Every such probe carries
-`|| true`.
+Integrity is the store hash: a damaged path fails on that path, and
+`nix-store --import` checks every NAR hash. There is no `require-sigs` and no
+substituter on WSL at all, because nothing fetches.
 
 ## opencode on old kernels
 
-nixpkgs must patchelf bun (its `PT_INTERP` points into the store), and
-patchelf's header sort moves `PT_GNU_STACK` to the front; `bun build
---compile` recycles that slot so the highest-vaddr `PT_LOAD` lands first.
-Linux <= 6.6 (WSL2, RHEL 8/9) never maps the BSS and SIGSEGVs in ld.so before
-`main`. `opencodeFixed` runs `nix/scripts/fix-phdr-order.py` in `postFixup`
+nixpkgs patchelfs bun, and patchelf's header sort moves `PT_GNU_STACK` first;
+`bun build --compile` recycles that slot so the highest-vaddr `PT_LOAD` comes
+first. Linux <= 6.6 (WSL2, RHEL 8/9) then never maps the BSS and SIGSEGVs in
+ld.so. `opencodeFixed` runs `nix/scripts/fix-phdr-order.py` in `postFixup`
 and fails the build if the layout is still unsafe; `tests/test-container.sh`
-asserts the shipped binary's LOADs ascend. References:
-nixpkgs #520383 / #523047, opencode #26846.
-
-Separately, the binary is AVX2-only (bun compile without `--baseline`): on a
-pre-Haswell cluster node it SIGILLs. The fix is a local overlay, not a
-downgrade.
-
-**npm stall:** opencode's loader runs an npm install of `@opencode-ai/plugin`
-in every config dir at startup; with no registry the TUI stalls ~1.5 min.
-Seeding `node_modules/.keep` + a `package-lock.json` declaring the dependency
-skips it. Re-check that pair when opencode bumps.
+asserts the shipped LOADs ascend. nixpkgs #520383 / #523047, opencode #26846.
 
 ## Zed, offline
 
 The remote server ships in the closure under the client's **exact full
-version string** (build metadata included) — `nix/zed-client-version.nix`,
-re-pinned in lockstep with the kit installer. The client treats the file as
-present iff `<file> version` exits 0, so no download happens. LSPs are pinned
-to `/opt/twentyx/profile/bin` in the seeded
-`dotfiles/.config/zed/settings.json`; prettier is off. The kit vendors the
+version string** (`nix/zed-client-version.nix`), re-pinned with the kit's
+installer: the client treats the file as present iff `<file> version` exits
+0, so nothing downloads. It sits in `home-defaults/.zed_server/`, and the
+inside links `~/.zed_server` to that directory once. The kit vendors the
 nix/toml/tombi/dockerfile/env extensions (nixd and tombi have no built-in
-adapter in the server); `UNPACK.ps1` extracts them client-side and removes
-`extensions\index.json`, which Zed rebuilds from `installed/` at startup.
+adapter); `UNPACK.ps1` extracts them and drops `extensions\index.json`, which
+Zed rebuilds at startup.
 
 ## VS Code, offline
 
-The Windows client is Microsoft VS Code, and Remote-WSL demands a server for
-the client's exact commit. `nix/vscode-version.nix` pins the release +
-commit; `nix/vscode-extensions.nix` pins each `.vsix` with an explicit
-fetchurl (no nixpkgs coupling). A oneshot runs as `jensen`, extracts the
-server when absent, writes the remote machine settings with `/opt` pins when
-absent, and installs the extensions with the server's own CLI.
+Remote-WSL demands a server for the client's exact commit.
+`nix/vscode-version.nix` pins release + commit; `nix/vscode-extensions.nix`
+pins each `.vsix` by explicit fetchurl. A oneshot in `wsl.nix` extracts the
+server when absent and installs the extensions with the server's own CLI;
+the LSP pins are an inside dotfile
+(`.vscode-server/data/Machine/settings.json`).
 
-**Fallback if Remote-WSL fails to start on the real machine:** the stock
-server's bundled node runs through `programs.nix-ld`; if the vsce-sign
-libssl check defeats that, re-add the `nixos-vscode-server` flake input and
-its module (it RPATH-patches the bundled node), and drop the oneshot's
-extraction step. Do not keep both.
+**Fallback if Remote-WSL fails on the real machine:** the stock server's node
+runs through `programs.nix-ld`; if the vsce-sign libssl check defeats that,
+re-add the `nixos-vscode-server` flake input and module (it RPATH-patches the
+bundled node) and drop the oneshot's extraction. Never both.
 
 ## LazyVim, offline
 
 `nix/packages/nvim-plugins.nix` builds one linkFarm: every plugin under the
-name lazy.nvim derives from its URL, plus `parser/` and `queries/` from the
-selected treesitter grammars. `lua/config/airgap.lua` points lazy's `dev` at
-it (`patterns = { "" }`, `fallback = false`), disables installs/checker/
-change detection, and sets nvim-treesitter's `install_dir` there. Mason is
-disabled, so the language servers come from PATH (the profile). The same
-derivation runs a headless nvim check **in the Nix sandbox** (no network):
-every enabled spec must resolve inside the tree, every wanted parser must be
-installed, every LSP binary must be on PATH, and `:messages` must be clean —
-a missing piece fails the build, not the airgap session.
+name lazy.nvim derives from its URL, plus treesitter `parser/` and
+`queries/`. The inner repo's nvim config points lazy's `dev` at it
+(`TWENTYX_NVIM_PLUGINS`, `fallback = false`), with installs, checker and
+Mason off. The derivation runs a headless nvim **in the Nix sandbox** against
+`inside-seed/dotfiles/.config/nvim`: every spec must resolve, every parser
+exist, every LSP be on PATH, `:messages` be clean. A plugin the inside wants
+is therefore a request: add it to `pluginAttrs` and to the seed's spec
+together.
 
-## code-server and the arbitrary UID
+## Pod closure roots
 
-code-server is in the pod closure (built from source against a baseline
-Node), ahead of the base's copy; the `sst-dev.opencode` extension is seeded.
-`assemble.sh` records the base's ENTRYPOINT in `BASE_ENTRYPOINT` and the
-entrypoint hands over to it, and the session variables are image ENV so
-code-server's task runner still gets `TERMINFO_DIRS`/`LOCALE_ARCHIVE`.
-
-OpenShift's arbitrary UID has no passwd entry and a nameless supplementary
-gid. Our append-only layers cannot chmod `/etc/passwd`; the documented fix is
-a thin derived base:
-
-```dockerfile
-FROM <vendor-base>
-RUN chgrp 0 /etc/passwd /etc/group && chmod g+w /etc/passwd /etc/group
-```
-
-Meanwhile `entrypoint` self-registers the UID/group when `/etc` is writable,
-and `doctor` reports whether that worked. Until the derived base exists the
-warning is noise, not breakage.
+The pod closure is rooted at the profile, `home-defaults` **and the
+session-env file**. Before that, three store paths named by image ENV
+(`TWENTYX_NVIM_PLUGINS`, `LOCALE_ARCHIVE`, the wezterm terminfo in
+`TERMINFO_DIRS`) were missing from every pod image.
 
 ## How this is tested without the gap
 
-`tests/test-container.sh` assembles the image against a mock base
-(ubuntu:24.04 in a local registry) and runs it under the problematic pod
-shape (`--user 10001:0`, tmpfs PVC, a hostile preloader, an env-injection
-mount). It asserts: HOME relocation, closure integrity after `crane append`,
-the preload split (bare opencode dies, the launcher survives, children get
-the preload back), address-ascending `PT_LOAD`s, defaults as store symlinks
-vs dotfiles as real files, Zed pins at `/opt`, the env-injection contract,
-sudoers + setuid sudo, nginx, and repo-layer determinism.
+`tests/test-container.sh` packs a release with `pod-tar.sh`, assembles the
+image with `inside-seed/docker/` against a mock base (ubuntu:24.04 in a local
+registry), and runs it as the problematic pod: `--user 10001:0`, tmpfs PVC, a
+hostile preloader, an env-injection mount, plus a `podman exec` session like
+`runai exec`. It checks HOME relocation, closure integrity, the preload split,
+ascending `PT_LOAD`s, dotfile links and real-file precedence, git identity,
+Zed/code-server links, session.env in bash and fish, sudoers + setuid sudo,
+and layer determinism. Harness artifacts, not bugs: the sudo PAM error under
+rootless podman, and exit 139 vs 134 for a signal death.
 
-Two harness artifacts, not image bugs: the sudo PAM error under rootless
-podman (setuid-root maps to the host user, which cannot read `/etc/shadow`),
-and a signal-death exit code of 139 or 134 depending on opencode's own
-handlers.
-
-`tests/test-gpu-cuda.sh` is opt-in for GPU hosts (nvidia CDI setup in its
-header) — in practice gpubox only.
+`tests/test-gpu-cuda.sh` is opt-in for a GPU host (CDI setup in its header).
 
 ## The local store repair (2026-09)
 
 The default store had never held the layer's build-plan closure (6,034
-paths: `.drv` files, patches, source trees); the layer builds lived in the
-chroot store `/tmp/airgap-test-store`, which built the same eval fine. Three
-damage classes, each with a different remedy:
+paths: `.drv` files, patches, sources); builds had lived in the chroot store
+`/tmp/airgap-test-store`. Three damage classes:
 
-1. *file + row missing* (545 `.drv` files): `nix copy` skips these (its
-   skip-on-row logic) — needs a file copy **and** row registration;
-2. *row present, file lost*: `nix copy` silently skips them ("copying 0
-   paths"), and `nix build` believes the path is realized until build-env
-   setup trips over the missing file — only a file copy fixes these;
-3. *rows for paths in no store anymore*: harmless unless a current eval
-   references them; `sudo nix-store --verify --check-contents --repair`
-   substitutes or unregisters the rest.
+1. *file + row missing* (545 `.drv`s): `nix copy` skips these; needs a file
+   copy **and** row registration;
+2. *row present, file lost*: `nix copy` silently skips them, and `nix build`
+   trips later; only a file copy fixes them;
+3. *rows for paths in no store*: harmless unless referenced;
+   `sudo nix-store --verify --check-contents --repair` cleans up.
 
-The repair that worked (chroot store as donor):
+The repair that worked:
 
     nix path-info --store /tmp/airgap-test-store -r <top-drv...>
     sudo xargs -a missing.txt -I{} cp -a "/tmp/airgap-test-store{}" /nix/store/
     sudo nix copy --from /tmp/airgap-test-store --to daemon <top-drv...>
     sudo nix-store --verify --check-contents --repair
 
-Two facts worth remembering: **`/nix/store` was never read-only** (the
-"remount first" advice was wrong — remount-rw on an already-rw mount fails
-`EBUSY`), and running `nix copy` as root **from** a chroot store leaves
-root-owned lock files in the donor, so the next build there dies with
-`opening lock file ... Permission denied`; `sudo chown -R <you>
-/tmp/airgap-test-store` fixes it. Both layer flavors build on the default
-store (verified 2026-09); the chroot remains the throwaway fallback.
-
-## Shell gotchas worth keeping
-
-- **One heredoc per language.** A bash heredoc nested inside a generated
-  fish file made fish refuse the whole file ("Expected a string, but found a
-  redirection"), so no PATH or env reached any interactive pod shell and
-  podman's `storage.conf` was never written. The test suite now feeds the
-  generated fish to `fish -n` and asserts `storage.conf` exists.
-- **tmux panes opened as bash** because the tmux server inherited
-  `BASH_EXECS_FISH`; the config sets `default-shell` to the profile fish
-  directly.
-- **`find` does not descend into a symlinked starting point** — `seed-home`
-  resolves `home-defaults` with `readlink -f` first, or every default would
-  link to a garbage path and the install loop would silently no-op.
+`/nix/store` on this machine was never read-only (remount-rw fails `EBUSY`),
+and `nix copy` as root from a chroot store leaves root-owned locks there:
+`sudo chown -R <you> /tmp/airgap-test-store`.

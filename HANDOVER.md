@@ -1,15 +1,72 @@
-# Handover log: outside changes the inside must consolidate
+# HANDOVER: outside changes the inner repo must consolidate
 
-Appended with every outside stage commit (PLAN.md, D16). Stage 3 renders it
-into `HANDOVER.md`. Each entry has:
+Ships with every transfer, next to `inside-seed.tar` (the inner repo as the
+outside knows it). Written for the inside agents: mechanical steps, and a
+fixed rule wherever a judgement call would otherwise be needed.
+
+## How to read this file
+
+The log below has one entry per outside change. Each entry gives:
 
 - **What and why**: the change, and the reason it exists.
-- **Inside files**: paths in the inner repo this touches.
-- **Required edits** (R-numbers): edits to inside-owned files, applied *on top
-  of* the inside version. Each gives the intent, the exact snippet, and how to
-  verify it. Everywhere else the inside version wins.
-- **Likely overlaps**: inside work this supersedes or collides with, and what
+- **Inside files**: paths in the inner repo it touches.
+- **Required edits** (R-numbers): edits to inside-owned files, applied *on
+  top of* the inside version, each with intent, exact snippet and a verify
+  step. **Everywhere else the inside version wins.**
+- **Likely overlaps**: inside work it supersedes or collides with, and what
   to do with it.
+
+`inside-seed.tar` is a reference to diff against and a source for new files
+an edit names; never extract it over inside content. R-numbers are global
+and never reused: an R already applied in an earlier shipment is skipped.
+
+## First shipment only: adopting the split
+
+1. **Branch.** In the inner repo: `git switch -c adopt-split`. Never work on
+   `main`.
+2. **Inventory inside work first.** For each path below, list the inside
+   commits since the last imported bundle
+   (`git log --oneline <last-bundle-commit>..main -- <path>`) into
+   `adopt-split-inventory.md`. Every listed commit must be accounted for by
+   the end.
+3. **Apply by category. The rule is fixed per category:**
+   - `flake.nix`, `flake.lock`, `nix/`, `scripts/build-*`,
+     `scripts/transfer*`, `scripts/setup-wsl.sh`, `scripts/windows/`,
+     `scripts/push-artifactory.sh`, `VERSION`, `.gcroots/`, `tests/`,
+     `ARCHITECTURE.md`: **delete**. If an inside commit changed one, write
+     what it wanted as a line in `REQUESTS.md` (e.g. "need `hyperfine` in the
+     closure") instead of keeping the change.
+   - `dotfiles/`, `env/`: **the inside version wins.** Move files whose path
+     changed; never take content from the seed over inside content, except
+     where an R-edit below says so.
+   - `.gitlab-ci.yml`: take the job structure from the seed (R3), then
+     re-apply inside-only variables, runner tags, auth and rules.
+   - Pod scripts (`libexec/*`, `agent/*` → `pod/`), `docker/`,
+     `scripts/ssh-bridge.sh` → `wsl/`: **take the seed's structure, then
+     re-apply each inside fix** from the inventory by hand, one commit per
+     fix, naming the original commit (R9).
+   - New in the seed (`pod/link-home`, `wsl/link.sh`, `wsl/update.sh`,
+     `windows/`, `CONTRACT.md`, `REQUESTS.md`, `NOTES.md`): take as-is.
+   - Docs: take the seed's `README.md`, `AGENTS.md`, `MANUAL.md`, `NOTES.md`,
+     then append any inside-only knowledge from the old docs (cluster names,
+     runner quirks, site procedures) under a "Site notes" heading in the
+     matching file. Do not drop inside knowledge because the seed lacks it.
+4. **Apply every R-edit below**, in order, one commit each.
+5. **Publish and pin:** `scripts/push-gitlab-packages.sh` from the transfer
+   folder (inner `MANUAL.md` §1), then R1.
+6. **Verify**, stopping at the first failure: CI `assemble` and `smoke` pass;
+   a pod from the new image boots and `doctor` is green (a sudo *note* is
+   fine); on WSL, `wsl/update.sh` (or the transfer folder's `apply.sh`),
+   then `wsl/link.sh`, run clean, and opencode starts without a stall.
+7. **Close the inventory:** every commit is marked *re-applied*, *moved to
+   REQUESTS.md*, or *obsolete because …*. Then merge to `main`.
+8. **From now on:** inside never edits Nix; binaries and system changes go
+   in `REQUESTS.md`, carried out by hand.
+
+## Every later shipment
+
+Publish and pin as in steps 5–6 above, apply the new R-edits, and skip the
+inventory unless an entry asks for one.
 
 ---
 
@@ -270,3 +327,59 @@ inside `doctor` change turns an environmental check back into a failure.
   in `pod/entrypoint` if they depend on `HOME`; otherwise put them in the dotfiles.
 - Inside fixes to `seed-home`'s link logic: obsolete. `pod/link-home` replaces it, and it migrates the old
   store links on first run.
+
+---
+
+## Stage 3: the split
+
+### What and why
+
+- **Two repos.** The outside keeps `flake.nix`, `nix/`, `scripts/transfer.sh`,
+  `scripts/pod-tar.sh`, `install/` (`SETUP.ps1`, `UNPACK.ps1`, `apply.sh`), `tests/` and
+  `base.rev`. Everything else is the inner repo's, in the layout of `inside-seed.tar`.
+  `CONTRACT.md` (identical in both) is the interface.
+- **`wsl/update.sh`** (new): fetches the pinned `STORE_RELEASE`'s `MANIFEST.txt`, `apply.sh`
+  and `wsl-<KIND>.nar` from this project's package registry and runs `apply.sh` under sudo. The
+  registry is derived from `git remote get-url origin`; `GITLAB_URL`/`GITLAB_PROJECT` override,
+  `GITLAB_TOKEN` only for a private project. It replaces the registry fetch of the old
+  `setup-wsl.sh`.
+- **`REQUESTS.md`** (new): the outbound channel. One line per binary, closure or WSL system
+  change wanted.
+- **Two outside builds read the seed:** the LazyVim sandbox check builds against
+  `inside-seed/dotfiles/.config/nvim`, and the Windows kit's first-install client configs are
+  `inside-seed/windows/*`. So a LazyVim plugin or extra the inside wants is a `REQUESTS.md` line
+  (the plugin tree is closure), and the kit's configs are refreshed from inside by the owner.
+- **The transfer carries this file and `inside-seed.tar` every time.**
+
+### Inside files
+
+New: `wsl/update.sh`, `REQUESTS.md`, `CONTRACT.md`, `README.md`, `AGENTS.md`, `MANUAL.md`,
+`NOTES.md`, `env/README.md`, `.gitignore`. Deleted: everything listed under "delete" in the
+procedure above.
+
+### Required edits
+
+**R12. Adopt `wsl/update.sh`.** Take it as-is. If the inside clones over SSH or through a
+proxy, check that the derived registry URL is right (`bash -x wsl/update.sh` prints it) or set
+`GITLAB_URL`/`GITLAB_PROJECT` in the user's environment. *Verify:* on WSL, after R1,
+`~/twentyx/wsl/update.sh` either prints `already at <release>` or imports and switches.
+
+**R13. Docs.** Take the seed's `README.md`, `AGENTS.md`, `MANUAL.md`, `NOTES.md` and
+`CONTRACT.md`; append inside-only knowledge under "Site notes" (procedure step 3). *Verify:*
+nothing from the old docs that is about this site (registry names, runner settings, pod
+template values, contacts) is lost.
+
+**R14. .gitignore.** Take the seed's `.gitignore`, then re-add inside-only patterns. It must
+keep `!dotfiles/.config/opencode/node_modules/`. *Verify:*
+`git check-ignore dotfiles/.config/opencode/node_modules/.keep` prints nothing.
+
+### Likely overlaps
+
+- **pip / uv config.** The inside already translated the index config into a `uv.toml`; that
+  wins. The outside does not wire `pip.conf` on WSL (`wsl/link.sh` only stages it to
+  `/var/lib/airgap-env/`). Keep the inside's mechanism, and drop the seed's `pip.conf` lines from
+  `wsl/link.sh` if the inside no longer ships one.
+- Inside edits to `scripts/windows/SETUP.ps1`/`UNPACK.ps1`: outside-owned now (`install/`).
+  Write each one's intent into `REQUESTS.md`.
+- Inside edits to the nvim spec that add plugins or extras: they need the plugin in the
+  closure. Keep the edit, add a `REQUESTS.md` line naming the plugin.

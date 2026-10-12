@@ -30,9 +30,10 @@ Most of the simplification then comes from deleting code.
 | D12 | **Staged migration.** The split comes last and is handed inside with explicit merge instructions for the inside agents. |
 | D13 | **Fetch code follows the pin.** Every package lives in the internal GitLab registry, as today, under `twentyx-store/<RELEASE>/`. `apply.sh` reads local files only; the inner repo's `wsl/update.sh` downloads the pinned `STORE_RELEASE` and calls it. `SETUP.ps1` keeps its install-time fetch (outside repo, new package path). `push-gitlab-packages.sh` moves inside. |
 | D15 | **One shipment.** Stages 1–3 are local commits; the gap receives one transfer: a rebase (`pod-full` + `wsl-full` + the install set; the first `base.rev` must carry the new build attrs), `inside-seed.tar`, `HANDOVER.md`. |
-| D16 | **Handover as required edits.** Outside changes to inside-owned files (dotfiles, `.gitlab-ci.yml`) are numbered edits — intent, exact snippet, how to verify — applied on top of the inside version, which wins everywhere else. `handover/CHANGES.md` is appended with every stage commit, so nothing is reconstructed at the end. |
-| D17 | **Windows client configs live inside** (`windows/`: `wezterm.lua`, `zed-client-settings.json`, `vscode-settings.json`). `UNPACK.ps1` takes them from the clone (`\\wsl.localhost\<distro>\home\<user>\twentyx\windows`) when it exists; the kit's copies in `nix/packages/windows/` are first-install defaults only, refreshed from inside by hand. `UNPACK.ps1 -ConfigOnly` re-applies them after a `git pull`. |
+| D16 | **Handover as required edits.** Outside changes to inside-owned files (dotfiles, `.gitlab-ci.yml`) are numbered edits — intent, exact snippet, how to verify — applied on top of the inside version, which wins everywhere else. `HANDOVER.md` (procedure + change log) is appended with every stage commit and ships with every transfer, so nothing is reconstructed at the end. |
+| D17 | **Windows client configs live inside** (`windows/`: `wezterm.lua`, `zed-client-settings.json`, `vscode-settings.json`). `UNPACK.ps1` takes them from the clone (`\\wsl.localhost\<distro>\home\<user>\twentyx\windows`) when it exists; the kit takes `inside-seed/windows/` as first-install defaults (D18), refreshed from inside by hand. `UNPACK.ps1 -ConfigOnly` re-applies them after a `git pull`. |
 | D14 | **$HOME linking: one linker, `pod/link-home` (stow + ~20 lines), on both targets.** The pod entrypoint runs it; on WSL `wsl/link.sh` does. Packaged defaults are not linked file by file: `opencode.jsonc` names the skills and plugin by their `/opt/twentyx/home-defaults` paths, and only `~/.zed_server` (+ the pod's code-server extension) is linked, once. *(Amended 2026-10-13: stow refuses absolute links into the store, which ruled out stowing the defaults.)* |
+| D18 | **`inside-seed/` stays in the outside repo** as the one outside copy of the inner repo: the handover payload (`inside-seed.tar`, every transfer), the fixture `tests/test-container.sh` runs against, and the spec two outside builds read (the LazyVim sandbox check, the Windows kit's client configs). It replaces `tests/fixtures/pod/` and `nix/packages/windows/`. Never live config: the inner repo wins, and the outside edits it only to mirror a required edit. *(2026-10-13, Stage 3.)* |
 
 ## Verified facts (2026-10-13)
 
@@ -110,7 +111,7 @@ The `opt/` tree carries the setuid `sudo`: a mode bit inside a tar header is dat
 derivation that writes the tar sets `4555` on that member (Nix only forbids setuid *files* in
 outputs). `mklayer.sh`'s `extract_sudo` goes away.
 
-### Handover log (`handover/CHANGES.md`, outside, every stage commit)
+### Handover log (`HANDOVER.md`, outside, every stage commit)
 
 Each entry: what changed and why; the inside files it touches; for inside-owned files a numbered
 **required edit** (intent, exact snippet, verify step); and **likely inside overlaps**: inside work
@@ -155,7 +156,7 @@ file into the repo).
 
 ## Stage 1: cumulative per-target deltas against base.rev (outside)
 
-**Status: done** on branch `split` (2026-10-13). The as-built record is `handover/CHANGES.md`. `--install` was folded into
+**Status: done** on branch `split` (2026-10-13). The as-built record is `HANDOVER.md`. `--install` was folded into
 `--rebase`, and the transfer script is `scripts/transfer.sh`.
 
 1. **Fold nvim, fix the closure roots.** One profile (`nvim = true`); drop `runai-layer-nvim`,
@@ -206,7 +207,7 @@ whose `store-paths` are all present (`doctor`).
 
 **Status: done** on branch `split` (2026-10-13). D14 supersedes steps 1 and 2: one `pod/link-home` and no
 tmpfiles rules or link lists. The pod scripts live in `pod/` (`/opt/twentyx/libexec` in the image),
-and `wsl/` holds `link.sh` and `ssh-bridge.sh`. The as-built record is `handover/CHANGES.md`.
+and `wsl/` holds `link.sh` and `ssh-bridge.sh`. The as-built record is `HANDOVER.md`.
 
 1. **dotfiles on WSL:** add `stow` to the closure (perl is already there). `wsl/link.sh` runs
    `stow -d ~/twentyx -t ~ --no-folding dotfiles` and stows `/opt/twentyx/home-defaults` the same
@@ -254,6 +255,8 @@ prints the PVC home; a pod from a new repo layer picks up a config change on the
 `test-container.sh` passes.
 
 ## Stage 3: split (outside)
+
+**Status: done** on branch `split` (2026-10-13). Amended by D18: `inside-seed/` stays (no `tests/fixtures/pod/`, no second copy of the Windows configs), and steps 4–5 became "point the tests and the two seed-reading builds at it". `HANDOVER.md` is the renamed `handover/CHANGES.md` with the Stage 4 procedure on top. `transfer.sh` ships it and `inside-seed.tar` every time, and builds the rootfs first so the sudo prompt comes before the long part. Docs: `ARCHITECTURE.md` folded into `README.md`; each repo has README, AGENTS, MANUAL, NOTES.
 
 1. Create the outside repo layout (above) in this repo: move `install/`, keep `nix/`, `scripts/`,
    `tests/`, and add `CONTRACT.md` and `base.rev`.

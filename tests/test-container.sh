@@ -13,6 +13,10 @@
 #   - sudoers shipped, setuid sudo present
 #   - repo-layer determinism
 #
+# The inner repo's side (pod scripts, dotfiles, mklayer/assemble) is the frozen
+# copy in inside-seed/: this tests that the outside's artifacts work with it.
+# The inner repo's CI smoke job tests its live version.
+#
 # Needs: podman, crane, jq, gcc, nix (or prebuilt layers via env). Runs on a
 # connected machine; pulls ubuntu:24.04 once as the mock base.
 #
@@ -93,11 +97,11 @@ else
 fi
 RELEASE="$(sed -n 's/^RELEASE=//p' "$STORE/MANIFEST.txt")"
 KIND="$(sed -n 's/^KIND=//p' "$STORE/MANIFEST.txt")"
-./docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
+./inside-seed/docker/mklayer.sh "$WORK/repo-layer.tar" >/dev/null
 
 # Determinism: identical inputs -> byte-identical blob, or every rebuild
 # invalidates the registry cache for nothing.
-./docker/mklayer.sh "$WORK/repo-layer2.tar" >/dev/null
+./inside-seed/docker/mklayer.sh "$WORK/repo-layer2.tar" >/dev/null
 h1="$(sha256sum "$WORK/repo-layer.tar" | cut -d' ' -f1)"
 h2="$(sha256sum "$WORK/repo-layer2.tar" | cut -d' ' -f1)"
 if [ "$h1" = "$h2" ]; then ok "repo layer is deterministic"; else bad "repo layer is deterministic"; fi
@@ -114,7 +118,7 @@ say "assembling"
 asm() {
     env IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
         STORE_DIR="$STORE" STORE_RELEASE="$RELEASE" LAYER_REPO="$WORK/repo-layer.tar" \
-        ./docker/assemble.sh "$@"
+        ./inside-seed/docker/assemble.sh "$@"
 }
 asm test
 IMAGE="$REG/workspace:test-base-slim"

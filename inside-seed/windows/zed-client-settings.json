@@ -8,7 +8,7 @@
 //   - telemetry off: no phone-home attempts to time out against.
 //   - no auto_install_extensions: the kit vendors the extensions into
 //     %LOCALAPPDATA%\Zed\extensions\installed and UNPACK.ps1 puts them there.
-// The WSL-side settings (~/.config/zed/settings.json, seeded once) carry the
+// The WSL-side settings (~/.config/zed/settings.json, a dotfile link) carry the
 // language-server pins; this file only needs the client bits.
 {
   "wsl_connections": [

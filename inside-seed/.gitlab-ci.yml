@@ -52,6 +52,6 @@ smoke:
     SESSION_HOME: "/tmp/smoke-home"
   script:
     - /opt/twentyx/libexec/entrypoint doctor
-    - shellcheck -S warning pod/* wsl/*.sh docker/*.sh
+    - shellcheck -S warning pod/* wsl/*.sh docker/*.sh scripts/*.sh
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

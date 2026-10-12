@@ -136,7 +136,10 @@ pkgs.runCommand "twentyx-nvim-plugins"
     export XDG_STATE_HOME="$TMPDIR/state"
     export XDG_CACHE_HOME="$TMPDIR/cache"
     mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-    cp -r ${../../dotfiles/.config/nvim} "$XDG_CONFIG_HOME/nvim"
+    # The spec is the inner repo's nvim config, as the outside last knew it
+    # (inside-seed/): a plugin the inside wants is a REQUESTS.md line, added
+    # to pluginAttrs and to that copy together.
+    cp -r ${../../inside-seed/dotfiles/.config/nvim} "$XDG_CONFIG_HOME/nvim"
     export TWENTYX_NVIM_PLUGINS="$out"
     # The marker makes a hard lua error (which would exit 0) a failure too;
     # the timeout keeps a broken config from hanging the build.

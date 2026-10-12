@@ -6,7 +6,9 @@
 # as the nixpkgs zed-editor in the closure, the Zed theme files and the
 # version-controlled client templates (Zed settings, WezTerm config) that used
 # to live only on one laptop. Git stays text-only: the binaries are store artifacts fetched
-# by hash; the templates are plain files in nix/packages/windows/.
+# by hash. The client configs are the inner repo's windows/ as the outside
+# last knew it (inside-seed/windows/): first-install defaults; UNPACK.ps1
+# prefers the clone's live copies.
 #
 # Re-pin when nixpkgs bumps zed-editor (or a new WSL stable is wanted):
 # change the version in the URL, run
@@ -124,15 +126,15 @@ let
     ln -s ${wslMsi} $out/${wslMsi.name}
     ln -s ${weztermInstaller} $out/${weztermInstaller.name}
     # Version-controlled client templates (repo files, not store paths).
-    install -m 0644 ${./windows/zed-client-settings.json} $out/zed-client-settings.json
-    install -m 0644 ${./windows/wezterm.lua} $out/wezterm.lua
+    install -m 0644 ${../../inside-seed/windows/zed-client-settings.json} $out/zed-client-settings.json
+    install -m 0644 ${../../inside-seed/windows/wezterm.lua} $out/wezterm.lua
     ${zedExtensionInstalls}
     # VS Code: installer + user-settings template + one .vsix per pinned
     # extension. The SAME vsix files are in the WSL closure, so the server
     # seeds them without ever touching this folder; the copies here are for a
     # Windows-side install or a manual sideload.
     ln -s ${vscodeInstaller} $out/vscode/${vscode.windowsInstaller.name}
-    install -m 0644 ${./windows/vscode-settings.json} $out/vscode/vscode-settings.json
+    install -m 0644 ${../../inside-seed/windows/vscode-settings.json} $out/vscode/vscode-settings.json
     ${vsixInstalls}
     ${themeInstalls}
   '';
