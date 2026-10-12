@@ -141,9 +141,17 @@ the `.7z` containers plus the small files. The script refuses a dirty
 worktree (`ALLOW_DIRTY=1` overrides); `build/` and `.gcroots/` are local
 state.
 
+A closure change ships as a small **cumulative delta layer** against the last
+full layer; the base is rebuilt only on a full run, with `SQUASH=1`, or when
+the delta passes half the base. `UPDATE=1 ./scripts/transfer-bundle.sh`
+assembles an update-only bundle: deltas, `wsl-update.nar` and the text,
+without the unchanged base layers, root tarball or Windows kit. It needs a
+prior full transfer (a brand-new machine still needs those).
+
 | dist file | Size | Lands in |
 |---|---|---|
-| `nix-layer.tar.gz.7z` (+`-nvim`) | ~1.1 GB each | GitLab packages → CI `crane append` |
+| `nix-layer.tar.gz.7z` (+`-nvim`) | ~1.1 GB each | GitLab packages → CI `crane append` (full transfers and `SQUASH=1`) |
+| `nix-layer-delta.tar.gz.7z` (+`-nvim`) | usually <100 MB | appended right after its base layer; cumulative since that base |
 | `repo-layer.tar` | ~400 KB | `setup-wsl.sh` overlays `/opt/twentyx` (CI builds its own for pods) |
 | `nixos-wsl.tar.gz.7z` | ~1.5 GB | `wsl --import`, or GitLab packages → `SETUP.ps1` fetch |
 | `wsl-update.nar.7z` | closure delta | `setup-wsl.sh` on an existing distro (registry fetch available) |
@@ -241,10 +249,16 @@ not fit, use Artifactory instead.
 
 ```bash
 7z x nix-layer.tar.gz.7z && 7z x nix-layer-nvim.tar.gz.7z   # plain names; never publish the .7z
+7z x nix-layer-delta.tar.gz.7z && 7z x nix-layer-delta-nvim.tar.gz.7z
 git clone twentyx-airgap.bundle twentyx
 export GITLAB_TOKEN=<token> GITLAB_PROJECT=<group/project|id>
 export GITLAB_URL=https://gitlab.internal          # default: gitlab.com
-./twentyx/scripts/push-gitlab-packages.sh nix-layer.tar.gz nix-layer-nvim.tar.gz
+# An update shipment carries and pushes only the deltas (plus MANIFEST.txt).
+# Push the base layers too only on a full transfer or after SQUASH=1 bumped
+# them, at the same VERSION as the delta they pair with.
+./twentyx/scripts/push-gitlab-packages.sh \
+    nix-layer-delta.tar.gz nix-layer-delta-nvim.tar.gz
+./twentyx/scripts/push-gitlab-packages.sh nix-layer.tar.gz nix-layer-nvim.tar.gz  # full/squash only
 # the WSL artifacts too, so SETUP.ps1 / setup-wsl.sh can fetch them (never the .7z):
 7z x nixos-wsl.tar.gz.7z && 7z x wsl-update.nar.7z && 7z x windows-kit-*.tar.gz.7z
 ./twentyx/scripts/push-gitlab-packages.sh \

@@ -10,6 +10,17 @@
 #            small text files (docs, setup scripts, repo bundle, MANIFEST,
 #            SHA256SUMS)
 #
+# A closure change ships a small cumulative delta layer against the last full
+# ("base") layer; the base is rebuilt only when missing, with SQUASH=1, or
+# when the delta has outgrown half of it. The delta is valid only for the base
+# in build/, which is the one published at the current VERSION.
+#
+# UPDATE=1 assembles an update-only bundle: the deltas, the WSL closure delta
+# and the text, without the unchanged base layers, the NixOS-WSL root tarball
+# or the Windows kit. It needs a prior full transfer (a machine with nothing
+# installed still needs those), and it still carries the base when this run
+# had to rebuild it.
+#
 # The pipeline drops big gzip (and rejected its zstd twins), so every big
 # artifact crosses inside a 7z container: the inner file stays byte-identical,
 # and 7-Zip unpacks it on the far side. A dirty worktree is refused (the
@@ -44,21 +55,59 @@ rm -rf "$OUT"
 mkdir -p "$OUT" "$BUILD"
 
 # ── 1. the RunAI layers ───────────────────────────────────────────────────
+# A closure change ships a small cumulative delta against the last full
+# ("base") layer; the base is rebuilt only when missing, with SQUASH=1, or
+# when the delta has outgrown half of it. Store paths are immutable, so the
+# delta is purely additive: new paths + the regenerated /opt tree.
 want_layers="$(nix eval --raw .#runai-layer.drvPath)
 $(nix eval --raw .#runai-layer-nvim.drvPath)"
-if [ ! -f "$BUILD/nix-layer.tar.gz" ] || [ ! -f "$BUILD/nix-layer-nvim.tar.gz" ] \
-    || [ "$(cat "$BUILD/.layerdrv" 2>/dev/null || true)" != "$want_layers" ]; then
-    ./scripts/build-layers.sh "$BUILD"
+base_stamp="$(cat "$BUILD/.layerdrv" 2>/dev/null || true)"
+delta_stamp="$(cat "$BUILD/.layerdelta" 2>/dev/null || true)"
+have_base=""
+[ -f "$BUILD/nix-layer.tar.gz" ] && [ -f "$BUILD/nix-layer-nvim.tar.gz" ] && have_base=1
+have_delta=""
+[ -f "$BUILD/nix-layer-delta.tar.gz" ] && [ -f "$BUILD/nix-layer-delta-nvim.tar.gz" ] && have_delta=1
+# Set when a base is (re)built this run: UPDATE mode must then carry it, or
+# the delta would target a base the far side does not have.
+layers_carried=""
+
+if [ -z "$have_base" ] || [ -z "$base_stamp" ] || [ -n "${SQUASH:-}" ]; then
+    say "building the base layers (full closure)"
+    ./scripts/build-layers.sh --full "$BUILD" >/dev/null
     printf '%s' "$want_layers" > "$BUILD/.layerdrv"
+    rm -f "$BUILD/nix-layer-delta.tar.gz" "$BUILD/nix-layer-delta-nvim.tar.gz" "$BUILD/.layerdelta"
+    layers_carried=1
+elif [ "$base_stamp" = "$want_layers" ]; then
+    # The closure equals the base; no delta belongs beside it.
+    rm -f "$BUILD/nix-layer-delta.tar.gz" "$BUILD/nix-layer-delta-nvim.tar.gz" "$BUILD/.layerdelta"
+elif [ "$delta_stamp" = "$want_layers" ] && [ -n "$have_delta" ]; then
+    say "reusing the built layer delta"
+else
+    say "closure changed -- building the delta layer"
+    ./scripts/build-layers.sh --delta "$BUILD"
+    if [ "$(( $(stat -c %s "$BUILD/nix-layer-delta.tar.gz") * 2 ))" \
+        -ge "$(stat -c %s "$BUILD/nix-layer.tar.gz")" ]; then
+        say "delta is over half the base (nixpkgs bump?) -- rebuilding the base"
+        ./scripts/build-layers.sh --full "$BUILD" >/dev/null
+        printf '%s' "$want_layers" > "$BUILD/.layerdrv"
+        rm -f "$BUILD/nix-layer-delta.tar.gz" "$BUILD/nix-layer-delta-nvim.tar.gz" "$BUILD/.layerdelta"
+        layers_carried=1
+    else
+        printf '%s' "$want_layers" > "$BUILD/.layerdelta"
+    fi
 fi
 # repo-layer.tar is TEXT and changes every commit, so it is rebuilt every run.
-LAYER_NIX="$BUILD/nix-layer.tar.gz" ./docker/mklayer.sh "$BUILD/repo-layer.tar" >/dev/null
+LAYER_NIX="$BUILD/nix-layer.tar.gz" LAYER_NIX_DELTA="$BUILD/nix-layer-delta.tar.gz" \
+    ./docker/mklayer.sh "$BUILD/repo-layer.tar" >/dev/null
 
 # ── 2. the NixOS-WSL root tarball ─────────────────────────────────────────
 # Stamped with .#wsl-tarball.drvPath, which covers the builder AND the
-# toplevel it packs.
+# toplevel it packs. UPDATE bundles skip it: an installed machine takes the
+# closure delta, and a fresh install needs a full transfer anyway.
 want_wsl="$(nix eval --raw .#wsl-tarball.drvPath)"
-if [ ! -f "$BUILD/nixos-wsl.tar.gz" ] \
+if [ -n "${UPDATE:-}" ]; then
+    say "UPDATE: keeping the published NixOS-WSL root tarball (not in the bundle)"
+elif [ ! -f "$BUILD/nixos-wsl.tar.gz" ] \
     || [ "$(cat "$BUILD/.wlldrv" 2>/dev/null || true)" != "$want_wsl" ]; then
     rm -f "$BUILD/nixos-wsl.tar.gz"
     say "building the NixOS-WSL tarball (upstream builder, under sudo)"
@@ -116,7 +165,12 @@ say "collecting the windows kit"
 KIT="$(nix build .#windows-kit --no-link --print-out-paths)"
 KITNAME="$(basename "$KIT")"
 KITB="${KITNAME#*-}"
-cp -f "$KIT" "$BUILD/$KITB"
+if [ -n "${UPDATE:-}" ]; then
+    # MANIFEST still names it for SETUP.ps1's registry fetch.
+    say "UPDATE: kit stays as published ($KITB)"
+else
+    cp -f "$KIT" "$BUILD/$KITB"
+fi
 
 # ── 5. the docs + setup scripts ───────────────────────────────────────────
 say "carrying the documentation"
@@ -145,11 +199,21 @@ say "bundling the repo"
 git bundle create "$OUT/twentyx-airgap.bundle" --branches --tags >/dev/null
 
 # ── 7. transport containers ───────────────────────────────────────────────
+# The deltas always go; the base layers only when this run built them (or on
+# a full transfer), the root tarball/kit never in an UPDATE bundle. nullglob
+# drops what is not there.
 say "wrapping the big artifacts"
 ABS_OUT="$(pwd)/$OUT"
+ARTIFACTS=("$BUILD"/nix-layer-delta.tar.gz "$BUILD"/nix-layer-delta-nvim.tar.gz
+    "$BUILD"/wsl-update.nar)
+if [ -z "${UPDATE:-}" ] || [ -n "$layers_carried" ]; then
+    ARTIFACTS+=("$BUILD"/nix-layer.tar.gz "$BUILD"/nix-layer-nvim.tar.gz)
+fi
+if [ -z "${UPDATE:-}" ]; then
+    ARTIFACTS+=("$BUILD"/windows-kit-*.tar.gz "$BUILD"/nixos-wsl.tar.gz)
+fi
 shopt -s nullglob
-for f in "$BUILD"/nix-layer.tar.gz "$BUILD"/nix-layer-nvim.tar.gz \
-    "$BUILD"/windows-kit-*.tar.gz "$BUILD"/nixos-wsl.tar.gz "$BUILD"/wsl-update.nar; do
+for f in "${ARTIFACTS[@]}"; do
     b="$(basename "$f")"
     # The .tar.gz members are already compressed (-mx1 just stores); the NAR
     # is raw and compresses well.

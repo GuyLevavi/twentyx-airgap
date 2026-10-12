@@ -84,6 +84,31 @@ setting goes stale on the next closure update; this is the fix.
   (it is for `--extra-files`), and the activation script already creates the
   home as 1000:100. The tarball is the only artifact that needs sudo.
 
+## The pod layer delta (why cumulative, not chained)
+
+The WSL side always had a closure delta because `nix-store --export` supports
+one; the OCI side did not, so any package addition re-gzipped and re-carried
+the whole ~1 GB layer per flavor. The fix uses the property the layers already
+rely on: Nix store paths are immutable and image layers are additive. A delta
+is therefore just the new store paths plus the regenerated `opt/` tree, and
+`crane append` overlays it in order.
+
+It is **cumulative against the base layer** (everything since the last full
+build), not chained delta-on-delta. Chained would need the registry and CI to
+track and append an ordered list of layers; cumulative needs no state — CI
+always appends base + one delta. The cost is that the delta grows until a
+squash, which is accepted: `SQUASH=1` rebuilds the base, and
+`transfer-bundle.sh` squashes automatically when the delta passes half the
+base, which is exactly what a nixpkgs bump produces. Removed packages linger
+as orphan store paths until then (disk only, no whiteouts needed).
+
+`build/.layerdrv` stamps the base; `build/.layerdelta` stamps what the delta
+was built from. The delta is valid only for the base tarball beside it, so
+`transfer-bundle.sh` rebuilds the base when the tarball is missing and
+`build-layers.sh --delta` refuses to run without it. On WSL the same change
+also produces the usual `wsl-update.nar`, so both targets move with one
+small carry; `UPDATE=1` skips the unchanged big artifacts entirely.
+
 ## WSL switches exit 4 (WSL >= 2.9.8)
 
 `switch-to-configuration` returns 4 when units fail although the switch

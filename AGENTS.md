@@ -31,12 +31,19 @@ libexec scripts are the entry points (`doctor`, `run-opencode`, `bootstrap`,
 | Change type | Where | Deploy cost |
 |---|---|---|
 | `libexec/`, `agent/`, `dotfiles/`, `env/` | git text | CI re-tars `repo-layer.tar` per commit (no transfer) |
-| anything in `flake.nix` / `nix/` | closure | rebuild → **physical transfer** |
+| anything in `flake.nix` / `nix/` | closure | delta layer + small `wsl-update.nar`; base only on squash |
 
 `nix/packages.nix` is the package list; adding a package changes both
 targets. `nix/profile.nix` builds the profile, the session environment and
 the packaged defaults. `dotfiles/` is symlinked into `$HOME` — a text-layer
 update renews it; a real file at the same path is the user's and wins.
+
+A closure change ships as a **cumulative delta**: `runai-layer-opt*`
+(`nix/runai/layer.nix`) plus the store paths the base layer lacks
+(`scripts/build-layers.sh --delta`), appended after the base by
+`docker/assemble.sh`. Store paths are immutable, so the delta is purely
+additive — removed packages linger until a squash (`SQUASH=1`, or automatic
+when the delta passes half the base, which is what a nixpkgs bump does).
 
 ## Never evaluate Nix inside the gap
 
@@ -45,7 +52,9 @@ update renews it; a real file at the same path is the user's and wins.
   `.gcroots/wsl-system`; `transfer-bundle.sh` advances it only after a
   successful export. Rollback is `nix-env --rollback` + switch.
 - Pods never run Nix: `nix/runai/layer.nix` extracts the built closure as an
-  OCI layer tarball; `docker/assemble.sh` appends it registry-side.
+  OCI layer tarball; `docker/assemble.sh` appends it (and the delta that
+  upgrades it) registry-side. Store paths land at literal `/nix/store` and
+  the delta's `opt/` tree wins over the base's.
 - No implicit runtime fetch: opencode's model fetch/updates are off, Zed's
   auto-update and `auto_install_extensions` are off, npm is seeded around,
   and LazyVim resolves through lazy's `dev` mechanism. A failed fetch in the
@@ -63,12 +72,14 @@ update renews it; a real file at the same path is the user's and wins.
 
 `./scripts/transfer-bundle.sh` builds plain artifacts in the gitignored
 `build/` and assembles `dist/` (every big artifact in a `.7z` container,
-small text files plain). Stamps (`build/.layerdrv`, `.wlldrv`,
+small text files plain). Stamps (`build/.layerdrv`, `.layerdelta`, `.wlldrv`,
 `.updatestamp`) rebuild only what a closure change requires; `repo-layer.tar`
-is rebuilt every run. A dirty worktree is refused (`ALLOW_DIRTY=1`). The WSL
-tarball is built by the upstream builder under `sudo` (no `--chown`; the
-activation script creates `/home/jensen`). `dist/` is wiped and rebuilt each
-run.
+is rebuilt every run. `UPDATE=1` assembles an update-only bundle — deltas,
+`wsl-update.nar` and the text, without the unchanged base layers, the root
+tarball or the Windows kit (it needs a prior full transfer). A dirty worktree
+is refused (`ALLOW_DIRTY=1`). The WSL tarball is built by the upstream builder
+under `sudo` (no `--chown`; the activation script creates `/home/jensen`).
+`dist/` is wiped and rebuilt each run.
 
 ## Nix rules
 

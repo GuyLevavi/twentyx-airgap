@@ -94,6 +94,10 @@ let
     nodejs
     bubblewrap
 
+    # ── cluster / object storage clients (both targets) ────────────────────
+    minio-client # mc
+    openshift # oc
+
     # ── data ───────────────────────────────────────────────────────────────
     sqlite
     jless

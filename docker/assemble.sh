@@ -7,11 +7,17 @@
 # the base layers. The 30GB pytorch bases therefore cost the same as the slim
 # ones, which is what keeps the build pod inside its ephemeral storage budget.
 #
-# Two layers, appended in ascending order of how often they change, so a
-# config edit re-uploads ~380KB and cross-mounts the rest:
+# Up to three layers, appended in ascending order of how often they change, so
+# a config edit re-uploads ~380KB and cross-mounts the rest:
 #
-#   1. nix-layer      the whole toolchain closure     monthly    ~1070MB / ~1087MB
-#   2. repo-layer     libexec, agent helpers, sudoers hourly     ~380KB
+#   1. nix-layer       the whole toolchain closure       squash   ~1070MB / ~1087MB
+#   2. nix-layer-delta new store paths + opt/ tree        per change  usually <100MB
+#   3. repo-layer      libexec, agent helpers, sudoers    hourly     ~380KB
+#
+# The delta is optional and cumulative against the base layer beneath it
+# (scripts/build-layers.sh --delta); store paths are immutable, so overlaying
+# it is exactly an upgrade. Its opt/ tree wins over the base's: the profile
+# symlink, store-paths and session-env are re-read from it.
 #
 # Two flavors per variant: the nvim layer is ~17MB larger, and not every
 # workspace wants an editor in it.
@@ -27,6 +33,8 @@ BASE_TAG="${BASE_TAG:-latest}"
 
 LAYER_NIX="${LAYER_NIX:-dist/nix-layer.tar.gz}"
 LAYER_NIX_NVIM="${LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
+LAYER_NIX_DELTA="${LAYER_NIX_DELTA:-dist/nix-layer-delta.tar.gz}"
+LAYER_NIX_DELTA_NVIM="${LAYER_NIX_DELTA_NVIM:-dist/nix-layer-delta-nvim.tar.gz}"
 LAYER_REPO="${LAYER_REPO:-dist/repo-layer.tar}"
 
 command -v crane >/dev/null || { echo "crane not found (nix shell .# gives you one)" >&2; exit 1; }
@@ -35,6 +43,7 @@ command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
 for f in "$LAYER_NIX" "$LAYER_REPO"; do
     [ -f "$f" ] || { echo "missing layer: $f" >&2; exit 1; }
 done
+# The deltas are optional: a base that already matches the closure has none.
 
 # The nvim flavor is optional: a pipeline that only needs the small image
 # should not be forced to build and push the big one.
@@ -75,7 +84,7 @@ session_env_args() {
 }
 
 echo "layers:"
-for f in "$LAYER_NIX" "$LAYER_NIX_NVIM" "$LAYER_REPO"; do
+for f in "$LAYER_NIX" "$LAYER_NIX_NVIM" "$LAYER_NIX_DELTA" "$LAYER_NIX_DELTA_NVIM" "$LAYER_REPO"; do
     [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
 done
 
@@ -100,20 +109,27 @@ for variant in $VARIANTS; do
 
     for flavor in $FLAVORS; do
         case "$flavor" in
-            plain) nixlayer="$LAYER_NIX";      suffix="" ;;
-            nvim)  nixlayer="$LAYER_NIX_NVIM"; suffix="-nvim" ;;
+            plain) nixlayer="$LAYER_NIX";      nixdelta="$LAYER_NIX_DELTA";      suffix="" ;;
+            nvim)  nixlayer="$LAYER_NIX_NVIM"; nixdelta="$LAYER_NIX_DELTA_NVIM"; suffix="-nvim" ;;
         esac
         dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}${suffix}"
 
         echo "==> ${variant}${suffix}"
         echo "    base ${base}"
 
-        crane append -b "$base" -t "$dest" \
-            -f "$nixlayer" -f "$LAYER_REPO" >/dev/null
+        # Overlay order: base, then the delta that upgrades it, then text.
+        APPEND=(-f "$nixlayer")
+        [ -f "$nixdelta" ] && APPEND+=(-f "$nixdelta")
+        APPEND+=(-f "$LAYER_REPO")
+        crane append -b "$base" -t "$dest" "${APPEND[@]}" >/dev/null
 
-        # Read per flavor: the nvim layer resolves to different store paths.
-        mapfile -t ENVARGS < <(session_env_args "$nixlayer")
-        [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $nixlayer" >&2
+        # Read per flavor, from the topmost layer that carries it: the nvim
+        # base resolves to different store paths than the plain one, and the
+        # delta re-tars opt/ on every closure change.
+        envlayer="$nixlayer"
+        [ -f "$nixdelta" ] && envlayer="$nixdelta"
+        mapfile -t ENVARGS < <(session_env_args "$envlayer")
+        [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $envlayer" >&2
 
         # Image config only; no layer traffic.
         crane mutate "$dest" -t "$dest" \

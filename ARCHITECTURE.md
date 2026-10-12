@@ -76,9 +76,14 @@ just files, and an OCI image is a stack of tar-layer diffs. So:
 ```
 base manifest (never pulled, never unpacked)
    + nix-layer.tar.gz      the closure, landed at literal /nix/store
+   + nix-layer-delta.tar.gz  optional: new store paths + opt/ tree (closure change)
    + repo-layer.tar        this repo's text (libexec/, agent/, dotfiles/, defaults)
    = assembled image, done registry-side by CI with `crane append`
 ```
+
+The delta is cumulative against the base beneath it (store paths are
+immutable, so overlaying it is an upgrade); the base is rebuilt only on a
+squash, so a monthly nixpkgs bump is the only ~1 GB carry.
 
 Three hard constraints that are silent failures if ignored
 (`docker/assemble.sh`):

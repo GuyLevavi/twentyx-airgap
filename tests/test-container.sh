@@ -18,6 +18,7 @@
 #
 #   ./tests/test-container.sh
 #   TEST_NIX_LAYER=/path/nix-layer.tar.gz ./tests/test-container.sh
+#   TEST_NIX_LAYER_DELTA=/path/nix-layer-delta.tar.gz ./tests/test-container.sh
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -96,8 +97,16 @@ printf '[global]\nindex-url = https://artifactory.internal/api/pypi/pypi/simple\
 printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "$WORK/env/ca-bundle.crt"
 
 say "assembling"
+# With a delta, the image is base + delta + repo; the doctor assertion below
+# then checks the merged closure (the delta's store-paths list wins).
+DELTA_ENV=()
+if [ -n "${TEST_NIX_LAYER_DELTA:-}" ]; then
+    cp "${TEST_NIX_LAYER_DELTA:?}" "$WORK/nix-layer-delta.tar.gz"
+    DELTA_ENV=(LAYER_NIX_DELTA="$WORK/nix-layer-delta.tar.gz")
+fi
 env IMAGE_REGISTRY="$REG" BASE_REGISTRY="$REG" IMAGE_VARIANTS="base-slim" \
     LAYER_NIX="$WORK/nix-layer.tar.gz" LAYER_REPO="$WORK/repo-layer.tar" \
+    "${DELTA_ENV[@]}" \
     ./docker/assemble.sh test
 IMAGE="$REG/workspace:test-base-slim"
 
@@ -128,6 +137,14 @@ if grep -q "defaults are linked" <<<"$DOCTOR_OUT"; then
     ok "defaults linked into PVC home"
 else
     bad "defaults linked into PVC home"
+fi
+if [ -n "${TEST_NIX_LAYER_DELTA:-}" ]; then
+    # The delta's opt/ tree must win: the merged /opt/twentyx/profile has to
+    # be the one the delta carries, not the base's.
+    want_profile="$(LC_ALL=C tar -tzvf "$WORK/nix-layer-delta.tar.gz" \
+        --occurrence=1 opt/twentyx/profile | awk '{print $NF}')"
+    expect_ok "delta profile symlink wins over the base" \
+        run_ic bash -c "[ \"\$(readlink /opt/twentyx/profile)\" = '$want_profile' ]"
 fi
 
 say "LD_PRELOAD split (hostile preloader)"

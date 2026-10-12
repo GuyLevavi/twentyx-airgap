@@ -77,26 +77,28 @@ cat > "$STAGE/etc/gitconfig" <<'EOF'
 EOF
 
 # The setuid sudo binary. Nix strips setuid bits from build outputs, so the
-# copy is done here, outside Nix: pull it out of the Nix layer (its RPATH and
-# plugin paths are absolute store paths that exist at runtime) and set the bit
-# on the copy. The repo layer is appended after the Nix layer, so this wins.
-# Skipped when the Nix layer is not beside us; doctor catches a missing
-# or unusable sudo.
+# copy is done here, outside Nix: pull it out of the topmost layer (its RPATH
+# and plugin paths are absolute store paths that exist at runtime) and set the
+# bit on the copy. The repo layer is appended last, so this wins. The delta
+# re-tars the opt/ tree on every closure change, so prefer it over the base;
+# the base is the fallback. Skipped when neither is beside us; doctor catches
+# a missing or unusable sudo.
 mkdir -p "$STAGE/opt/twentyx/bin"
-if [ -f "$NIX_LAYER" ]; then
-    tar -xzOf "$NIX_LAYER" --occurrence=1 opt/twentyx/bin/sudo \
+extract_sudo() {
+    tar -xzOf "$1" --occurrence=1 opt/twentyx/bin/sudo \
         > "$STAGE/opt/twentyx/bin/sudo" 2>/dev/null || true
-    if [ -s "$STAGE/opt/twentyx/bin/sudo" ]; then
-        # 4555, not 4755: the tar's --mode='g=u' copies user bits to group, and
-        # a group-writable setuid binary would let any gid-0 process replace
-        # it. With u=r-x there is nothing for g=u to escalate.
-        chmod 4555 "$STAGE/opt/twentyx/bin/sudo"
-    else
-        echo "warn: no sudo in $NIX_LAYER -- is sudo in the closure?" >&2
-        rm -f "$STAGE/opt/twentyx/bin/sudo"
-    fi
+    [ -s "$STAGE/opt/twentyx/bin/sudo" ]
+}
+SUDO_SRC="$NIX_LAYER"
+[ -n "${LAYER_NIX_DELTA:-}" ] && [ -f "${LAYER_NIX_DELTA}" ] && SUDO_SRC="$LAYER_NIX_DELTA"
+if extract_sudo "$SUDO_SRC" || { [ "$SUDO_SRC" != "$NIX_LAYER" ] && extract_sudo "$NIX_LAYER"; }; then
+    # 4555, not 4755: the tar's --mode='g=u' copies user bits to group, and
+    # a group-writable setuid binary would let any gid-0 process replace
+    # it. With u=r-x there is nothing for g=u to escalate.
+    chmod 4555 "$STAGE/opt/twentyx/bin/sudo"
 else
-    echo "warn: $NIX_LAYER absent -- building repo layer without the sudo copy" >&2
+    echo "warn: no sudo in $SUDO_SRC or $NIX_LAYER -- is sudo in the closure?" >&2
+    rm -f "$STAGE/opt/twentyx/bin/sudo"
 fi
 
 # One entry on PATH that exists before anything has been bootstrapped, so
