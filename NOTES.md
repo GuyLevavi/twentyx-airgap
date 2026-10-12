@@ -6,11 +6,14 @@ preload split, identity, `$HOME` rule) is in `inside-seed/NOTES.md`.
 
 ## Open items
 
-- **`nixos-wsl.tar.gz` size.** The pre-split rootfs was 2954 MB, 4% under the
-  3072 MB/file cap (7z cannot shrink a gzip). The current WSL closure
-  gzips to ~1.5 GB (estimated 2026-10-13 from its export; the upstream
-  builder adds no channel): confirm at the first real rebase. If it ever
-  crosses, the transfer refuses; trim the closure, never split the file.
+- **`nixos-wsl.tar.gz` size.** The first real rebase (2026-10-13) came out
+  at 3074 MB, over the 3072 MB/file cap: `nixos-install` copied the closure
+  with this host's `auto-optimise-store = true`, filling the rootfs with
+  `nix/store/.links` (4.1 GB), and the builder's `tar --hard-dereference`
+  stores every optimised file twice. `transfer.sh` now runs the builder with
+  `NIX_CONFIG="auto-optimise-store = false"`; the closure alone gzips to
+  ~1.5 GB. If it ever crosses again, the transfer refuses; trim the closure,
+  never split the file (7z cannot shrink a gzip).
 - **Measured at a rehearsal rebase (2026-10-13):** `pod-full.tar.gz.7z`
   1170 MB, `wsl-full.nar.7z` 1042 MB, the kit 658 MB, ~5 min. Unpacked,
   `wsl-full.nar` is several GB: check the inside GitLab's

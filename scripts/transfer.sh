@@ -81,11 +81,17 @@ trap 'rm -rf "$TMP"' EXIT
 # part. Named by the base release, so it is built once per base. Real root is
 # required: nixos-install chroots and bind-mounts. No --chown: it runs before
 # the install, and the activation creates /home/jensen itself.
+# auto-optimise-store off for the install's copy (this host's nix.conf turns
+# it on): it fills the rootfs with nix/store/.links, and the builder's
+# `tar --hard-dereference` then stores every optimised file twice -- 3074 MB
+# instead of ~1.6, over the transfer cap. The distro still optimises what it
+# imports later (its own nix.conf).
 ROOTFS="$BUILD/nixos-wsl-$BASE_RELEASE.tar.gz"
 if [ "$KIND" = full ] && [ ! -f "$ROOTFS" ]; then
     say "building nixos-wsl.tar.gz (upstream builder, under sudo)"
     nix build "$BASE_FLAKE#wsl-tarball" -o "$BUILD/base-tarball-builder"
-    sudo "$BUILD/base-tarball-builder/bin/nixos-wsl-tarball-builder" "$ROOTFS.part"
+    sudo env NIX_CONFIG="auto-optimise-store = false" \
+        "$BUILD/base-tarball-builder/bin/nixos-wsl-tarball-builder" "$ROOTFS.part"
     sudo chown "$(id -u):$(id -g)" "$ROOTFS.part"
     mv "$ROOTFS.part" "$ROOTFS"
 fi

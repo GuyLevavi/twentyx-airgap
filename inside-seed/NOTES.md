@@ -5,6 +5,17 @@ and must not be "simplified". The Nix-side why lives in the outside repo.
 
 ## Open items
 
+- **`runai exec` without a login shell keeps the ephemeral HOME.** The entrypoint
+  moves `HOME` to `/data/<user>` (user = `SESSION_USER`, else the workspace
+  name before its first `-`), and the main process, code-server, `bash -l`,
+  `run-opencode`, `sshd-inetd` and `doctor` all get it. But
+  `runai exec -it <ws> -- bash` (non-login) and `-- fish` start with the
+  runtime's `HOME` (`/` or `/home/jensen`) and never read `session.env`:
+  their rc file is looked up under the wrong home. Until fixed, use `bash -l`
+  / `fish -l`. To fix: get
+  `runai exec -it <ws> -- sh -c 'id; echo $HOME; getent passwd $(id -u)'`
+  from a real pod, then pick the hook that home allows (e.g. a `/.bashrc` in
+  the repo layer when `HOME=/`), as a required edit.
 - **First release against the real bases:** PATH prepending on a pytorch
   base, the ENTRYPOINT hand-over on a `vscode-*` one, `smoke` on a real
   runner. Verify on the first pipeline after adopting the split.
