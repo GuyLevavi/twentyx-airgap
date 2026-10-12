@@ -112,7 +112,7 @@ ARTIFACTS+=("$BUILD/wsl-$KIND.nar")
 
 # windows-kit-<zed version>.tar.gz; the Zed client must match the server in
 # the closure, so a kit change is a rebase.
-kit_file() { local n; n="$(nix eval --raw "$1#windows-kit.name")"; printf '%s' "${n#*-}"; }
+kit_file() { nix eval --raw "$1#windows-kit.name"; }
 KIT_FILE="$(kit_file .)"
 
 if [ "$KIND" = delta ]; then
