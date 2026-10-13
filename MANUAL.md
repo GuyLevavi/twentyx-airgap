@@ -26,7 +26,7 @@ release for testing only).
 ```bash
 nix develop -c ./scripts/transfer.sh             # a delta against base.rev
 nix develop -c ./scripts/transfer.sh --rebase    # full closures + install set
-git commit -m "base: <RELEASE>" base.rev         # after a --rebase
+git add base.rev && git commit -m "base: <RELEASE>"   # after a --rebase
 ```
 
 `dist/` gets, every time: `pod-<kind>.tar.gz.7z`, `wsl-<kind>.nar.7z`,

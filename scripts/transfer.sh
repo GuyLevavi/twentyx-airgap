@@ -210,5 +210,5 @@ say "dist/ ($RELEASE, $KIND against $BASE_RELEASE):"
 
 if [ -n "$REBASE" ]; then
     printf '%s\n' "$REV" > base.rev
-    say "base.rev = $REV -- commit it: git commit -m 'base: $RELEASE' base.rev"
+    say "base.rev = $REV -- commit it: git add base.rev && git commit -m 'base: $RELEASE'"
 fi
