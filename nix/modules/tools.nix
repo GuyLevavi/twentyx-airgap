@@ -159,6 +159,13 @@ in
       sqlite # atuin's own store, plus general use
       jless
 
+      # SQL TUI over postgres and sqlite (plus duckdb, its own engine). Chosen
+      # over sqlit: older, steadier, already in nixpkgs, and its adapters are
+      # plugins baked in at build time -- sqlit pip-installs missing drivers at
+      # runtime, which in here is only an error. SQL only: no Redis, Kafka or
+      # Mongo. See nix/pkgs/harlequin.nix for why it is not the nixpkgs build.
+      (pkgs.callPackage ../pkgs/harlequin.nix { })
+
       # ── archives / transfer ────────────────────────────────────────────
       rsync
       zstd
