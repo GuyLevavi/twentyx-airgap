@@ -100,8 +100,10 @@ or apply the patches (one commit each, cherry-pickable):
 
     sudo ./scripts/nix-import.sh <transfer>/wsl
 
-$( [ -n "$WSL_SINCE" ] && echo "This is a DELTA. The import checks first that every path it builds on is
-already in the local store, and stops with a list if not." )
+$( [ -n "$WSL_SINCE" ] && echo "This is a DELTA. Do step 1 first: only a nix-import.sh from 0.2 on can
+import one (an older one stops with \"path ... is not valid\"). It checks first
+that every path the delta builds on is already in the local store, and stops
+with a list if not." )
 Then activate as the script prints.
 
 ## 3. RunAI layers
