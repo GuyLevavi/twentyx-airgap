@@ -10,6 +10,21 @@ let
   cfg = config.airgap;
   wsl = cfg.target == "wsl";
 
+  # Old interpreters for old wheels. See nix/pkgs/pbs-python.nix for why
+  # these are python-build-standalone and not nixpkgs' python. 3.10 is the
+  # last build upstream will ever cut: CPython 3.10 reached end of life.
+  pbsPython = pkgs.callPackage ../pkgs/pbs-python.nix { };
+  pbs310 = pbsPython {
+    version = "3.10.22";
+    release = "20261009";
+    hash = "sha256-yqZrMI4Q81uBFAVN99knkD+XH2Mc+jI3uExA1dXzVUk=";
+  };
+  pbs311 = pbsPython {
+    version = "3.11.18";
+    release = "20261026";
+    hash = "sha256-F8SXijbEltxTwIiZ742tGtJzT2Ml8I1gM6HmZBngryY=";
+  };
+
   # tealdeer downloads its page cache on first use. Inside the gap that is not
   # an error, it is a DNS lookup that hangs -- so the pages have to be a store
   # path, fetched here on the connected machine and carried across like
@@ -209,15 +224,25 @@ in
       # interpreter owns torch and CUDA, and a Nix python there would shadow it
       # while being unable to see any of it.
       #
-      # python310 is gone from nixpkgs (past EOL, removed upstream); 3.11 and
-      # 3.12 are what remain of what you asked for.
+      # 3.10 is not here: nixpkgs removed it, so it comes from PBS below.
       # Two interpreters cannot both own `python3` and `lib/libpython3.so` in
       # one profile, so the older one is lowPrio: buildEnv then resolves every
       # conflicting file in favour of 3.12, while `python3.11` stays on PATH
       # under its versioned name for `uv venv --python 3.11`.
       python312
       (lib.lowPrio python311)
-      uv
       ruff
-    ];
+    ]
+    ++ [
+      # ── interpreters for old wheels, both targets ──────────────────────
+      # Versioned names only, so whatever owns `python3` keeps owning it: the
+      # base image's 3.12 in a pod, Nix 3.12 on WSL. `uv venv -p 3.10` finds
+      # these on PATH; UV_PYTHON_DOWNLOADS=never stops it reaching for the
+      # network when asked for one that is not here.
+      uv
+      pbs310
+    ]
+    # WSL already has 3.11 from nixpkgs (above), and two python3.11 on one
+    # PATH is a coin toss about which one a venv gets built on.
+    ++ lib.optionals (!cfg.python.enable) [ pbs311 ];
 }
