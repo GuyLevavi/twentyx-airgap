@@ -16,7 +16,7 @@ actually references, and nothing else.
 | What it is | a real NixOS system **inside** the gap | a read-only tree baked into an OCI layer |
 | Nix at runtime | yes — rebuilds offline | **no** — never runs in a pod |
 | How it arrives | binary cache, `scripts/nix-import.sh` | `crane append`, `docker/assemble.sh` |
-| Python | Nix (3.11 + 3.12, `uv`, `ruff`) | the base image's — it owns torch and CUDA |
+| Python | Nix 3.11 + 3.12 (`python3` = 3.12), PBS 3.10, `uv`, `ruff` | the base image's `python3`, plus PBS 3.10 / 3.11 and `uv` under versioned names only |
 | Cluster tools | kubectl, k9s, stern, helm, crane | none — a pod cannot reach the API server |
 
 Adding a package to `nix/modules/tools.nix` changes both at once, and the closure
@@ -67,7 +67,7 @@ airgap pi              launch pi with LD_PRELOAD handled
 | Change | Path | Cost |
 |---|---|---|
 | dispatcher, libexec, pi package | `airgap update` → `git pull` | seconds |
-| anything in the closure | rebuild → transfer → CI | a physical transfer |
+| anything in the closure | rebuild → transfer → CI | a physical transfer — a **delta** since 0.2 |
 
 Note what moved: the shell, prompt, tmux and nvim configs are Nix-generated now,
 so editing *them* is a closure change. On the WSL side that is still cheap —
@@ -75,6 +75,26 @@ so editing *them* is a closure change. On the WSL side that is still cheap —
 deliberately) and build from string literals with no fetches, so a config edit
 rebuilds **offline, in seconds**. Adding a *package* is what needs a transfer.
 The closure enforces the rule that discipline used to.
+
+### Delta transfers
+
+A closure change no longer means re-shipping the closure. What crosses is the
+set difference against what the far side already holds:
+
+```
+./scripts/make-transfer.sh <rev-inside> \
+    --layers-since <dir of the nix-layer*.tar.gz inside> \
+    --wsl-since dist/baselines/wsl-<rev-inside>.store-paths
+```
+
+- **RunAI**: each full layer records its closure at `opt/airgap/store-paths`,
+  so the old tarball *is* the baseline. The delta layer is appended directly
+  above it; the full layer has to stay in Artifactory.
+- **WSL**: every export writes the closure it delivered to
+  `dist/baselines/wsl-<rev>.store-paths`. Nothing comes back across the gap,
+  so **keep those files** — they are the only record of what is inside.
+  `nix-import.sh` checks a delta's references against the local store first,
+  and names any that are missing instead of failing halfway.
 
 ## Images: append, don't rebuild
 
@@ -128,12 +148,15 @@ defaults assume 200k, so they are retuned in `config/pi/settings.json`
 flake.nix                     both targets, pinned inputs
 nix/modules/                  the shared config: home, shell, tools, nvim
 nix/hosts/wsl.nix             NixOS-WSL: offline substituters, nix-ld, vscode-server
-nix/runai/layer.nix           the closure -> an OCI layer tarball
+nix/runai/layer.nix           the closure -> an OCI layer tarball (or a delta over a previous one)
+nix/pkgs/                     what nixpkgs lacks: PBS python, slim harlequin, open-code-review
 bin/airgap                    dispatcher
 libexec/airgap-*              bootstrap, doctor, refresh, update, pi, entrypoint
 config/pi/, pi/               pi settings, preload extension, agents, prompts
-scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz
-scripts/nix-export.sh         run OUTSIDE -> a sharded, signed binary cache
+scripts/make-transfer.sh      run OUTSIDE -> one transfer dir: git bundle + patches, both deltas
+scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz (--since: delta layers)
+scripts/nix-export.sh         run OUTSIDE -> a sharded, signed binary cache (--since-paths: delta)
+scripts/check-nvim-offline.sh run OUTSIDE -> starts LazyVim with no network; run before a transfer
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
 scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory, for CI
 docker/                       node layer + registry-side assemble

@@ -153,3 +153,18 @@ the two things that can only fail against real internal bases: `PATH` prepending
 and ENTRYPOINT hand-over on a `vscode-*` one.
 
 The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- see `wsl/README.md`.
+
+## 8. 0.2 requests from inside  [IMPLEMENTED -- verify in the gap]
+
+- **open-code-review needs tool calling on the vLLM server**
+  (`--enable-auto-tool-choice` plus a Qwen tool-call parser). Without it every
+  file fails with "No tool calls parsed". The wrapper fills in OCR_LLM_* from
+  AIRGAP_LLM_*. With the ~70k window: `ocr review --max-tokens 40000 --concurrency 2`.
+- **python 3.10 / 3.11** are python-build-standalone with a sysconfig rewritten
+  from clang to `cc`. Worth a first test: `uv venv -p 3.10 && uv pip install <an sdist>`
+  on a pytorch base, which proves the base's gcc + our make + the wheelhouse together.
+- **The `-nvim` layer of 0.1 was broken offline**: it cloned lazy.nvim on first start,
+  and several plugins on every start. If 0.1 nvim was ever tried inside and
+  "hung", that was why. `scripts/check-nvim-offline.sh` now guards it.
+- **harlequin** has no Redis, Kafka or Mongo support: it is SQL only. Candidates if
+  needed: `iredis`/`redis` cli, `kcat`, `mongosh` (heavy).
