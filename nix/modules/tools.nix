@@ -30,10 +30,14 @@ let
   # path, fetched here on the connected machine and carried across like
   # everything else. This is the shape the old manifest.toml was reaching for,
   # except Nix pins the hash and puts it in the closure automatically.
+  #
+  # The tag's source archive, not the release asset: upstream re-uploaded
+  # tldr-pages.en.zip under the same v2.3 tag, which turned the pinned hash
+  # into a build failure. A git tag archive is generated from the tree and
+  # does not drift.
   tldrPages = pkgs.fetchzip {
-    url = "https://github.com/tldr-pages/tldr/releases/download/v2.3/tldr-pages.en.zip";
-    hash = "sha256-v71Vc/Lv7zBhncoLqQOFYdcnthCmuKpE90qMKBkUlRc=";
-    stripRoot = false;
+    url = "https://github.com/tldr-pages/tldr/archive/refs/tags/v2.3.tar.gz";
+    hash = "sha256-uMQ9Bul2g86AEcFYmFD9sOnUJaz08fguy9HENnKLwik=";
   };
 
   # tealdeer looks for `<cache_dir>/tldr-pages/pages.<lang>/<platform>/`.
@@ -42,7 +46,7 @@ let
   # none of which will ever be looked up from a Linux container.
   tldrCache = pkgs.runCommand "tldr-cache" { } ''
     mkdir -p $out/tldr-pages/pages.en
-    cp -r ${tldrPages}/common ${tldrPages}/linux $out/tldr-pages/pages.en/
+    cp -r ${tldrPages}/pages/common ${tldrPages}/pages/linux $out/tldr-pages/pages.en/
   '';
 
   # pip source builds need a build backend. With build isolation pip fetches
