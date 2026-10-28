@@ -5,7 +5,8 @@
 # tarballs, and pushed to Artifactory once per transfer. CI's job is to fetch
 # them, build the one layer that genuinely needs a registry (npm), and append.
 #
-#   nix-layer.tar.gz       from the transfer, via Artifactory   monthly
+#   nix-layer-nvim.tar.gz  from the transfer, via Artifactory   monthly
+#     (+ -delta.tar.gz)    appended above it, when the transfer was a delta
 #   node-layer.tar         built here, needs Artifactory npm    monthly
 #   repo-layer.tar         plain tar of this checkout           every commit
 #
@@ -25,6 +26,25 @@ variables:
   # replaces the base.
   LAYER_BASE_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0"
   LAYER_DELTA_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.2.0"
+
+# The nix layer, plus its delta when LAYER_DELTA_URL is set. Both jobs need
+# the same stack: the node layer is built against what the image will run.
+# A corrupted transfer must fail here, not in a pod three days later.
+.fetch-nix-layers: &fetch_nix_layers
+  - |
+      mkdir -p dist
+      fetch() {
+        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -o "dist/$2" "$1/$2"
+        if curl -fsSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" -o "dist/$2.sha256" "$1/$2.sha256"; then
+          ( cd dist && sha256sum -c "$2.sha256" )
+        else
+          echo "warn: no $2.sha256 in Artifactory; cannot verify the transfer" >&2
+        fi
+      }
+      fetch "$LAYER_BASE_URL" nix-layer-nvim.tar.gz
+      if [ -n "${LAYER_DELTA_URL:-}" ]; then
+        fetch "$LAYER_DELTA_URL" nix-layer-nvim-delta.tar.gz
+      fi
 
 # ---------------------------------------------------------------------------
 lint:
@@ -46,14 +66,7 @@ node-layer:
   stage: build
   image: gcr.io/kaniko-project/executor:debug   # or buildah/docker, per platform
   script:
-    - mkdir -p dist
-    - |
-      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-        -o dist/nix-layer.tar.gz "$LAYER_BASE_URL/nix-layer.tar.gz"
-      curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-        -o dist/nix-layer.tar.gz.sha256 "$LAYER_BASE_URL/nix-layer.tar.gz.sha256" || true
-      # A corrupted transfer must fail here, not in a pod three days later.
-      [ -f dist/nix-layer.tar.gz.sha256 ] && ( cd dist && sha256sum -c nix-layer.tar.gz.sha256 )
+    - *fetch_nix_layers
     - |
       docker buildx build \
         -f docker/Containerfile.node \
@@ -76,21 +89,7 @@ assemble:
   # Only needs crane, jq, tar and the artifacts; the slim base is plenty.
   image: "$AIRGAP_BASE_REGISTRY/base-slim:$AIRGAP_BASE_TAG"
   script:
-    - |
-      for f in nix-layer.tar.gz nix-layer-nvim.tar.gz; do
-        curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-          -o "dist/$f" "$LAYER_BASE_URL/$f"
-      done
-    - |
-      if [ -n "${LAYER_DELTA_URL:-}" ]; then
-        for f in nix-layer-delta.tar.gz nix-layer-nvim-delta.tar.gz; do
-          curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-            -o "dist/$f" "$LAYER_DELTA_URL/$f"
-          curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-            -o "dist/$f.sha256" "$LAYER_DELTA_URL/$f.sha256"
-          ( cd dist && sha256sum -c "$f.sha256" )
-        done
-      fi
+    - *fetch_nix_layers
     # Built here rather than carried: it is 80KB of this very checkout, and
     # rebuilding it is what makes a config change a one-commit deploy.
     - ./docker/mklayer.sh dist/repo-layer.tar

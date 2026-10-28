@@ -65,7 +65,7 @@ Two independent flows, which used to be one:
                      -> physical transfer
                      -> nix-import.sh -> /var/cache/nix-transfer -> nixos-rebuild
 
-    IMAGES   outside -> build-layers.sh -> nix-layer{,-nvim}.tar.gz
+    IMAGES   outside -> build-layers.sh -> nix-layer-nvim{,-delta}.tar.gz
                      -> physical transfer
                      -> push-artifactory.sh -> generic-local/airgap/<ver>/
                      -> CI fetches, builds node-layer, crane appends
@@ -145,8 +145,8 @@ Node check is worth keeping in whatever does: it is the same failure that segfau
 
 ## 5. First transfer should be deliberately small
 
-Still true, and Nix makes it easy to honour: build `.#runai-layer` (the plain flavor, 414 MB) and
-skip `-nvim` (634 MB). `assemble.sh` detects the missing nvim tarball and builds one flavor.
+Superseded: 0.2 ships the nvim layer only (the editor-less flavor was dropped inside), and from
+then on as deltas.
 
 That proves transfer -> Artifactory -> node layer -> `crane append` -> pod end to end, including
 the two things that can only fail against real internal bases: `PATH` prepending on a pytorch base

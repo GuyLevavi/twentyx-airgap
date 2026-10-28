@@ -17,7 +17,7 @@ are files somebody else already built:
 
 | Layer | Contents | Built by | Changes |
 |---|---|---|---|
-| `nix-layer.tar.gz` | the whole toolchain closure, at `/nix/store` | `nix build` **outside** the gap | monthly |
+| `nix-layer-nvim.tar.gz` | the whole toolchain closure, LazyVim included, at `/nix/store` | `nix build` **outside** the gap | monthly |
 | `node-layer.tar` | pi and its `node_modules` | `Containerfile.node`, in CI | monthly |
 | `repo-layer.tar` | dispatcher, libexec, pi package | `mklayer.sh`, plain `tar` | every commit |
 
@@ -26,8 +26,7 @@ needs a registry. The other two are `tar`.
 
 ## The design
 
-    OUTSIDE   scripts/build-layers.sh   ->  nix-layer.tar.gz  (414MB)
-                                            nix-layer-nvim.tar.gz  (634MB)
+    OUTSIDE   scripts/build-layers.sh   ->  nix-layer-nvim.tar.gz  (634MB; --since: a delta)
     TRANSFER  physical, then scripts/push-artifactory.sh
     INSIDE    .gitlab-ci.yml  ->  node-layer.tar, repo-layer.tar
               docker/assemble.sh  ->  crane append + crane mutate
@@ -79,11 +78,11 @@ container startup in `airgap-entrypoint`.
 This is a feature: it forces the toolchain to be relocatable and inspectable, which is exactly what
 lets the WSL target share the same Nix expressions.
 
-## Two flavors
+## One flavor
 
-`nvim` roughly adds 220MB, and not every workspace wants an editor in it. Every variant is built
-twice, `-nvim` suffixed, from the same node and repo blobs. If `nix-layer-nvim.tar.gz` is absent,
-`assemble.sh` builds the plain flavor only and says so.
+There used to be an editor-less layer beside the nvim one, ~220MB smaller. Every workspace
+inside ended up on nvim, so it went: one layer, one delta per transfer. Tags keep the `-nvim`
+suffix, because those are the tags people already pull.
 
 ## Fallback if crane is unavailable
 

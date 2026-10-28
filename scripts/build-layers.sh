@@ -2,20 +2,20 @@
 # Run OUTSIDE. Build the image layers Nix owns, ready for the transfer.
 #
 #   ./scripts/build-layers.sh [outdir]                    default: dist
-#   ./scripts/build-layers.sh [outdir] --since <prevdir>  delta layers
+#   ./scripts/build-layers.sh [outdir] --since <prevdir>  delta layer
 #
 # Produces, with a .sha256 sidecar each so push-artifactory.sh can prove the
 # physical transfer did not corrupt them:
 #
-#   nix-layer.tar.gz        the toolchain closure
-#   nix-layer-nvim.tar.gz   the same plus LazyVim
+#   nix-layer-nvim.tar.gz   the toolchain closure, LazyVim included
+#                           (the one flavor; the name predates that)
 #   repo-layer.tar          the dispatcher and scripts (also built by CI)
 #
-# With --since, <prevdir> holds the nix-layer{,-nvim}.tar.gz already inside
-# the gap, and the nix layers become nix-layer{,-nvim}-delta.tar.gz instead:
-# only the store paths those do not carry, plus a complete /opt/airgap. CI
-# appends them on top of the previous layers (see docker/assemble.sh), so the
-# previous ones must stay in Artifactory.
+# With --since, <prevdir> holds the nix-layer-nvim.tar.gz already inside the
+# gap, and the nix layer becomes nix-layer-nvim-delta.tar.gz instead: only the
+# store paths that one does not carry, plus a complete /opt/airgap. CI appends
+# it on top of the previous layer (see docker/assemble.sh), so the previous
+# one must stay in Artifactory.
 #
 # The node layer is NOT built here: it needs npm against internal Artifactory,
 # so it is built inside the gap by docker/Containerfile.node.
@@ -56,43 +56,37 @@ build() {
 }
 
 if [ -n "$SINCE" ]; then
-    PLAIN_NAME=nix-layer-delta.tar.gz
-    NVIM_NAME=nix-layer-nvim-delta.tar.gz
-    for f in nix-layer.tar.gz nix-layer-nvim.tar.gz; do
-        [ -f "$SINCE/$f" ] || { echo "missing previous layer: $SINCE/$f" >&2; exit 1; }
-    done
-    say "building deltas against $SINCE"
-    NIX_PLAIN="$(build runai-layer "$(realpath "$SINCE/nix-layer.tar.gz")")"
-    NIX_NVIM="$(build runai-layer-nvim "$(realpath "$SINCE/nix-layer-nvim.tar.gz")")"
+    NAME=nix-layer-nvim-delta.tar.gz
+    BASE="$SINCE/nix-layer-nvim.tar.gz"
+    [ -f "$BASE" ] || { echo "missing previous layer: $BASE" >&2; exit 1; }
+    say "building delta against $BASE"
+    NIX="$(build runai-layer-nvim "$(realpath "$BASE")")"
 else
-    PLAIN_NAME=nix-layer.tar.gz
-    NVIM_NAME=nix-layer-nvim.tar.gz
+    NAME=nix-layer-nvim.tar.gz
     say "building"
-    NIX_PLAIN="$(build runai-layer)"
-    NIX_NVIM="$(build runai-layer-nvim)"
+    NIX="$(build runai-layer-nvim)"
 fi
 
 # Copied rather than symlinked: these leave the machine, and a store symlink
 # does not survive a USB stick.
-install -m 0644 "$NIX_PLAIN" "$OUT/$PLAIN_NAME"
-install -m 0644 "$NIX_NVIM"  "$OUT/$NVIM_NAME"
+install -m 0644 "$NIX" "$OUT/$NAME"
 
 ./docker/mklayer.sh "$OUT/repo-layer.tar" >/dev/null
 
 say "checksums"
-( cd "$OUT" && for f in "$PLAIN_NAME" "$NVIM_NAME" repo-layer.tar; do
+( cd "$OUT" && for f in "$NAME" repo-layer.tar; do
     # Bare filename, not a path: the sidecar travels WITH the file and must
     # verify from whatever directory it lands in on the other side.
     sha256sum "$f" > "$f.sha256"
 done )
 
 say "done"
-for f in "$OUT/$PLAIN_NAME" "$OUT/$NVIM_NAME" "$OUT"/repo-layer.tar; do
+for f in "$OUT/$NAME" "$OUT"/repo-layer.tar; do
     printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
 done
 cat <<EOF
 
   Carry these in, then inside the gap:
-    ./scripts/push-artifactory.sh $OUT/$PLAIN_NAME $OUT/$NVIM_NAME
+    ./scripts/push-artifactory.sh $OUT/$NAME
   CI builds the node layer and runs docker/assemble.sh from there.
 EOF

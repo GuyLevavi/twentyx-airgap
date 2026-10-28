@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run INSIDE the airgap, after the physical transfer.
 #
-#   ./scripts/push-artifactory.sh dist/nix-layer.tar.gz [more files...]
+#   ./scripts/push-artifactory.sh dist/nix-layer-nvim.tar.gz [more files...]
 #
 # Uploads the layer tarballs so internal CI fetches them from Artifactory
 # instead of from git. Git stays text-only, which is now literally true: the

@@ -10,18 +10,18 @@
 # Three layers, appended in ascending order of how often they change, so a
 # config edit re-uploads 72KB and cross-mounts the rest:
 #
-#   1. nix-layer      the whole toolchain closure     monthly    ~365MB / ~609MB
+#   1. nix-layer-nvim the whole toolchain closure     monthly    ~634MB
 #   2. node-layer     pi and its node_modules         monthly    ~40MB
 #   3. repo-layer     dispatcher, libexec, configs    hourly     ~72KB
 #
-# A nix layer may be followed by a DELTA (scripts/build-layers.sh --since):
+# The nix layer may be followed by a DELTA (scripts/build-layers.sh --since):
 # only the store paths the previous transfer lacked, plus a complete
 # /opt/airgap. It is appended directly above the layer it was computed
 # against, which therefore stays in Artifactory -- the delta alone is not a
 # working image.
 #
-# Two flavors per variant: the nvim layer is ~250MB larger, and not every
-# workspace wants an editor in it.
+# One flavor, editor included. Its tags keep the `-nvim` suffix from when
+# there was an editor-less one beside it: those are the tags people pull.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -32,11 +32,9 @@ BASE_REGISTRY="${AIRGAP_BASE_REGISTRY:-$REGISTRY}"
 VARIANTS="${AIRGAP_VARIANTS:-base-slim base-pytorch vscode-slim vscode-pytorch}"
 BASE_TAG="${AIRGAP_BASE_TAG:-latest}"
 
-LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer.tar.gz}"
-LAYER_NIX_NVIM="${AIRGAP_LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
+LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer-nvim.tar.gz}"
 # Optional. Present only when this transfer was a delta.
-LAYER_NIX_DELTA="${AIRGAP_LAYER_NIX_DELTA:-dist/nix-layer-delta.tar.gz}"
-LAYER_NIX_NVIM_DELTA="${AIRGAP_LAYER_NIX_NVIM_DELTA:-dist/nix-layer-nvim-delta.tar.gz}"
+LAYER_NIX_DELTA="${AIRGAP_LAYER_NIX_DELTA:-dist/nix-layer-nvim-delta.tar.gz}"
 LAYER_NODE="${AIRGAP_LAYER_NODE:-dist/node-layer.tar}"
 LAYER_REPO="${AIRGAP_LAYER_REPO:-dist/repo-layer.tar}"
 
@@ -47,13 +45,12 @@ for f in "$LAYER_NIX" "$LAYER_NODE" "$LAYER_REPO"; do
     [ -f "$f" ] || { echo "missing layer: $f" >&2; exit 1; }
 done
 
-# The nvim flavor is optional: a pipeline that only needs the small image
-# should not be forced to build and push the big one.
-FLAVORS="plain"
-if [ -f "$LAYER_NIX_NVIM" ]; then
-    FLAVORS="plain nvim"
-else
-    echo "note: $LAYER_NIX_NVIM absent -- building the plain flavor only" >&2
+# The topmost nix layer owns /opt/airgap, session-env included.
+NIXLAYERS=(-f "$LAYER_NIX")
+TOPLAYER="$LAYER_NIX"
+if [ -f "$LAYER_NIX_DELTA" ]; then
+    NIXLAYERS+=(-f "$LAYER_NIX_DELTA")
+    TOPLAYER="$LAYER_NIX_DELTA"
 fi
 
 # ── PATH must be PREPENDED, never replaced ────────────────────────────────
@@ -85,8 +82,11 @@ session_env_args() {
     done < <(tar -xzOf "$layer" --occurrence=1 opt/airgap/session-env 2>/dev/null || true)
 }
 
+mapfile -t ENVARGS < <(session_env_args "$TOPLAYER")
+[ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $TOPLAYER" >&2
+
 echo "layers:"
-for f in "$LAYER_NIX" "$LAYER_NIX_DELTA" "$LAYER_NIX_NVIM" "$LAYER_NIX_NVIM_DELTA" "$LAYER_NODE" "$LAYER_REPO"; do
+for f in "$LAYER_NIX" "$LAYER_NIX_DELTA" "$LAYER_NODE" "$LAYER_REPO"; do
     [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
 done
 
@@ -109,44 +109,26 @@ for variant in $VARIANTS; do
     BASE_ENTRY="$(crane config "$base" 2>/dev/null \
         | jq -r '((.config.Entrypoint // []) + (.config.Cmd // [])) | join(" ")')"
 
-    for flavor in $FLAVORS; do
-        case "$flavor" in
-            plain) nixlayer="$LAYER_NIX";      delta="$LAYER_NIX_DELTA";      suffix="" ;;
-            nvim)  nixlayer="$LAYER_NIX_NVIM"; delta="$LAYER_NIX_NVIM_DELTA"; suffix="-nvim" ;;
-        esac
-        dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}${suffix}"
+    dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}-nvim"
 
-        # The topmost nix layer owns /opt/airgap, session-env included.
-        nixlayers=(-f "$nixlayer")
-        toplayer="$nixlayer"
-        if [ -f "$delta" ]; then
-            nixlayers+=(-f "$delta")
-            toplayer="$delta"
-        fi
+    echo "==> ${variant}"
+    echo "    base ${base}"
 
-        echo "==> ${variant}${suffix}"
-        echo "    base ${base}"
+    crane append -b "$base" -t "$dest" \
+        "${NIXLAYERS[@]}" -f "$LAYER_NODE" -f "$LAYER_REPO" >/dev/null
 
-        crane append -b "$base" -t "$dest" \
-            "${nixlayers[@]}" -f "$LAYER_NODE" -f "$LAYER_REPO" >/dev/null
+    # Image config only; no layer traffic.
+    crane mutate "$dest" -t "$dest" \
+        "${ENVARGS[@]}" \
+        --env AIRGAP_ROOT=/opt/airgap \
+        --env "PATH=${NEWPATH}" \
+        --env "AIRGAP_BASE_ENTRYPOINT=${BASE_ENTRY}" \
+        --entrypoint /opt/airgap/libexec/airgap-entrypoint \
+        --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
+        --label "airgap.variant=${variant}" \
+        --label "airgap.flavor=nvim" >/dev/null
 
-        # Read per flavor: the nvim layer resolves to different store paths.
-        mapfile -t ENVARGS < <(session_env_args "$toplayer")
-        [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $toplayer" >&2
-
-        # Image config only; no layer traffic.
-        crane mutate "$dest" -t "$dest" \
-            "${ENVARGS[@]}" \
-            --env AIRGAP_ROOT=/opt/airgap \
-            --env "PATH=${NEWPATH}" \
-            --env "AIRGAP_BASE_ENTRYPOINT=${BASE_ENTRY}" \
-            --entrypoint /opt/airgap/libexec/airgap-entrypoint \
-            --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
-            --label "airgap.variant=${variant}" \
-            --label "airgap.flavor=${flavor}" >/dev/null
-
-        echo "    -> ${dest}"
-    done
+    echo "    -> ${dest}"
 done
 
-echo "done: $(echo "$VARIANTS" | wc -w) variant(s) x $(echo "$FLAVORS" | wc -w) flavor(s)"
+echo "done: $(echo "$VARIANTS" | wc -w) variant(s)"

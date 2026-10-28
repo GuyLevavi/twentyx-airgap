@@ -1,7 +1,7 @@
 # The single source of truth for both targets.
 #
 # Evaluated twice: once inside nixosConfigurations.wsl (as a home-manager user
-# module) and once standalone as homeConfigurations.runai, whose build products
+# module) and once standalone as homeConfigurations.runai-nvim, whose build products
 # are extracted into an OCI layer by nix/runai/layer.nix. Nix never runs in a
 # pod, so anything that needs Nix at runtime must be guarded by
 # `cfg.target == "wsl"`.
@@ -52,8 +52,8 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        LazyVim with curated treesitter grammars and LSPs. ~750 MB of closure,
-        which is why the RunAI side builds it as a separate image flavor.
+        LazyVim with curated treesitter grammars and LSPs. On in both targets;
+        the switch remains for a workspace that wants a smaller layer.
       '';
     };
 

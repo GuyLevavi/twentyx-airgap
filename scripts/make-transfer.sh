@@ -4,7 +4,7 @@
 # both targets.
 #
 #   ./scripts/make-transfer.sh <base-rev> \
-#       --layers-since <dir with the nix-layer{,-nvim}.tar.gz already inside> \
+#       --layers-since <dir with the nix-layer-nvim.tar.gz already inside> \
 #       --wsl-since <store-paths file of the WSL closure already inside> \
 #       [--out <dir>]
 #
@@ -72,11 +72,11 @@ rm -rf "$OUT/wsl/cache"
 
 # ── README ────────────────────────────────────────────────────────────────
 if [ -n "$LAYERS_SINCE" ]; then
-    LAYER_FILES="nix-layer-delta.tar.gz nix-layer-nvim-delta.tar.gz"
-    LAYER_NOTE="Deltas: keep the previous full layers in Artifactory, and set LAYER_DELTA_URL to this upload's folder in .gitlab-ci.yml."
+    LAYER_FILES="nix-layer-nvim-delta.tar.gz"
+    LAYER_NOTE="A delta: keep the previous full layer in Artifactory, and set LAYER_DELTA_URL to this upload's folder in .gitlab-ci.yml."
 else
-    LAYER_FILES="nix-layer.tar.gz nix-layer-nvim.tar.gz"
-    LAYER_NOTE="Full layers: point LAYER_BASE_URL at this upload and unset LAYER_DELTA_URL."
+    LAYER_FILES="nix-layer-nvim.tar.gz"
+    LAYER_NOTE="A full layer: point LAYER_BASE_URL at this upload and unset LAYER_DELTA_URL."
 fi
 cat > "$OUT/README.md" <<EOF
 # airgap transfer $HEAD_SHORT

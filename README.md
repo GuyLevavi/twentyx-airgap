@@ -27,8 +27,9 @@ tells you what that costs before you carry it anywhere.
 | | |
 |---|---|
 | WSL bootstrap, one file | **948 MB** (4.3 GiB system + flake inputs, xz) |
-| `nix-layer.tar.gz` | 414 MB |
-| `nix-layer-nvim.tar.gz` | 634 MB |
+| `nix-layer-nvim.tar.gz` | 634 MB (0.1 full) |
+| `nix-layer-nvim-delta.tar.gz` | 266 MB (0.1 -> 0.2) |
+| WSL delta, 0.1 -> 0.2 | 150 MB |
 | `node-layer.tar` | ~40 MB |
 | `repo-layer.tar` | 80 KB |
 
@@ -83,7 +84,7 @@ set difference against what the far side already holds:
 
 ```
 ./scripts/make-transfer.sh <rev-inside> \
-    --layers-since <dir of the nix-layer*.tar.gz inside> \
+    --layers-since <dir of the nix-layer-nvim.tar.gz inside> \
     --wsl-since dist/baselines/wsl-<rev-inside>.store-paths
 ```
 
@@ -117,7 +118,7 @@ treat the process and its children separately:
 
 ## Headless nvim over RunAI
 
-The `-nvim` flavor is usable from a Windows terminal emulator through
+The image (one flavor, `-nvim` tagged) is usable from a Windows terminal emulator through
 `runai exec`. Six things have to be right, and all six are wired:
 
 1. `runai exec -it` — `runai attach` gives you PID 1's stdio, which is not a TTY

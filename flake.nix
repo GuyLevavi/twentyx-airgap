@@ -52,26 +52,23 @@
       # the RunAI workspace name in a pod. Only the WSL side needs it at eval.
       username = "gl";
 
-      mkRunai =
-        { nvim }:
-        home-manager.lib.homeManagerConfiguration {
-          inherit pkgs;
-          extraSpecialArgs = {
-            inherit inputs;
-            username = "jensen";
-          };
-          modules = [
-            ./nix/modules/home.nix
-            {
-              airgap.target = "runai";
-              airgap.nvim.enable = nvim;
-              home.username = "jensen";
-              # Replaced at runtime by airgap-bootstrap once the workspace name
-              # resolves; at eval time it only has to be *a* path.
-              home.homeDirectory = "/home/jensen";
-            }
-          ];
+      runaiHome = home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        extraSpecialArgs = {
+          inherit inputs;
+          username = "jensen";
         };
+        modules = [
+          ./nix/modules/home.nix
+          {
+            airgap.target = "runai";
+            home.username = "jensen";
+            # Replaced at runtime by airgap-bootstrap once the workspace name
+            # resolves; at eval time it only has to be *a* path.
+            home.homeDirectory = "/home/jensen";
+          }
+        ];
+      };
     in
     {
       # ── WSL: a full NixOS system, rebuilt offline ──────────────────────
@@ -101,21 +98,18 @@
       # ── RunAI: evaluated HERE, never inside. Nothing below ever runs Nix
       # in a pod; we extract the built tree and ship it as an OCI layer.
       #
-      # Two flavors, because nvim roughly doubles the layer and not every
-      # workspace wants an editor in it.
-      homeConfigurations = {
-        runai = mkRunai { nvim = false; };
-        runai-nvim = mkRunai { nvim = true; };
-      };
+      # One flavor, with the editor. A second, editor-less layer existed to
+      # save the ~250 MB nvim costs, but every workspace inside ended up on
+      # the nvim one, and two layers meant two deltas per transfer. The
+      # `-nvim` names stay: they are what is already in Artifactory, and the
+      # image tags people pull.
+      homeConfigurations.runai-nvim = runaiHome;
 
       packages.${system} = {
-        runai-layer = pkgs.callPackage ./nix/runai/layer.nix {
-          hm = self.homeConfigurations.runai;
-        };
         runai-layer-nvim = pkgs.callPackage ./nix/runai/layer.nix {
           hm = self.homeConfigurations.runai-nvim;
         };
-        default = self.packages.${system}.runai-layer;
+        default = self.packages.${system}.runai-layer-nvim;
 
         # ── the very first transfer ────────────────────────────────────────
         # Chicken and egg: nix-import.sh needs a NixOS-WSL machine, and there

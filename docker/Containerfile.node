@@ -12,9 +12,9 @@
 #     --build-arg NPM_REGISTRY=$ARTIFACTORY_URL/api/npm/npm-local/ \
 #     --target export -o type=tar,dest=dist/node-layer.tar .
 #
-# Requires dist/nix-layer.tar.gz in the build context: node comes from the Nix
-# closure now, so the two layers are built against the same interpreter that
-# will run them in the pod.
+# Requires dist/nix-layer-nvim.tar.gz (and its -delta, if this transfer had
+# one) in the build context: node comes from the Nix closure now, so the two
+# layers are built against the same interpreter that will run them in the pod.
 
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS build
@@ -22,14 +22,20 @@ FROM ${BASE_IMAGE} AS build
 ARG NPM_REGISTRY
 
 # Unpack the Nix layer into the BUILD container only. It is not copied into
-# /out -- assemble.sh appends it separately, so it stays one blob that both
-# image flavors share rather than being duplicated inside this one.
+# /out -- assemble.sh appends it separately, so it stays one blob shared by
+# every variant rather than being duplicated inside this one.
 #
 # It must land at literal /nix: every Nix-built binary names its ELF
 # interpreter by absolute store path, so an unpack anywhere else produces a
 # node that cannot exec.
-COPY dist/nix-layer.tar.gz /tmp/nix-layer.tar.gz
-RUN tar -xzf /tmp/nix-layer.tar.gz -C / && rm /tmp/nix-layer.tar.gz
+# Base first, then the delta over it, exactly as the image stacks them. Not a
+# glob in tar order: "-delta" sorts before ".tar", which would unpack them
+# backwards and leave the old /opt/airgap on top.
+COPY dist/nix-layer-nvim*.tar.gz /tmp/nix/
+RUN tar -xzf /tmp/nix/nix-layer-nvim.tar.gz -C / \
+ && if [ -f /tmp/nix/nix-layer-nvim-delta.tar.gz ]; then \
+      tar -xzf /tmp/nix/nix-layer-nvim-delta.tar.gz -C /; fi \
+ && rm -rf /tmp/nix
 
 ENV PATH=/opt/airgap/profile/bin:${PATH}
 
