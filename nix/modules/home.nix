@@ -83,6 +83,14 @@ in
         default = false;
         description = "visidata. 1.38 GB of closure; opt in on WSL only.";
       };
+      experimental.enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Tools on trial against the in-house model: open-code-review today.
+          One switch, so dropping a failed experiment is a one-line change.
+        '';
+      };
     };
 
     git = {

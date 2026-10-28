@@ -207,6 +207,14 @@ in
       # reports the GPU you were actually fractioned, from inside.
       nvtopPackages.nvidia
     ]
+    ++ lib.optionals cfg.tools.experimental.enable [
+      # LLM code review over local git diffs (`ocr review`), wired to the same
+      # vLLM endpoint as pi. Needs tool calling enabled on the server
+      # (--enable-auto-tool-choice plus a tool-call parser); without it every
+      # file fails with "No tool calls parsed". With the ~70k window, cap it:
+      #   ocr review --max-tokens 40000 --concurrency 2
+      (pkgs.callPackage ../pkgs/open-code-review.nix { })
+    ]
     ++ lib.optionals cfg.tools.data.enable [
       # visidata is 1.38 GB of closure — it pulls pandas, pyarrow, matplotlib,
       # seaborn, h5py, numpy and arrow-cpp, an entire second Python data stack.
