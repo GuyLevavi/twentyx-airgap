@@ -29,8 +29,40 @@ let
     mkdir -p $out/tldr-pages/pages.en
     cp -r ${tldrPages}/common ${tldrPages}/linux $out/tldr-pages/pages.en/
   '';
+
+  # pip source builds need a build backend. With build isolation pip fetches
+  # setuptools from the index, which inside the gap works only while
+  # Artifactory is reachable and mirrors it; with --no-build-isolation, or in
+  # a `uv venv` created without --seed, there is nothing to fetch it from at
+  # all. A find-links directory is consulted in addition to the index, so this
+  # costs nothing when the index works and rescues the build when it does not.
+  # Filenames are load-bearing: pip reads the version from the wheel name.
+  wheelhouse = pkgs.linkFarm "wheelhouse" (
+    map
+      (w: {
+        inherit (w) name;
+        path = pkgs.fetchurl w;
+      })
+      [
+        {
+          name = "setuptools-84.2.1-py3-none-any.whl";
+          url = "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl";
+          sha256 = "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2";
+        }
+        {
+          name = "wheel-0.48.0-py3-none-any.whl";
+          url = "https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/wheel-0.48.0-py3-none-any.whl";
+          sha256 = "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab";
+        }
+      ]
+  );
 in
 {
+  home.sessionVariables = {
+    PIP_FIND_LINKS = "${wheelhouse}";
+    UV_FIND_LINKS = "${wheelhouse}";
+  };
+
   programs.bat.enable = true;
   programs.eza.enable = true;
   programs.ripgrep.enable = true;
@@ -124,6 +156,13 @@ in
       git-lfs
       glab # you are on GitLab and had vendored gh
       moreutils # sponge, ts
+
+      # ── building sdists ────────────────────────────────────────────────
+      # The pod bases ship gcc but no make, so any sdist with a Makefile step
+      # dies halfway through a pip install. Deliberately NOT a Nix gcc: make
+      # only execs `cc` from PATH, and the base image's compiler is the one
+      # that matches its headers and the python it is building against.
+      gnumake
     ]
     ++ lib.optionals cfg.tools.cluster.enable [
       # ── OpenShift / RunAI ──────────────────────────────────────────────
