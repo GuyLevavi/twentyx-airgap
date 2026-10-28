@@ -19,8 +19,12 @@ variables:
   AIRGAP_BASE_REGISTRY: "quay.internal/ai"      # TODO: real path, see NOTES.md
   AIRGAP_BASE_TAG: "latest"
   AIRGAP_VARIANTS: "base-slim base-pytorch vscode-slim vscode-pytorch"
-  # Where push-artifactory.sh put the transferred layers.
+  # Where push-artifactory.sh put the transferred layers. BASE holds the last
+  # full nix layers; DELTA, when set, the delta layers appended above them
+  # (scripts/build-layers.sh --since). Unset DELTA once a full transfer
+  # replaces the base.
   LAYER_BASE_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0"
+  LAYER_DELTA_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.2.0"
 
 # ---------------------------------------------------------------------------
 lint:
@@ -77,6 +81,16 @@ assemble:
         curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
           -o "dist/$f" "$LAYER_BASE_URL/$f"
       done
+    - |
+      if [ -n "${LAYER_DELTA_URL:-}" ]; then
+        for f in nix-layer-delta.tar.gz nix-layer-nvim-delta.tar.gz; do
+          curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+            -o "dist/$f" "$LAYER_DELTA_URL/$f"
+          curl -fSL -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+            -o "dist/$f.sha256" "$LAYER_DELTA_URL/$f.sha256"
+          ( cd dist && sha256sum -c "$f.sha256" )
+        done
+      fi
     # Built here rather than carried: it is 80KB of this very checkout, and
     # rebuilding it is what makes a config change a one-commit deploy.
     - ./docker/mklayer.sh dist/repo-layer.tar

@@ -15,9 +15,20 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-OUT="${1:-dist/nix-transfer}"
+OUT="dist/nix-transfer"
 LIMIT=$((2400 * 1024 * 1024))   # stay under a 2.5GB single-file upload cap
-[ "${2:-}" = "--limit" ] && LIMIT="$3"
+# The store paths the far side already holds -- normally the store-paths file
+# a previous export wrote next to its chunks. Set, the export ships only what
+# is missing from it, and nix-import.sh resolves the rest from the local store.
+SINCE_PATHS=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --limit)       LIMIT="${2:?}"; shift 2 ;;
+        --since-paths) SINCE_PATHS="$(realpath "${2:?}")"; shift 2 ;;
+        *)             OUT="$1"; shift ;;
+    esac
+done
+[ -z "$SINCE_PATHS" ] || [ -s "$SINCE_PATHS" ] || { echo "empty or missing: $SINCE_PATHS" >&2; exit 1; }
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -73,9 +84,42 @@ else
     rm -f cache-pubkey
 fi
 
+# Everything the far side must hold after this import. Written next to the
+# chunks so the NEXT export can be a delta against it: keep a copy outside.
 # shellcheck disable=SC2086
-nix copy --to "file://$PWD/$CACHE?compression=xz" "${SIGN[@]}" \
-    "$TOPLEVEL" "$STDENV" $INPUTS
+nix path-info -r "$TOPLEVEL" "$STDENV" $INPUTS | sort -u > "$OUT/store-paths"
+
+if [ -n "$SINCE_PATHS" ]; then
+    comm -13 <(sort -u "$SINCE_PATHS") "$OUT/store-paths" > "$OUT/.delta"
+    say "delta: $(wc -l < "$OUT/.delta") of $(wc -l < "$OUT/store-paths") paths are new"
+    # --no-recursive is what makes this a delta: nix copy otherwise ships each
+    # path's whole closure, i.e. everything again. But a binary cache refuses
+    # a path whose references it does not hold ("reference ... is not
+    # valid"), and the references a delta omits are exactly the ones the far
+    # side already has. So stand them in with narinfo-only stubs for the copy,
+    # and take the stubs out before chunking. They are always in the local
+    # store: they are part of the closure that was just built.
+    xargs -r nix path-info --json < "$OUT/.delta" \
+        | jq -r '.[].references[]' | sort -u | comm -23 - "$OUT/.delta" > "$OUT/.stubs"
+    : > "$OUT/.stubfiles"
+    xargs -r nix path-info --json < "$OUT/.stubs" | jq -r 'to_entries[] |
+        "\(.key)\t\(.value.narHash)\t\(.value.narSize)\t\(.value.references | map(ltrimstr("/nix/store/")) | join(" "))"' |
+    while IFS=$'\t' read -r p hash size refs; do
+        b="$(basename "$p")"
+        printf 'StorePath: %s\nURL: nar/stub.nar\nCompression: none\nNarHash: %s\nNarSize: %s\nReferences: %s\n' \
+            "$p" "$hash" "$size" "$refs" > "$CACHE/${b%%-*}.narinfo"
+        echo "${b%%-*}.narinfo" >> "$OUT/.stubfiles"
+    done
+    xargs -r nix copy --no-recursive --to "file://$PWD/$CACHE?compression=xz" "${SIGN[@]}" \
+        < "$OUT/.delta"
+    while read -r f; do rm -f "$CACHE/$f"; done < "$OUT/.stubfiles"
+    say "  $(wc -l < "$OUT/.stubs") baseline reference(s) assumed present on the far side"
+    rm -f "$OUT/.delta" "$OUT/.stubs" "$OUT/.stubfiles"
+else
+    # shellcheck disable=SC2086
+    nix copy --to "file://$PWD/$CACHE?compression=xz" "${SIGN[@]}" \
+        "$TOPLEVEL" "$STDENV" $INPUTS
+fi
 fi
 
 # ── chunk ─────────────────────────────────────────────────────────────────
@@ -109,6 +153,7 @@ fi
     echo "stdenv=${STDENV:-}"
     echo "generated=$(date -u +%FT%TZ)"
     echo "signed=$([ -f cache-pubkey ] && echo yes || echo no)"
+    echo "delta=$([ -n "$SINCE_PATHS" ] && echo yes || echo no)"
 } > "$OUT/TRANSFER"
 
 # Travels with the chunks, not with the repo: without it the far side cannot

@@ -15,6 +15,12 @@
   gnutar,
   gzip,
   hm,
+  # A previous layer's opt/airgap/store-paths. When set this builds a DELTA:
+  # all of /opt/airgap, but only the store paths that base does not already
+  # carry. crane-appended on top of that base, the image ends up with exactly
+  # the new closure -- an upper OCI layer replaces /opt/airgap's symlinks and
+  # files, and every store path it omits is already in the layer below.
+  basePaths ? null,
 }:
 let
   # The buildEnv of every package in the home-manager config.
@@ -72,13 +78,13 @@ let
     )
   );
 in
-runCommand "runai-layer.tar.gz"
+runCommand (if basePaths == null then "runai-layer.tar.gz" else "runai-layer-delta.tar.gz")
   {
     nativeBuildInputs = [
       gnutar
       gzip
     ];
-    passthru = { inherit profile files closure; };
+    passthru = { inherit profile files closure basePaths; };
     meta.description = "Nix toolchain tree for crane-append onto RunAI bases";
   }
   ''
@@ -103,7 +109,13 @@ runCommand "runai-layer.tar.gz"
 
     # Append the store closure, with paths made relative to / so they unpack to
     # /nix/store rather than anywhere else.
-    sed 's|^/||' ${closure}/store-paths > paths.txt
+    ${
+      if basePaths == null then
+        "cp ${closure}/store-paths wanted.txt"
+      else
+        "comm -13 <(sort ${basePaths}) <(sort ${closure}/store-paths) > wanted.txt"
+    }
+    sed 's|^/||' wanted.txt > paths.txt
     tar --owner=0 --group=0 --sort=name --mtime='@1' \
         -rf layer.tar -C / -T paths.txt
 

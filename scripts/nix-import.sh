@@ -18,10 +18,16 @@ shopt -s nullglob
 chunks=("$SRC"/nix-transfer-*.tar.gz)
 [ ${#chunks[@]} -gt 0 ] || { echo "no chunks found in $SRC" >&2; exit 1; }
 
+# DEST accumulates across transfers, so remember which narinfos are THIS one's:
+# a delta is imported path by path, and only its own paths.
+NARINFOS="$(mktemp)"
+trap 'rm -f "$NARINFOS"' EXIT
+
 say "extracting ${#chunks[@]} chunk(s)"
 for c in "${chunks[@]}"; do
     printf '  %s\n' "$(basename "$c")"
     tar -C "$DEST" -xzf "$c"
+    tar -tzf "$c" | grep '\.narinfo$' >> "$NARINFOS" || true
 done
 
 [ -f "$DEST/nix-cache-info" ] || {
@@ -31,6 +37,26 @@ done
 }
 
 TOPLEVEL="$(sed -n 's/^toplevel=//p' "$SRC/TRANSFER" 2>/dev/null || true)"
+
+# A delta ships only the paths the far side lacked when it was cut, and
+# relies on this store for every other reference. If this machine is not
+# the baseline the delta was computed against, say which paths are missing
+# now, rather than let `nix copy` fail halfway through with one of them.
+if grep -qx 'delta=yes' "$SRC/TRANSFER" 2>/dev/null; then
+    say "checking the delta's references against the local store"
+    missing=0
+    while read -r ref; do
+        [ -f "$DEST/${ref%%-*}.narinfo" ] && continue
+        [ -e "/nix/store/$ref" ] && continue
+        echo "  missing: /nix/store/$ref" >&2
+        missing=$((missing + 1))
+    done < <(cd "$DEST" && xargs sed -n 's/^References: //p' < "$NARINFOS" | tr ' ' '\n' | grep . | sort -u)
+    if [ "$missing" -gt 0 ]; then
+        echo "error: $missing referenced path(s) are neither in the transfer nor in this store." >&2
+        echo "This delta was cut against a different baseline; ask for a full export." >&2
+        exit 1
+    fi
+fi
 
 # Signature checking is the property vendor/CHECKSUMS.sha256 used to provide,
 # except Nix verifies per store path rather than per tarball -- so a chunk that
@@ -48,8 +74,23 @@ else
 fi
 
 say "importing into the local store"
-if [ -n "$TOPLEVEL" ]; then
+if grep -qx 'delta=yes' "$SRC/TRANSFER" 2>/dev/null; then
+    # Not `nix copy $TOPLEVEL`: that walks the closure through the cache, and
+    # stops at the first reference the delta deliberately left out ("path ...
+    # is not valid") even though this store has it. Copying just this
+    # transfer's paths, non-recursively, lets Nix order them itself and find
+    # every other reference already valid here.
+    # shellcheck disable=SC2046 # one store path per word
+    nix copy --no-recursive --from "file://$DEST" "${VERIFY[@]}" \
+        $(cd "$DEST" && xargs sed -n 's/^StorePath: //p' < "$NARINFOS")
+elif [ -n "$TOPLEVEL" ]; then
     nix copy --from "file://$DEST" "${VERIFY[@]}" "$TOPLEVEL"
+else
+    nix copy --from "file://$DEST" "${VERIFY[@]}" --all
+fi
+
+if [ -n "$TOPLEVEL" ]; then
+    [ -e "$TOPLEVEL" ] || { echo "error: $TOPLEVEL is still not in the store after import" >&2; exit 1; }
     echo
     echo "  Imported. Activate with:"
     echo "    sudo nix-env -p /nix/var/nix/profiles/system --set $TOPLEVEL"
@@ -62,6 +103,4 @@ if [ -n "$TOPLEVEL" ]; then
         echo "  Copy cache-pubkey next to the flake so future rebuilds trust it:"
         echo "    sudo cp $SRC/cache-pubkey /etc/nixos/cache-pubkey"
     fi
-else
-    nix copy --from "file://$DEST" "${VERIFY[@]}" --all
 fi

@@ -14,6 +14,12 @@
 #   2. node-layer     pi and its node_modules         monthly    ~40MB
 #   3. repo-layer     dispatcher, libexec, configs    hourly     ~72KB
 #
+# A nix layer may be followed by a DELTA (scripts/build-layers.sh --since):
+# only the store paths the previous transfer lacked, plus a complete
+# /opt/airgap. It is appended directly above the layer it was computed
+# against, which therefore stays in Artifactory -- the delta alone is not a
+# working image.
+#
 # Two flavors per variant: the nvim layer is ~250MB larger, and not every
 # workspace wants an editor in it.
 set -euo pipefail
@@ -28,6 +34,9 @@ BASE_TAG="${AIRGAP_BASE_TAG:-latest}"
 
 LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer.tar.gz}"
 LAYER_NIX_NVIM="${AIRGAP_LAYER_NIX_NVIM:-dist/nix-layer-nvim.tar.gz}"
+# Optional. Present only when this transfer was a delta.
+LAYER_NIX_DELTA="${AIRGAP_LAYER_NIX_DELTA:-dist/nix-layer-delta.tar.gz}"
+LAYER_NIX_NVIM_DELTA="${AIRGAP_LAYER_NIX_NVIM_DELTA:-dist/nix-layer-nvim-delta.tar.gz}"
 LAYER_NODE="${AIRGAP_LAYER_NODE:-dist/node-layer.tar}"
 LAYER_REPO="${AIRGAP_LAYER_REPO:-dist/repo-layer.tar}"
 
@@ -77,7 +86,7 @@ session_env_args() {
 }
 
 echo "layers:"
-for f in "$LAYER_NIX" "$LAYER_NIX_NVIM" "$LAYER_NODE" "$LAYER_REPO"; do
+for f in "$LAYER_NIX" "$LAYER_NIX_DELTA" "$LAYER_NIX_NVIM" "$LAYER_NIX_NVIM_DELTA" "$LAYER_NODE" "$LAYER_REPO"; do
     [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
 done
 
@@ -102,20 +111,28 @@ for variant in $VARIANTS; do
 
     for flavor in $FLAVORS; do
         case "$flavor" in
-            plain) nixlayer="$LAYER_NIX";      suffix="" ;;
-            nvim)  nixlayer="$LAYER_NIX_NVIM"; suffix="-nvim" ;;
+            plain) nixlayer="$LAYER_NIX";      delta="$LAYER_NIX_DELTA";      suffix="" ;;
+            nvim)  nixlayer="$LAYER_NIX_NVIM"; delta="$LAYER_NIX_NVIM_DELTA"; suffix="-nvim" ;;
         esac
         dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}${suffix}"
+
+        # The topmost nix layer owns /opt/airgap, session-env included.
+        nixlayers=(-f "$nixlayer")
+        toplayer="$nixlayer"
+        if [ -f "$delta" ]; then
+            nixlayers+=(-f "$delta")
+            toplayer="$delta"
+        fi
 
         echo "==> ${variant}${suffix}"
         echo "    base ${base}"
 
         crane append -b "$base" -t "$dest" \
-            -f "$nixlayer" -f "$LAYER_NODE" -f "$LAYER_REPO" >/dev/null
+            "${nixlayers[@]}" -f "$LAYER_NODE" -f "$LAYER_REPO" >/dev/null
 
         # Read per flavor: the nvim layer resolves to different store paths.
-        mapfile -t ENVARGS < <(session_env_args "$nixlayer")
-        [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $nixlayer" >&2
+        mapfile -t ENVARGS < <(session_env_args "$toplayer")
+        [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $toplayer" >&2
 
         # Image config only; no layer traffic.
         crane mutate "$dest" -t "$dest" \
