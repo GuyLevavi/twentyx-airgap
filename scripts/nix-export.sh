@@ -110,36 +110,7 @@ STDENV="$(nix build --no-link --print-out-paths \
 [ -z "$STDENV" ] && STDENV="$(nix build --no-link --print-out-paths --impure --expr \
     "(import (builtins.getFlake (toString ./.)).inputs.nixpkgs {}).stdenvNoCC")"
 
-say "exporting closure to a signed binary cache"
-KEY="${AIRGAP_SIGN_KEY:-$HOME/.config/airgap/cache-priv.key}"
-SIGN=()
-if [ -f "$KEY" ]; then
-    SIGN=(--secret-key "$KEY")
-    # nix/hosts/wsl.nix keys BOTH trusted-public-keys and require-sigs off this
-    # file's existence, so writing it here is what arms verification on the far
-    # side. It is gitignored: it is per-machine, and it must travel with the
-    # transfer rather than with the repo.
-    nix key convert-secret-to-public < "$KEY" > cache-pubkey
-    echo "  signing with $KEY; public key -> cache-pubkey (transfer it too)"
-else
-    echo "  note: no signing key at $KEY -- the far side falls back to require-sigs = false." >&2
-    echo "  generate one with: nix key generate-secret --key-name airgap-transfer > $KEY" >&2
-    # Stale key from a previous signed export would make the far side demand
-    # signatures that this unsigned transfer does not carry.
-    rm -f cache-pubkey
-fi
-
-# A persistent cache signed by another key (or unsigned) would ship paths the
-# far side rejects, and nix copy would not re-sign them: it skips them. Start
-# over then. A cache that never recorded its signer is adopted as it is.
-if [ -n "$PERSIST" ]; then
-    signer="$(cat cache-pubkey 2>/dev/null || echo unsigned)"
-    if [ -f "$CACHE/.signer" ] && [ "$(cat "$CACHE/.signer")" != "$signer" ]; then
-        say "  cache at $CACHE was signed by another key; starting it over"
-        rm -rf "$CACHE"; mkdir -p "$CACHE"
-    fi
-    printf '%s\n' "$signer" > "$CACHE/.signer"
-fi
+say "exporting closure to a binary cache"
 
 # Everything the far side must hold after this import. Written next to the
 # chunks so the NEXT export can be a delta against it: keep a copy outside.
@@ -168,7 +139,7 @@ if [ -n "$SINCE_PATHS" ]; then
             "$p" "$hash" "$size" "$refs" > "$CACHE/${b%%-*}.narinfo"
         echo "${b%%-*}.narinfo" >> "$OUT/.stubfiles"
     done
-    xargs -r nix copy --no-recursive --to "file://$PWD/$CACHE?compression=xz" "${SIGN[@]}" \
+    xargs -r nix copy --no-recursive --to "file://$PWD/$CACHE?compression=xz" \
         < "$OUT/.delta"
     while read -r f; do rm -f "$CACHE/$f"; done < "$OUT/.stubfiles"
     say "  $(wc -l < "$OUT/.stubs") baseline reference(s) assumed present on the far side"
@@ -177,7 +148,7 @@ if [ -n "$SINCE_PATHS" ]; then
 else
     prune_cache "$OUT/store-paths"
     # shellcheck disable=SC2086
-    nix copy --to "file://$PWD/$CACHE?compression=xz" "${SIGN[@]}" \
+    nix copy --to "file://$PWD/$CACHE?compression=xz" \
         "$TOPLEVEL" "$STDENV" $INPUTS
     verify_cache
 fi
@@ -213,13 +184,8 @@ fi
     echo "toplevel=${TOPLEVEL:-}"
     echo "stdenv=${STDENV:-}"
     echo "generated=$(date -u +%FT%TZ)"
-    echo "signed=$([ -f cache-pubkey ] && echo yes || echo no)"
     echo "delta=$([ -n "$SINCE_PATHS" ] && echo yes || echo no)"
 } > "$OUT/TRANSFER"
-
-# Travels with the chunks, not with the repo: without it the far side cannot
-# verify a signed transfer, and nix-import.sh will say so rather than guess.
-[ -f cache-pubkey ] && cp cache-pubkey "$OUT/cache-pubkey"
 
 say "done"
 ls -lh "$OUT"/*.tar.gz | awk '{printf "  %s  %s\n", $5, $9}'

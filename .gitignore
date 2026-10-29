@@ -6,8 +6,3 @@ result-*
 node_modules/
 *.log
 .DS_Store
-
-# Written by scripts/nix-export.sh when it signs a transfer. Tracked
-# deliberately? No: it is per-machine. nix/hosts/wsl.nix picks it up if present
-# and falls back to require-sigs = false when it is absent.
-cache-pubkey

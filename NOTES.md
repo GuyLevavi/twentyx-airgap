@@ -61,7 +61,7 @@ Fully airgapped. Build-time network reaches **internal Artifactory only**; pip r
 
 Two independent flows, which used to be one:
 
-    WSL      outside -> nix-export.sh -> signed binary cache, sharded
+    WSL      outside -> nix-export.sh -> binary cache, sharded
                      -> physical transfer
                      -> nix-import.sh -> /var/cache/nix-transfer -> nixos-rebuild
 
@@ -81,8 +81,8 @@ Two independent flows, which used to be one:
 download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
 transfer corrupt anything?*). Nix covers both, better: the flake lock pins inputs by hash, and the
 binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
-the path it damaged, not on "the transfer". Signing (item: `cache-pubkey`) makes it tamper-evident
-as well as corruption-evident. The layer tarballs keep a plain `.sha256` sidecar, because CI
+the path it damaged, not on "the transfer". Transfers are unsigned on purpose: they are carried by
+hand, so a key would guard against nobody. The layer tarballs keep a plain `.sha256` sidecar, because CI
 fetches them over HTTP and has no Nix to ask.
 
 ## 4. Base images  [editor resolved; names for you to fill in]

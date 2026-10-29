@@ -202,7 +202,7 @@ libexec/airgap-*              bootstrap, doctor, refresh, update, pi, entrypoint
 config/pi/, pi/               pi settings, preload extension, agents, prompts
 scripts/make-transfer.sh      run OUTSIDE -> one transfer dir: git bundle + patches, both deltas
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz (--since: delta layers)
-scripts/nix-export.sh         run OUTSIDE -> a sharded, signed binary cache (--since-paths: delta)
+scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (--since-paths: delta)
 scripts/check-nvim-offline.sh run OUTSIDE -> starts LazyVim with no network; run before a transfer
 scripts/nix-import.sh         run INSIDE  -> imports it into the local store
 scripts/push-artifactory.sh   run INSIDE  -> layers to Artifactory, for CI
@@ -212,18 +212,11 @@ NOTES.md                      open items to fill in from work
 
 ## Before the first transfer
 
-Two values only you can supply:
+One value only you can supply:
 
 1. **`airgap.git.userEmail`** in `nix/modules/home.nix`. It is load-bearing
    beyond git: its local part names your directory on the shared PVC, and it
    sits above the hostname rule precisely because it is stable across sessions.
-2. **A signing key**, optional but nearly free:
-   ```
-   nix key generate-secret --key-name airgap-transfer > ~/.config/airgap/cache-priv.key
-   ```
-   `nix-export.sh` then writes `cache-pubkey`, and `nix/hosts/wsl.nix` keys both
-   `trusted-public-keys` and `require-sigs` off that file's existence — so
-   neither path needs an edit. Without it, the import runs unverified and says so.
 
 ## Status
 
