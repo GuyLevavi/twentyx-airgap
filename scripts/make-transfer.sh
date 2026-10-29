@@ -42,6 +42,9 @@ BRANCH="$(git symbolic-ref --short HEAD)"
 BASE_SHORT="$(git rev-parse --short "$BASE")"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
 
+# Rebuilt from scratch each time, so a re-run into the same --out leaves no
+# patch or chunk from the previous run behind.
+rm -rf "$OUT"/{git,runai,wsl} "$OUT/README.md" "$OUT/SHA256SUMS"
 mkdir -p "$OUT"/{git,runai,wsl}
 
 # ── git ───────────────────────────────────────────────────────────────────
@@ -59,16 +62,20 @@ fi
 
 # ── wsl ───────────────────────────────────────────────────────────────────
 say "wsl closure"
+# The compressed cache outlives the transfer dir, so the next rebuild
+# compresses only what changed. One per baseline: a delta against another
+# baseline ships another set of paths, and pruning would throw this one away.
+# Baselines are named wsl-<rev>.store-paths, so this is dist/cache/wsl-<rev>.
+WSL_CACHE="dist/cache/$(basename "${WSL_SINCE:-wsl-full}" .store-paths)"
 if [ -n "$WSL_SINCE" ]; then
-    ./scripts/nix-export.sh "$OUT/wsl" --since-paths "$WSL_SINCE"
+    ./scripts/nix-export.sh "$OUT/wsl" --since-paths "$WSL_SINCE" --cache "$WSL_CACHE"
 else
-    ./scripts/nix-export.sh "$OUT/wsl"
+    ./scripts/nix-export.sh "$OUT/wsl" --cache "$WSL_CACHE"
 fi
 # The next transfer's baseline. It must also be kept OUTSIDE: it describes
 # what the far side will hold, and nothing comes back across the gap.
 mkdir -p dist/baselines
 cp "$OUT/wsl/store-paths" "dist/baselines/wsl-$HEAD_SHORT.store-paths"
-rm -rf "$OUT/wsl/cache"
 
 # ── README ────────────────────────────────────────────────────────────────
 if [ -n "$LAYERS_SINCE" ]; then

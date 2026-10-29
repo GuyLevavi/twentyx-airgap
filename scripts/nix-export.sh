@@ -2,7 +2,7 @@
 # Run OUTSIDE. Produce everything the airgapped side needs, as a Nix binary
 # cache split into transferable chunks.
 #
-#   ./scripts/nix-export.sh [outdir] [--limit BYTES]
+#   ./scripts/nix-export.sh [outdir] [--limit BYTES] [--since-paths FILE] [--cache DIR]
 #
 # This replaces vendor/manifest.toml. There is no list of blobs to maintain,
 # because Nix computes the closure: whatever the config references is what gets
@@ -21,10 +21,18 @@ LIMIT=$((2400 * 1024 * 1024))   # stay under a 2.5GB single-file upload cap
 # a previous export wrote next to its chunks. Set, the export ships only what
 # is missing from it, and nix-import.sh resolves the rest from the local store.
 SINCE_PATHS=""
+# A binary cache kept across runs. Compression is nearly all of an export's
+# time (xz, about 1.5 h for a delta of a few hundred paths), and nix copy skips
+# any path the cache already holds -- so with --cache a rebuild after a small
+# change compresses only the paths that changed. Entries this export does not
+# ship are pruned first, so a persistent cache never leaks stale paths into
+# the chunks.
+PERSIST=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --limit)       LIMIT="${2:?}"; shift 2 ;;
         --since-paths) SINCE_PATHS="$(realpath "${2:?}")"; shift 2 ;;
+        --cache)       PERSIST="$(realpath -m --relative-to=. "${2:?}")"; shift 2 ;;
         *)             OUT="$1"; shift ;;
     esac
 done
@@ -32,8 +40,45 @@ done
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
-CACHE="${AIRGAP_REUSE_CACHE:-$OUT/cache}"
-if [ -n "${AIRGAP_REUSE_CACHE:-}" ]; then
+hashes() { sed 's|^/nix/store/||; s|-.*||' "$@" | sort -u; }
+
+# Drop every narinfo that is not in the list of paths to ship ($1), or that is
+# a stub left by an interrupted delta run, then every nar no narinfo names.
+prune_cache() {
+    local want="$1" n o
+    o="$(realpath "$OUT")"   # the subshells below cd into the cache
+    hashes "$want" > "$o/.want"
+    { ( cd "$CACHE" && find . -maxdepth 1 -name '*.narinfo' -printf '%f\n' ) \
+        | sed 's/\.narinfo$//' | sort | comm -23 - "$o/.want"
+      ( cd "$CACHE" && find . -maxdepth 1 -name '*.narinfo' -exec grep -l '^URL: nar/stub.nar' {} + || true ) | sed 's|^\./||; s/\.narinfo$//'
+    } | sort -u | sed 's/$/.narinfo/' > "$o/.drop"
+    n="$(wc -l < "$o/.drop")"
+    ( cd "$CACHE" && xargs -r rm -f < "$o/.drop" )
+    ( cd "$CACHE" && find . -maxdepth 1 -name '*.narinfo' -exec sed -n 's/^URL: //p' {} + | sort -u ) > "$o/.nars"
+    mkdir -p "$CACHE/nar"
+    ( cd "$CACHE" && find nar -type f | sort | comm -23 - "$o/.nars" | xargs -r rm -f )
+    say "  cache: $(comm -12 <(( cd "$CACHE" && find . -maxdepth 1 -name '*.narinfo' -printf '%f\n' ) | sed 's/\.narinfo$//' | sort) "$o/.want" | wc -l) of $(wc -l < "$o/.want") paths already compressed, $n stale entries dropped"
+    rm -f "$o/.drop" "$o/.nars"
+}
+
+# Every path to ship must now have a real narinfo and its nar. With a
+# persistent cache this is what proves the reuse was sound.
+verify_cache() {
+    local h missing=0
+    while read -r h; do
+        if [ ! -f "$CACHE/$h.narinfo" ] || grep -q '^URL: nar/stub.nar' "$CACHE/$h.narinfo" \
+            || [ ! -f "$CACHE/$(sed -n 's/^URL: //p' "$CACHE/$h.narinfo")" ]; then
+            echo "  missing from the cache: $h" >&2; missing=1
+        fi
+    done < "$OUT/.want"
+    rm -f "$OUT/.want"
+    [ "$missing" -eq 0 ] || { echo "export incomplete; rerun" >&2; exit 1; }
+}
+
+CACHE="${AIRGAP_REUSE_CACHE:-${PERSIST:-$OUT/cache}}"
+if [ -n "$PERSIST" ] && [ -z "${AIRGAP_REUSE_CACHE:-}" ]; then
+    rm -rf "$OUT"; mkdir -p "$OUT" "$CACHE"
+elif [ -n "${AIRGAP_REUSE_CACHE:-}" ]; then
     # Re-chunk an existing cache without redoing the xz pass. The real use
     # case: the chunks did not fit the upload cap and need splitting smaller,
     # which should not cost another twenty minutes of compression.
@@ -84,6 +129,18 @@ else
     rm -f cache-pubkey
 fi
 
+# A persistent cache signed by another key (or unsigned) would ship paths the
+# far side rejects, and nix copy would not re-sign them: it skips them. Start
+# over then. A cache that never recorded its signer is adopted as it is.
+if [ -n "$PERSIST" ]; then
+    signer="$(cat cache-pubkey 2>/dev/null || echo unsigned)"
+    if [ -f "$CACHE/.signer" ] && [ "$(cat "$CACHE/.signer")" != "$signer" ]; then
+        say "  cache at $CACHE was signed by another key; starting it over"
+        rm -rf "$CACHE"; mkdir -p "$CACHE"
+    fi
+    printf '%s\n' "$signer" > "$CACHE/.signer"
+fi
+
 # Everything the far side must hold after this import. Written next to the
 # chunks so the NEXT export can be a delta against it: keep a copy outside.
 # shellcheck disable=SC2086
@@ -92,6 +149,7 @@ nix path-info -r "$TOPLEVEL" "$STDENV" $INPUTS | sort -u > "$OUT/store-paths"
 if [ -n "$SINCE_PATHS" ]; then
     comm -13 <(sort -u "$SINCE_PATHS") "$OUT/store-paths" > "$OUT/.delta"
     say "delta: $(wc -l < "$OUT/.delta") of $(wc -l < "$OUT/store-paths") paths are new"
+    prune_cache "$OUT/.delta"
     # --no-recursive is what makes this a delta: nix copy otherwise ships each
     # path's whole closure, i.e. everything again. But a binary cache refuses
     # a path whose references it does not hold ("reference ... is not
@@ -114,11 +172,14 @@ if [ -n "$SINCE_PATHS" ]; then
         < "$OUT/.delta"
     while read -r f; do rm -f "$CACHE/$f"; done < "$OUT/.stubfiles"
     say "  $(wc -l < "$OUT/.stubs") baseline reference(s) assumed present on the far side"
+    verify_cache
     rm -f "$OUT/.delta" "$OUT/.stubs" "$OUT/.stubfiles"
 else
+    prune_cache "$OUT/store-paths"
     # shellcheck disable=SC2086
     nix copy --to "file://$PWD/$CACHE?compression=xz" "${SIGN[@]}" \
         "$TOPLEVEL" "$STDENV" $INPUTS
+    verify_cache
 fi
 fi
 
@@ -126,7 +187,7 @@ fi
 # Whole files per chunk, so every chunk is a valid tar. Reassembly is
 # "extract them all into one directory", in any order.
 say "chunking to $((LIMIT / 1024 / 1024)) MB"
-( cd "$CACHE" && find . -type f -printf '%s\t%p\n' ) | sort -k2 > "$OUT/.files"
+( cd "$CACHE" && find . -type f ! -name '.*' -printf '%s\t%p\n' ) | sort -k2 > "$OUT/.files"
 n=1; acc=0; : > "$OUT/.chunk"
 while IFS=$'\t' read -r size path; do
     if [ $((acc + size)) -gt "$LIMIT" ] && [ "$acc" -gt 0 ]; then
