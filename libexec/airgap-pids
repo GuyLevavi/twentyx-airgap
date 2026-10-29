@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# Summary: what is eating the pod's PID budget; --kill <sid> ends a session
+#
+#   airgap pids              limits, top thread owners, sessions, zombies
+#   airgap pids --summary    the limits only (airgap doctor uses this)
+#   airgap pids --kill SID   TERM then KILL every process in session SID
+#
+# Threads count against pids.max exactly like processes do. Once the budget is
+# spent, nothing can fork or start a thread -- fish, starship, atuin and most
+# Rust tools die with "Resource temporarily unavailable (os error 11)".
+#
+# This script is written to work in that state: it reads /proc and cgroupfs
+# with builtins only and starts no subprocess (--kill aside), so a single free
+# PID (this bash) is enough. When a shell will not start, reach it directly:
+#
+#   runai exec <workspace> -- /opt/airgap/libexec/airgap-pids
+#   runai exec <workspace> -- /opt/airgap/libexec/airgap-pids --kill <sid>
+#
+# Retry if the exec itself fails; slots free up as things die.
+set -uo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+# shellcheck source=libexec/airgap-limits.sh
+. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
+
+TOP=12
+HZ=100   # USER_HZ; asking getconf would cost a fork
+
+kv() { printf '  %-22s %s\n' "$1" "$2"; }
+hdr() { printf '\n\033[36m==>\033[0m %s\n' "$1"; }
+
+# Everything below returns through globals (printf -v) rather than $(...):
+# each command substitution is a fork, and a fork is what we may not have.
+
+# The first readable cgroup file of the given candidates -> CGF.
+cg() {
+    local f
+    CGF=""
+    for f; do [ -r "/sys/fs/cgroup/$f" ] && { CGF="/sys/fs/cgroup/$f"; return 0; }; done
+    return 1
+}
+
+# A cgroup key/value file flattened onto one line -> FLAT.
+flat() {
+    local k v
+    FLAT=""
+    [ -r "$1" ] || { FLAT="n/a"; return; }
+    while read -r k v; do FLAT+="$k=$v "; done < "$1"
+    FLAT="${FLAT% }"
+}
+
+# Seconds -> AGE, as 3d04h / 5h12m / 40m.
+age() {
+    local s="$1"
+    if   [ "$s" -ge 86400 ]; then printf -v AGE '%dd%02dh' $(( s / 86400 )) $(( s % 86400 / 3600 ))
+    elif [ "$s" -ge 3600 ];  then printf -v AGE '%dh%02dm' $(( s / 3600 )) $(( s % 3600 / 60 ))
+    else printf -v AGE '%dm' $(( s / 60 )); fi
+}
+
+summary() {
+    hdr "limits"
+    if airgap_pids_usage; then
+        kv "pids" "$AIRGAP_PIDS_CUR / $AIRGAP_PIDS_MAX  ($(( AIRGAP_PIDS_CUR * 100 / AIRGAP_PIDS_MAX ))%)"
+    else
+        kv "pids" "${AIRGAP_PIDS_CUR:-?} / no limit"
+    fi
+    # "max N" here is how many forks/thread spawns have ALREADY been refused.
+    cg pids.events pids/pids.events; flat "$CGF"; kv "pids.events" "$FLAT"
+    printf '  %-22s ' "ulimit -u"; ulimit -u
+    local tm; read -r tm < /proc/sys/kernel/threads-max; kv "threads-max" "$tm"
+    if [ -r /sys/fs/cgroup/cpu.max ]; then
+        local q p; read -r q p < /sys/fs/cgroup/cpu.max
+        kv "cpu.max" "$q $p (quota period, usec)"
+    fi
+    kv "quota -> thread cap" "${AIRGAP_CPUS:-none: no CPU limit, so pools size to the host}"
+    kv "OMP_NUM_THREADS" "${OMP_NUM_THREADS:-unset}"
+    if cg cpu.stat cpu/cpu.stat; then
+        local k v t=""
+        while read -r k v; do
+            case "$k" in nr_periods|nr_throttled|throttled_usec|throttled_time) t+="$k=$v " ;; esac
+        done < "$CGF"
+        kv "cpu throttling" "${t% }"
+    fi
+    if [ -r /sys/fs/cgroup/memory.max ]; then
+        local cur max high
+        read -r cur < /sys/fs/cgroup/memory.current
+        read -r max < /sys/fs/cgroup/memory.max
+        read -r high < /sys/fs/cgroup/memory.high
+        [ "$max" = max ] || max="$(( max >> 20 ))M"
+        [ "$high" = max ] || high="$(( high >> 20 ))M"
+        kv "memory" "$(( cur >> 20 ))M used, high=$high max=$max"
+        flat /sys/fs/cgroup/memory.events; kv "memory.events" "$FLAT"
+    fi
+    local p1
+    read -r p1 < /proc/1/comm
+    case "$p1" in
+        tini|dumb-init|catatonit|s6-svscan|systemd) kv "PID 1" "$p1 (reaps orphans)" ;;
+        *) kv "PID 1" "$p1 (does NOT reap: orphaned zombies keep their PID)" ;;
+    esac
+}
+
+# One pass over /proc, builtins only.
+declare -A BYCOMM_T BYCOMM_N SESS_T SESS_N SESS_LEAD ZPARENT
+ZOMBIES=0
+TOTAL_T=0
+UPTIME=0
+
+scan() {
+    local d line rest comm pid state ppid sid tty thr start _
+    read -r UPTIME _ < /proc/uptime; UPTIME="${UPTIME%.*}"
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        read -r line < "$d/stat" 2>/dev/null || continue
+        comm="${line#*(}"; comm="${comm%)*}"
+        rest="${line##*) }"
+        # shellcheck disable=SC2086  # deliberate field split
+        set -- $rest
+        state=$1 ppid=$2 sid=$4 tty=$5 thr=${18} start=${20}
+        TOTAL_T=$(( TOTAL_T + thr ))
+        BYCOMM_T[$comm]=$(( ${BYCOMM_T[$comm]:-0} + thr ))
+        BYCOMM_N[$comm]=$(( ${BYCOMM_N[$comm]:-0} + 1 ))
+        SESS_T[$sid]=$(( ${SESS_T[$sid]:-0} + thr ))
+        SESS_N[$sid]=$(( ${SESS_N[$sid]:-0} + 1 ))
+        if [ "$pid" = "$sid" ]; then
+            SESS_LEAD[$sid]="$comm|$ppid|$tty|$(( UPTIME - start / HZ ))"
+        fi
+        if [ "$state" = Z ]; then
+            ZOMBIES=$(( ZOMBIES + 1 ))
+            ZPARENT[$ppid]=$(( ${ZPARENT[$ppid]:-0} + 1 ))
+        fi
+    done
+}
+
+# The TOP largest keys of an associative array -> TOPKEYS. No sort(1).
+top_of() {
+    local -n arr="$1"
+    local -A seen=()
+    local i k best bk
+    TOPKEYS=()
+    for (( i = 0; i < TOP; i++ )); do
+        best=-1 bk=""
+        for k in "${!arr[@]}"; do
+            [ -n "${seen[$k]:-}" ] && continue
+            [ "${arr[$k]}" -gt "$best" ] && { best="${arr[$k]}"; bk="$k"; }
+        done
+        [ -n "$bk" ] || break
+        seen[$bk]=1
+        TOPKEYS+=("$bk")
+    done
+}
+
+report() {
+    scan
+    hdr "threads by command   (total $TOTAL_T threads)"
+    printf '  %7s %6s  %s\n' THREADS PROCS COMMAND
+    local k
+    top_of BYCOMM_T
+    for k in "${TOPKEYS[@]}"; do
+        printf '  %7d %6d  %s\n' "${BYCOMM_T[$k]}" "${BYCOMM_N[$k]}" "$k"
+    done
+
+    hdr "sessions"
+    printf '  %7s %6s %7s %8s  %-6s %s\n' SID PROCS THREADS AGE ORIGIN LEADER
+    local s comm ppid tty a origin
+    top_of SESS_T
+    for s in "${TOPKEYS[@]}"; do
+        # Session 0 holds kernel threads, which no container sees anyway.
+        [ "$s" = 0 ] && continue
+        IFS='|' read -r comm ppid tty a <<< "${SESS_LEAD[$s]:-?|?|0|0}"
+        # Parent 0 means the parent lives outside this PID namespace: the
+        # container runtime, i.e. a `runai exec` session.
+        case "$ppid" in
+            0) origin="exec" ;;
+            1) origin=orphan ;;
+            "?") origin="?" ;;
+            *) origin=child ;;
+        esac
+        [ "$s" = 1 ] && origin=pid1
+        if [ "$tty" = 0 ]; then tty=""; else tty=" (tty)"; fi
+        age "${a:-0}"
+        printf '  %7s %6d %7d %8s  %-6s %s%s\n' "$s" "${SESS_N[$s]}" "${SESS_T[$s]}" \
+            "$AGE" "$origin" "$comm" "$tty"
+    done
+    printf '%s\n' "" \
+        "  exec    a \`runai exec\` session. Old ones holding a tty are usually sessions" \
+        "          whose connection dropped; their processes outlive the connection." \
+        "  orphan  its parent exited and PID 1 adopted it: nohup'd jobs, daemons" \
+        "          (the tmux server), leftovers from dead sessions." \
+        "  End one:  airgap pids --kill <SID>   -- check it is not your training run."
+
+    if [ "$ZOMBIES" -gt 0 ]; then
+        hdr "zombies: $ZOMBIES"
+        local p n
+        for p in "${!ZPARENT[@]}"; do
+            read -r n < "/proc/$p/comm" 2>/dev/null || n="?"
+            printf '  %5d under pid %s (%s)\n' "${ZPARENT[$p]}" "$p" "$n"
+        done
+        printf '%s\n' \
+            "  A zombie holds its PID until its parent reaps it. Killing the parent" \
+            "  hands them to PID 1, which reaps them only if it is an init (tini)."
+    fi
+}
+
+kill_session() {
+    local sid="$1" d line rest pid s mysid i
+    local pids=() alive=()
+    [[ "$sid" =~ ^[0-9]+$ ]] || { echo "not a session id: $sid" >&2; exit 2; }
+    [ "$sid" -gt 1 ] || { echo "refusing to kill PID 1's session" >&2; exit 2; }
+    read -r line < /proc/self/stat; rest="${line##*) }"
+    # shellcheck disable=SC2086
+    set -- $rest; mysid=$4
+    [ "$sid" != "$mysid" ] || { echo "refusing to kill the session running this" >&2; exit 2; }
+    for d in /proc/[0-9]*; do
+        read -r line < "$d/stat" 2>/dev/null || continue
+        rest="${line##*) }"
+        # shellcheck disable=SC2086
+        set -- $rest; s=$4
+        [ "$s" = "$sid" ] && pids+=("${d#/proc/}")
+    done
+    [ "${#pids[@]}" -gt 0 ] || { echo "no processes in session $sid"; exit 1; }
+    echo "TERM -> ${#pids[@]} process(es) in session $sid"
+    kill -TERM "${pids[@]}" 2>/dev/null
+    for (( i = 0; i < 30; i++ )); do
+        alive=()
+        for pid in "${pids[@]}"; do [ -e "/proc/$pid" ] && alive+=("$pid"); done
+        [ "${#alive[@]}" -eq 0 ] && { echo "done"; return; }
+        pids=("${alive[@]}")
+        # The one fork in here. If it is refused there is no pause, which only
+        # brings the KILL forward.
+        sleep 0.1 2>/dev/null
+    done
+    echo "KILL -> ${#pids[@]} left"
+    kill -KILL "${pids[@]}" 2>/dev/null
+}
+
+case "${1:-}" in
+    --summary) summary ;;
+    --kill)    kill_session "${2:?usage: airgap pids --kill <sid>}" ;;
+    ""|--all)  summary; report ;;
+    -h|--help) sed -n '3,19p' "$0" ;;
+    *)         echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+esac

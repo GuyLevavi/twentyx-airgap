@@ -8,6 +8,8 @@ set -uo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
+# shellcheck source=libexec/airgap-limits.sh
+. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
 
 # $HOME is only correct once bootstrap's shell drop-in has run. Anything
 # launched outside an interactive login -- `runai exec -- airgap doctor`, a
@@ -148,10 +150,28 @@ for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq node; d
     fi
 done
 # Optional by flavor: absence is a fact, not a failure.
-for t in nvim pi nvtop; do
+for t in nvim pi nvtop ffmpeg ffprobe; do
     if command -v "$t" >/dev/null 2>&1; then ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
     else warn "$t not in this image flavor"; fi
 done
+# Installed by hand from the control plane, never shipped. See README.
+if command -v runai >/dev/null 2>&1; then
+    ok "$(printf '%-9s %s' runai "$(command -v runai)")"
+else
+    warn "runai CLI not installed -- see README, \"The runai CLI\""
+fi
+
+# ── limits ────────────────────────────────────────────────────────────────
+# The pod's PID budget, which threads share with processes. Exhausting it is
+# what "Resource temporarily unavailable (os error 11)" means; airgap pids
+# shows what is holding it.
+if [ -x "$AIRGAP_ROOT/libexec/airgap-pids" ]; then
+    "$AIRGAP_ROOT/libexec/airgap-pids" --summary | sed 1d
+    if airgap_pids_usage 2>/dev/null && [ $(( AIRGAP_PIDS_CUR * 4 )) -ge $(( AIRGAP_PIDS_MAX * 3 )) ]; then
+        bad "$AIRGAP_PIDS_CUR of $AIRGAP_PIDS_MAX PIDs in use -- run: airgap pids"
+        fails=$((fails+1))
+    fi
+fi
 
 # ── terminal ──────────────────────────────────────────────────────────────
 # The difference between a working headless nvim and a monochrome one that

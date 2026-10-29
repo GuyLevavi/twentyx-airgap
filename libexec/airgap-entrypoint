@@ -12,7 +12,32 @@
 set -euo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+
+# PID 1 must be an init. Whatever the base would have run there -- code-server's
+# node, a shell, `sleep infinity` -- never reaps the children it did not start,
+# so every process orphaned by a dropped `runai exec` session ends as a zombie
+# that keeps its PID until the pod dies. Hours of that, plus thread pools, is
+# how pids.max runs out and nothing can fork any more (see airgap pids).
+#
+# So re-exec this very script under tini, once. tini reaps, forwards signals
+# to the payload's process group (-g), and exits with its status.
+if [ "$$" -eq 1 ] && [ -z "${AIRGAP_UNDER_INIT:-}" ]; then
+    for tini in "$AIRGAP_ROOT/profile/bin/tini" "$(command -v tini 2>/dev/null)"; do
+        if [ -x "$tini" ]; then
+            export AIRGAP_UNDER_INIT=1
+            exec "$tini" -g -- "$0" "$@"
+        fi
+    done
+    unset tini
+fi
+
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+# Before anything long-lived starts, so code-server, its terminals and
+# everything else under PID 1 inherit thread pools sized to the CPU quota
+# rather than to the host. `runai exec` shells get the same from bash's rc.
+# shellcheck source=libexec/airgap-limits.sh
+. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
 
 "$AIRGAP_ROOT/libexec/airgap-bootstrap" || warn "bootstrap incomplete, continuing"
 

@@ -168,3 +168,17 @@ The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- 
   "hung", that was why. `scripts/check-nvim-offline.sh` now guards it.
 - **harlequin** has no Redis, Kafka or Mongo support: it is SQL only. Candidates if
   needed: `iredis`/`redis` cli, `kcat`, `mongosh` (heavy).
+
+## 9. 0.2.1 requests from inside  [IMPLEMENTED -- verify in the gap]
+
+- **Pods dying with "os error 11"**: see README, "When a pod stops forking".
+  First thing to run on the next occurrence is `/opt/airgap/libexec/airgap-pids`
+  via `runai exec`, and keep its output. The `pids.max` value, `pids.events
+  max=N`, and whether the top owner is python (thread pools), many `exec`
+  sessions (dropped connections) or zombies tell which of the three it was.
+  If cpu.max is `max` (no CPU limit set on the workload), the thread caps do
+  nothing; set `AIRGAP_THREADS` in the workload env, or ask for a CPU limit.
+- **runai CLI** is installed by hand from the control plane into `~/.local/bin`, or
+  baked in by CI via `RUNAI_CLI_URL`. Never transferred.
+- **ffmpeg/ffprobe**: `ffmpeg-headless` 9.0.1, every codec, about 190 MB of closure.
+  CLI only; torchaudio/torchvision keep the base image's libav*.

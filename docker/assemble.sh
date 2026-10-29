@@ -37,6 +37,9 @@ LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer-nvim.tar.gz}"
 LAYER_NIX_DELTA="${AIRGAP_LAYER_NIX_DELTA:-dist/nix-layer-nvim-delta.tar.gz}"
 LAYER_NODE="${AIRGAP_LAYER_NODE:-dist/node-layer.tar}"
 LAYER_REPO="${AIRGAP_LAYER_REPO:-dist/repo-layer.tar}"
+# Optional: a runai CLI binary, fetched from the internal control plane by CI
+# (RUNAI_CLI_URL), so it always matches the cluster. Becomes /usr/local/bin/runai.
+RUNAI_CLI="${AIRGAP_RUNAI_CLI:-dist/runai}"
 
 command -v crane >/dev/null || { echo "crane not found (nix shell .# gives you one)" >&2; exit 1; }
 command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
@@ -44,6 +47,17 @@ command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
 for f in "$LAYER_NIX" "$LAYER_NODE" "$LAYER_REPO"; do
     [ -f "$f" ] || { echo "missing layer: $f" >&2; exit 1; }
 done
+
+EXTRALAYERS=()
+if [ -f "$RUNAI_CLI" ]; then
+    RUNAI_STAGE="$(mktemp -d)"
+    trap 'rm -rf "$RUNAI_STAGE"' EXIT
+    mkdir -p "$RUNAI_STAGE/usr/local/bin"
+    install -m 0755 "$RUNAI_CLI" "$RUNAI_STAGE/usr/local/bin/runai"
+    tar --owner=0 --group=0 --sort=name --mtime='@1' \
+        -C "$RUNAI_STAGE" -cf dist/runai-layer.tar usr
+    EXTRALAYERS+=(-f dist/runai-layer.tar)
+fi
 
 # The topmost nix layer owns /opt/airgap, session-env included.
 NIXLAYERS=(-f "$LAYER_NIX")
@@ -86,7 +100,7 @@ mapfile -t ENVARGS < <(session_env_args "$TOPLAYER")
 [ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $TOPLAYER" >&2
 
 echo "layers:"
-for f in "$LAYER_NIX" "$LAYER_NIX_DELTA" "$LAYER_NODE" "$LAYER_REPO"; do
+for f in "$LAYER_NIX" "$LAYER_NIX_DELTA" "$LAYER_NODE" "$LAYER_REPO" dist/runai-layer.tar; do
     [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
 done
 
@@ -115,7 +129,7 @@ for variant in $VARIANTS; do
     echo "    base ${base}"
 
     crane append -b "$base" -t "$dest" \
-        "${NIXLAYERS[@]}" -f "$LAYER_NODE" -f "$LAYER_REPO" >/dev/null
+        "${NIXLAYERS[@]}" -f "$LAYER_NODE" "${EXTRALAYERS[@]}" -f "$LAYER_REPO" >/dev/null
 
     # Image config only; no layer traffic.
     crane mutate "$dest" -t "$dest" \

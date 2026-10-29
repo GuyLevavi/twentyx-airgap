@@ -216,6 +216,10 @@ in
       skopeo
       dive
     ]
+    ++ lib.optionals (!wsl) [
+      # PID 1 in the pod; see libexec/airgap-entrypoint. 28 KB.
+      tini
+    ]
     ++ lib.optionals cfg.tools.gpu.enable [
       # The one cluster-side tool that IS worth carrying into the pod: it
       # reports the GPU you were actually fractioned, from inside.

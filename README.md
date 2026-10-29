@@ -122,7 +122,8 @@ The image (one flavor, `-nvim` tagged) is usable from a Windows terminal emulato
 `runai exec`. Six things have to be right, and all six are wired:
 
 1. `runai exec -it` — `runai attach` gives you PID 1's stdio, which is not a TTY
-2. tmux, always — an exec session dies on any network blip
+2. tmux, always — an exec connection dies on any network blip, and whatever it
+   started keeps running and holding PIDs (see below)
 3. `TERMINFO_DIRS` — the slim bases have neither `tmux-256color` nor `wezterm`
 4. `LOCALE_ARCHIVE` — otherwise fish warns on every start and mangles glyphs
 5. `TERM`/`COLORTERM` — kubectl forwards `TERM` but never `COLORTERM`
@@ -130,6 +131,47 @@ The image (one flavor, `-nvim` tagged) is usable from a Windows terminal emulato
 
 Use **WezTerm** (Ghostty has no Windows build). It announces `TERM=wezterm`,
 whose terminfo ships in the closure for exactly this reason.
+
+## When a pod stops forking
+
+Symptom: after hours of work or heavy compute, nothing starts, not even a
+shell: `rust thread spawn failure: Resource temporarily unavailable (os error 11)`.
+That is EAGAIN from fork or thread creation, and the usual cause is the pod's
+**pids cgroup** (`pids.max`, often 1024–4096): threads count against it exactly
+like processes do. It fills up three ways, and the image now addresses each:
+
+| Leak | Fix |
+|---|---|
+| OpenMP/MKL/BLAS/torch pools sized to the **host's** cores, not the pod's quota, in every process and worker | `libexec/airgap-limits.sh` caps `OMP/MKL/OPENBLAS/NUMEXPR/RAYON_NUM_THREADS` and `GOMAXPROCS` at `ceil(cpu.max)`. The entrypoint and every bash/fish set them. Explicit exports win; `AIRGAP_THREADS=N` overrides. Also the main cause of CPU throttling. |
+| PID 1 (code-server's node, a shell, `sleep`) never reaps orphans, so their zombies keep a PID until the pod dies | The entrypoint re-execs itself under **tini**. Tested: 5 orphans leave 5 zombies under `sleep` as PID 1, and 0 under tini. |
+| `runai exec` sessions whose connection dropped keep running: nvim, LSPs, agents, node | **Work inside tmux** (`runai exec -it <ws> -- tmux new -A -s main`), so a reconnect reattaches instead of starting a new tree. Reclaim old trees with `airgap pids --kill <sid>`. |
+
+`airgap pids` shows the budget, refused forks (`pids.events max=N`), CPU throttling,
+memory pressure, the top thread owners and the sessions holding them. It uses
+bash builtins only, so it still runs when the pod is out of PIDs, which is when
+you need it:
+
+    runai exec <ws> -- /opt/airgap/libexec/airgap-pids              # retry until one exec gets in
+    runai exec <ws> -- /opt/airgap/libexec/airgap-pids --kill <sid>
+
+Interactive shells warn at 75% use, and `airgap doctor` fails above it. The cap
+itself is set by the cluster (CRI-O `pids_limit`, or the kubelet's
+`podPidsLimit`). If `airgap pids` shows real training needing more, ask the
+platform team for a higher one.
+
+## The runai CLI
+
+It cannot be carried in. The internal control plane serves its own CLI, which
+must match that cluster's version. Install it once, inside, from the UI:
+Help (?) > Researcher Command Line Interface > Linux, then run the installer
+and choose `~/.local/bin` as the install path. That directory is on `PATH` on
+both targets, and in a pod it lives on the PVC, so it survives image updates.
+On WSL, nix-ld runs the downloaded binary. `airgap doctor` reports whether it
+is there.
+
+To bake it into the pod images instead, set `RUNAI_CLI_URL` in CI to the binary
+URL the installer downloads from. `assemble.sh` then adds `/usr/local/bin/runai`
+as a small extra layer, refreshed on every build.
 
 ## Token budget
 

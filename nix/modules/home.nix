@@ -118,6 +118,12 @@ in
 
   config = {
     home.stateVersion = "25.05";
+
+    # Where self-installed binaries land, and on the PVC in a pod, so they
+    # survive image updates. Chiefly the runai CLI: its installer is served by
+    # the internal control plane and must match that cluster's version, so it
+    # cannot be shipped from outside. See README, "The runai CLI".
+    home.sessionPath = [ "$HOME/.local/bin" ];
     programs.home-manager.enable = cfg.target == "wsl";
 
     # ── Environment that a foreign container does not provide ────────────

@@ -6,11 +6,13 @@
 # deliberate nested `bash` from inside fish does not bounce straight back.
 {
   pkgs,
+  lib,
   config,
   ...
 }:
 let
   cfg = config.airgap;
+  runai = cfg.target == "runai";
 
   # home-manager bakes home.homeDirectory into generated values at EVAL time --
   # STARSHIP_CONFIG and fish_complete_path today, and there is no guarantee the
@@ -44,6 +46,22 @@ in
         done
       fi
       unset __eh __v
+    ''
+    + lib.optionalString runai ''
+
+      # Thread pools sized to the pod's CPU quota, and an early warning before
+      # the pids cgroup runs out -- after that, this shell would not start.
+      # See libexec/airgap-limits.sh and `airgap pids`.
+      if [ -r /opt/airgap/libexec/airgap-limits.sh ]; then
+        . /opt/airgap/libexec/airgap-limits.sh
+        if [[ $- == *i* ]] && airgap_pids_usage \
+            && (( AIRGAP_PIDS_CUR * 4 >= AIRGAP_PIDS_MAX * 3 )); then
+          printf '\033[33mwarn:\033[0m %s of %s PIDs in use; see: airgap pids\n' \
+            "$AIRGAP_PIDS_CUR" "$AIRGAP_PIDS_MAX" >&2
+        fi
+      fi
+    ''
+    + ''
 
       if [[ $- == *i* && -z "''${BASH_EXECS_FISH:-}" && -z "''${IN_NIX_SHELL:-}" ]]; then
         export BASH_EXECS_FISH=1
@@ -64,6 +82,23 @@ in
         for var in (set --names --export)
           if string match -q -- '*${evalHome}*' $$var
             set -gx $var (string replace -a -- ${evalHome} "$HOME" $$var) 2>/dev/null
+          end
+        end
+      end
+    ''
+    + lib.optionalString runai ''
+
+      # The fish half of libexec/airgap-limits.sh, for a fish started directly
+      # (`runai exec -- fish`) rather than exec'd from bash, which already set
+      # these. Builtins only; fills what is unset.
+      if not set -q OMP_NUM_THREADS; and test -r /sys/fs/cgroup/cpu.max
+        read -l __q __p < /sys/fs/cgroup/cpu.max
+        if test "$__q" != max
+          set -l __n (math "max(1, ceil($__q / $__p))")
+          set -q AIRGAP_THREADS; and set __n $AIRGAP_THREADS
+          set -gx AIRGAP_CPUS $__n
+          for __v in OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS NUMEXPR_MAX_THREADS RAYON_NUM_THREADS GOMAXPROCS
+            set -q $__v; or set -gx $__v $__n
           end
         end
       end

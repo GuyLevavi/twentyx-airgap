@@ -25,7 +25,11 @@ variables:
   # (scripts/build-layers.sh --since). Unset DELTA once a full transfer
   # replaces the base.
   LAYER_BASE_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.1.0"
-  LAYER_DELTA_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.2.0"
+  LAYER_DELTA_URL: "$ARTIFACTORY_URL/generic-local/airgap/0.2.1"
+  # Optional. The runai CLI binary as the control plane serves it (look inside
+  # the installer the UI hands you under Help > Researcher Command Line
+  # Interface for the URL). Fetched every build, so it tracks the cluster.
+  RUNAI_CLI_URL: ""
 
 # The nix layer, plus its delta when LAYER_DELTA_URL is set. Both jobs need
 # the same stack: the node layer is built against what the image will run.
@@ -93,6 +97,16 @@ assemble:
     # Built here rather than carried: it is 80KB of this very checkout, and
     # rebuilding it is what makes a config change a one-commit deploy.
     - ./docker/mklayer.sh dist/repo-layer.tar
+    - |
+      if [ -n "$RUNAI_CLI_URL" ]; then
+        if curl -fSL -o dist/runai "$RUNAI_CLI_URL"; then
+          chmod +x dist/runai
+          ./dist/runai version || echo "warn: runai version failed; shipping it anyway" >&2
+        else
+          echo "warn: runai CLI fetch failed; images ship without it" >&2
+          rm -f dist/runai
+        fi
+      fi
     - crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
     - ./docker/assemble.sh "$CI_COMMIT_SHORT_SHA"
   rules:
