@@ -166,6 +166,13 @@ in
       # Mongo. See nix/pkgs/harlequin.nix for why it is not the nixpkgs build.
       (pkgs.callPackage ../pkgs/harlequin.nix { })
 
+      # ffmpeg and ffprobe for dataset work: probing, decoding, re-encoding.
+      # The headless build: every codec, no SDL/X11/Wayland/PipeWire playback,
+      # which cannot work over `runai exec` anyway. ~190 MB of closure. It is
+      # the CLI only -- torchaudio/torchvision keep linking whatever libav*
+      # the base image ships.
+      ffmpeg-headless
+
       # ── archives / transfer ────────────────────────────────────────────
       rsync
       zstd
