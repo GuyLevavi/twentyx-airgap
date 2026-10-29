@@ -227,6 +227,13 @@ in
       # kubectl exec sessions die on any network blip. Losing the connection
       # should cost you nothing, so make detaching cheap and obvious.
       set -g status-right " #{session_name} "
+    '' + lib.optionalString runai ''
+
+      # The pod's real limits, which btop cannot show: it reads /proc, i.e.
+      # the node. See libexec/airgap-tmux-status.
+      set -g status-interval 5
+      set -g status-right-length 80
+      set -g status-right "#(/opt/airgap/libexec/airgap-tmux-status) #{session_name} "
     '';
   };
 }

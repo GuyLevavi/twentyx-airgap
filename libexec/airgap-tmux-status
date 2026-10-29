@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Summary: the pod's real CPU, memory and PID budget, for the tmux status line
+#
+#   cpu 1.4/2  mem 3.1/16G  pids 340/1024
+#
+# btop, top and free read /proc, which shows the NODE: 128 cores and a
+# terabyte of RAM the pod may not touch. The limits that actually bite live in
+# the pod's cgroup, so read them there. CPU is cores in use since the previous
+# call, which tmux makes every status-interval seconds.
+#
+# Prints nothing for a resource without a limit (WSL has none), and colours a
+# value tmux-red at 90% and yellow at 75%. Builtins only, like airgap-pids:
+# it has to be cheap enough to run every few seconds.
+CG=/sys/fs/cgroup
+[ -r "$CG/cgroup.controllers" ] || exit 0   # cgroup v1: not worth the code
+
+out=""
+seg() {   # label used limit display -> appends a coloured segment
+    local c=""
+    if   [ $(( $2 * 100 )) -ge $(( $3 * 90 )) ]; then c="#[fg=red,bold]"
+    elif [ $(( $2 * 100 )) -ge $(( $3 * 75 )) ]; then c="#[fg=yellow]"
+    fi
+    out+="${c}$1 $4${c:+#[default]}  "
+}
+# Fixed-point tenths, without bc.
+tenths() { printf -v T '%d.%d' $(( $1 / 10 )) $(( $1 % 10 )); }
+
+if [ -r "$CG/cpu.max" ]; then
+    read -r q p < "$CG/cpu.max"
+    if [ "$q" != max ]; then
+        usage=""
+        while read -r k v; do [ "$k" = usage_usec ] && { usage=$v; break; }; done < "$CG/cpu.stat"
+        now="${EPOCHREALTIME/./}"   # microseconds
+        state="${TMPDIR:-/tmp}/.airgap-tmux-cpu-$UID"
+        prev_u="" prev_t=""
+        [ -r "$state" ] && read -r prev_u prev_t < "$state"
+        printf '%s %s\n' "$usage" "$now" > "$state" 2>/dev/null
+        if [ -n "$prev_u" ] && [ -n "$now" ] && [ "$now" -gt "$prev_t" ]; then
+            used=$(( (usage - prev_u) * 10 / (now - prev_t) ))   # tenths of a core
+            limit=$(( q * 10 / p ))
+            tenths "$used"; u="$T"; tenths "$limit"; l="${T%.0}"
+            seg cpu "$used" "$limit" "$u/$l"
+        fi
+    fi
+fi
+
+if [ -r "$CG/memory.max" ]; then
+    read -r max < "$CG/memory.max"
+    if [ "$max" != max ]; then
+        read -r cur < "$CG/memory.current"
+        # Page cache is reclaimable and counted in memory.current; subtracting
+        # it is what makes the number match what can still be allocated.
+        while read -r k v; do [ "$k" = inactive_file ] && { cur=$(( cur - v )); break; }; done < "$CG/memory.stat"
+        tenths $(( cur * 10 >> 30 )); c="$T"; tenths $(( max * 10 >> 30 )); m="${T%.0}"
+        seg mem "$cur" "$max" "$c/${m}G"
+    fi
+fi
+
+if [ -r "$CG/pids.max" ]; then
+    read -r max < "$CG/pids.max"
+    if [ "$max" != max ]; then
+        read -r cur < "$CG/pids.current"
+        seg pids "$cur" "$max" "$cur/$max"
+    fi
+fi
+
+printf '%s' "${out% }"

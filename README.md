@@ -159,6 +159,10 @@ itself is set by the cluster (CRI-O `pids_limit`, or the kubelet's
 `podPidsLimit`). If `airgap pids` shows real training needing more, ask the
 platform team for a higher one.
 
+The tmux status line shows the same budget all the time: `cpu 1.4/2  mem
+3.1/16G  pids 340/1024`, yellow at 75%, red at 90%. btop, top and free cannot:
+they read `/proc`, which describes the node, not the pod.
+
 ## The runai CLI
 
 It cannot be carried in. The internal control plane serves its own CLI, which
