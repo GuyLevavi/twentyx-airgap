@@ -54,6 +54,17 @@ export HOME="$DHOME"
 CACHE="${AIRGAP_CACHE:-/tmp/airgap-cache-$(id -u)}"
 mkdir -p "$CACHE"
 
+# The exception: opencode keeps its resolved plugin node_modules, bun lockfile
+# and models.json under XDG_CACHE_HOME. On /tmp they are gone after every
+# restart, and the next start waits out network timeouts trying to rebuild
+# them -- inside the gap, rebuilding them is not possible. So that one
+# directory lives on the PVC. Not when opencode already made a real one in
+# this pod: that would swap its state out from under a running instance.
+if airgap_home_is_durable && { [ -L "$CACHE/opencode" ] || [ ! -e "$CACHE/opencode" ]; }; then
+    mkdir -p "$DHOME/.local/share/opencode-cache"
+    ln -sfn "$DHOME/.local/share/opencode-cache" "$CACHE/opencode"
+fi
+
 mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.local/state"
 
 # ── link the Nix-built defaults into $HOME ────────────────────────────────

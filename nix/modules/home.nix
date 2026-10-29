@@ -155,6 +155,17 @@ in
       UV_PYTHON_DOWNLOADS = "never";
       PIP_DEFAULT_TIMEOUT = "10";
       GIT_TERMINAL_PROMPT = "0";
+
+      # opencode is installed by hand, not shipped, but its startup is ours to
+      # fix: by default it bun-installs its default plugins, fetches
+      # models.dev, checks for updates and downloads LSP servers, and in the
+      # gap each of those waits out a network timeout before it gives up.
+      # Custom providers in opencode.json are unaffected.
+      OPENCODE_DISABLE_AUTOUPDATE = "1";
+      OPENCODE_DISABLE_DEFAULT_PLUGINS = "1";
+      OPENCODE_DISABLE_MODELS_FETCH = "1";
+      OPENCODE_DISABLE_LSP_DOWNLOAD = "1";
+      OPENCODE_DISABLE_SHARE = "1";
     }
     // lib.optionalAttrs (cfg.target == "runai") {
       # Nix binaries consult LOCALE_ARCHIVE; a foreign container has none, and
