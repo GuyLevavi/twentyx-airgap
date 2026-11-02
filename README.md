@@ -85,7 +85,6 @@ set difference against what the far side already holds, as one folder,
 
 ```
 ./scripts/make-release.sh --base-release <id inside> \
-    --pod-base <the full layer tarball inside> \
     --wsl-base dist/baselines/wsl-<rev inside>.store-paths
 ```
 
@@ -93,14 +92,19 @@ set difference against what the far side already holds, as one folder,
 `apply.sh` and `HANDOVER.md`: write the handover for each release before cutting
 it. The inner repo is the source of truth, and builds its own repo layer.
 
-- **RunAI**: each full layer records its closure at `opt/twentyx/store-paths`,
-  so the old tarball *is* the baseline. The delta layer is appended directly
-  above it; the full layer has to stay in Artifactory.
-- **WSL**: every export writes the closure it delivered to
-  `dist/baselines/wsl-<rev>.store-paths`. Nothing comes back across the gap,
-  so **keep those files** — they are the only record of what is inside.
-  `apply.sh` checks a delta's references against the local store first, and
-  names any that are missing instead of failing halfway.
+Nothing here assumes what the far side holds. Inner runs its own build of a
+diverged repo, and a wrong guess costs a crossing.
+
+- **RunAI**: `pod-delta.tar.gz` is the whole layer, so it fits any base.
+- **WSL**: `wsl-delta.nar.tar.gz` holds what a rebuild cannot make offline: the new
+  packages, and the build tools for the system's glue, all closed under
+  references. `--wsl-base` only decides what counts as new. `apply.sh` imports it
+  and adds GC roots, and `nixos-rebuild` from the inner flake does the switch.
+  Keep `dist/baselines/wsl-<rev>.store-paths`: nothing comes back across the gap.
+
+Not done yet: the two payloads overlap heavily (672 of the pod's 692 paths are in
+the WSL closure). One payload, with `apply.sh` writing the pod layer from the
+store, would carry about 1 GB instead of 1.6.
 
 ## Images: append, don't rebuild
 

@@ -2,6 +2,20 @@
 
 Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
+## Release after 20261102-717fbad554
+
+`20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's
+system and refused to import on inner's. Use this one instead.
+
+- `wsl-delta.nar.tar.gz` no longer depends on any base: it is closed under
+  references, and imports into any store.
+- It leaves out outside's system and profiles, which inner cannot use, and adds
+  the build tools a rebuild of inner's own needs.
+- `apply.sh` imports and adds GC roots. It no longer switches, and the pre-check
+  and `--import-only` are gone. `nixos-rebuild` from the inner flake does the switch.
+- `pod-delta.tar.gz` now holds its whole closure, so it fits any base. It goes in the
+  same place, and CI does not change.
+
 ## Release format (20261102)
 
 - **Root moved to `/opt/twentyx`.** Variable names such as `AIRGAP_ROOT` are unchanged.

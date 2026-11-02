@@ -7,48 +7,68 @@ of inner. Every path and script name below describes the outside repo; where
 inner differs, keep inner and adapt the change. Never copy `inside-seed.tar`
 over the inner repo.
 
-## Read this first: the baseline is an assumption
+## Read this first: what this release assumes
 
-`d13208ce9f` does not exist outside. Both deltas were computed against the last
-build known to have crossed the gap, outside rev `921bfd6` (September, before
-0.2). If the inner store has anything else, the deltas omit paths it lacks.
+Outside cannot build inner's system. It only has `nixos-system-airgap-wsl`, and
+inner runs its own `nixos-system-twentyx-wsl`, from a repo outside never sees.
 
-- WSL: `apply.sh` checks first and stops before importing, naming what is missing.
-- Pods: nothing checks at append time. After the first image, run
-  `airgap doctor`: it compares `/opt/twentyx/store-paths` with the disk.
-
-If either fails, ask for a release against the real baseline. Bring out the base
-layer's `opt/twentyx/store-paths` and the WSL closure list
-(`nix-store -qR /run/current-system`).
+- WSL: `wsl-delta.nar.tar.gz` is not a system and assumes nothing about the store.
+  It is closed under references, so it imports anywhere, and it holds what
+  inner's rebuild cannot make offline: the new packages, and the tools the rebuild
+  uses. `apply.sh` imports it and stops. Inner's own rebuild does the switch.
+- Pods: `pod-delta.tar.gz` assumes nothing either. Despite the name it holds its
+  whole closure, 692 store paths, plus a complete `/opt/twentyx`, so it works on
+  whatever base it lands on. That is why it is larger than a delta.
 
 ## What is in this folder
 
 | File | Use |
 |---|---|
 | `MANIFEST.txt` | RELEASE, KIND, BASE_RELEASE, source rev |
-| `pod-delta.tar.gz` | nvim layer delta. Store paths the base lacks, plus a complete `/opt/twentyx` |
-| `wsl-delta.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar. Not unpacked beforehand: `apply.sh` streams it |
-| `apply.sh` | WSL updater |
+| `pod-delta.tar.gz` | nvim layer: its full closure, plus a complete `/opt/twentyx` |
+| `wsl-delta.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar: new packages and build tools, with their closures. Not unpacked beforehand: `apply.sh` streams it |
+| `apply.sh` | WSL updater: imports and adds GC roots. Does not switch |
 | `inside-seed.tar` | Outside repo at this release, under `inside-seed/`. **Not** a snapshot of inner, which is not visible from here. Reference to port from and diff against |
 | `crane-layer.tar` | crane and its closure, glibc included, at `nix/store/...`. Binary: `@CRANE@/bin/crane`. Nothing at `/bin/crane`: CI synthesizes that as before |
 
 ## Apply
 
-1. **WSL:** `sudo ./apply.sh`. This switches to the system built outside. If the
-   inner flake has WSL changes of its own, that would drop them, so use
-   `./apply.sh --import-only` and then rebuild from the inner flake.
-2. **Repo:** make the edits below, before rebuilding images. The delta's configs
+1. **WSL store:** `sudo ./apply.sh`. Safe on any store, and to rerun. Roots go in
+   `/nix/var/nix/gcroots/twentyx-release`, so a GC before the rebuild cannot undo
+   it. The next release replaces them.
+2. **Repo:** make the edits below, before rebuilding anything. The delta's configs
    expect them.
-3. **Pod image:** put `pod-delta.tar.gz` directly above the base nix layer, which
-   must stay in place, and feed it to `scripts/build-binary-layer.sh`. The
-   outside repo has no such script, so check how it takes its inputs.
-   `session-env` must be read from the delta, the topmost nix layer: it holds new
-   variables (below), and they only reach image ENV through that read.
-4. **crane:** use `crane-layer.tar` in CI in place of the previous one.
+3. **WSL system:** port the Nix changes from `inside-seed/nix/` (below), then
+   `nixos-rebuild dry-build` from the inner flake. Only config glue should be
+   listed: `home-manager-path`, `man-cache`, `etc`, the system itself. Then
+   `nixos-rebuild switch`.
+   If it lists a tarball or a compiler, stop: that package's hash differs from
+   this release, and it cannot build here. See "Nix changes".
+4. **Pod image:** put `pod-delta.tar.gz` above the base nix layer, where the delta
+   always goes, and feed it to `scripts/build-binary-layer.sh`. The outside repo
+   has no such script, so check how it takes its inputs. `session-env` must be
+   read from this layer, the topmost nix layer: it holds new variables (below),
+   and they only reach image ENV through that read.
+5. **crane:** use `crane-layer.tar` in CI in place of the previous one.
 
 ## Inner repo edits
 
 All new or changed files are in `inside-seed.tar`, under `inside-seed/`.
+
+**Nix changes, for the WSL rebuild.** Take these as they are. A store path is a
+hash of its expression, so the imported packages only match a rebuild if the
+expressions match, on the same nixpkgs pin (`c043004`).
+
+- New: `nix/pkgs/pbs-python.nix`, `nix/pkgs/harlequin.nix`,
+  `nix/pkgs/open-code-review.nix`.
+- Changed: `nix/modules/tools.nix`, `nix/modules/nvim.nix`, `nix/modules/home.nix`,
+  `nix/modules/shell.nix`.
+
+Keep inner's own changes around them: hostname, users and the package list can
+differ, and dropping a package is fine. Changing how a package is built, or its
+overrides, means it no longer matches, and the rebuild will try to fetch or
+compile it. `nixos-rebuild dry-build` names the derivation; compare it with the
+same package in `/nix/var/nix/gcroots/twentyx-release`.
 
 **Required, the delta depends on these exact paths.** The first two are compiled
 into the delta's configs. Both fail quietly if absent, so a miss shows up as a
@@ -138,7 +158,7 @@ Not new, so not here: git, starship, atuin, tealdeer, `lg.fish`, `.profile`,
    new config stays hidden until `airgap refresh`, or until they are removed.
 5. **`.bashrc`:** outside, bootstrap parks this as `~/.bashrc.hm` and writes its
    own stub that sources it. A plain copy to `~/.bashrc` loses bootstrap's env.
-6. **Pods only.** WSL gets its config from `apply.sh`.
+6. **Pods only.** WSL gets its config from the rebuild in step 3.
 
 If porting nvim by hand and not by file, also carry the extras in `init.lua`:
 `dap.core`, `lang.python`, `lang.toml`, `lang.yaml`.

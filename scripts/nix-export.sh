@@ -29,8 +29,8 @@ SINCE_PATHS=""
 # ship are pruned first, so a persistent cache never leaks stale paths into
 # the chunks.
 PERSIST=""
-# The release format (scripts/make-release.sh): one `nix-store --export` stream,
-# which imports with nothing but nix-store, plus the paths it builds on.
+# The release format (scripts/make-release.sh): one `nix-store --export` stream
+# that imports into any store with nothing but nix-store.
 NAR=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -126,16 +126,72 @@ if [ -n "$NAR" ]; then
     [ -n "$SINCE_PATHS" ] || { echo "--nar needs --since-paths" >&2; exit 1; }
     comm -13 <(sort -u "$SINCE_PATHS") "$OUT/store-paths" > "$OUT/.delta"
     say "delta: $(wc -l < "$OUT/.delta") of $(wc -l < "$OUT/store-paths") paths are new"
-    # --import registers paths in stream order and each one's references must
-    # already be valid, so export them dependencies first. -qR prints that
-    # order; filtering keeps it.
+
+    # The far side runs its own build of a diverged repo, and nothing says what
+    # its store holds. So this payload assumes nothing: it is closed under
+    # references, and imports into any store. What it leaves out is this
+    # system's glue, the profiles and everything above them, which names every
+    # package this config has and is no use to a system built from another.
+    # First, the new packages the profiles name.
+    PROFILES="$(nix-store -qR "$TOPLEVEL" | grep -E -- '-(home-manager-path|system-path)$')"
     # shellcheck disable=SC2086
-    nix-store -qR "$TOPLEVEL" "$STDENV" $INPUTS | grep -Fxf "$OUT/.delta" > "$OUT/delta-paths"
-    xargs -r nix path-info --json --json-format 1 < "$OUT/delta-paths" \
-        | jq -r '.[].references[]' | sort -u | comm -23 - "$OUT/.delta" > "$OUT/base-refs"
+    nix-store -q --references $PROFILES | sort -u | comm -12 - "$OUT/.delta" \
+        | xargs nix-store -qR | sort -u > "$OUT/.keep"
+    # Then whatever else is new and needs nothing further: completions, whose
+    # builder would otherwise have to compile its way up from bootstrap.
+    xargs nix path-info --json --json-format 1 < "$OUT/.delta" \
+        | jq -r 'to_entries[] | .key as $p | (.value.references + [$p])[] | "\($p) \(.)"' \
+        | awk 'NR == FNR { keep[$0]; next }
+               { refs[$1] = refs[$1] " " $2 }
+               END {
+                   do {
+                       grew = 0
+                       for (p in refs) {
+                           if (p in keep) continue
+                           ok = 1
+                           n = split(refs[p], r, " ")
+                           for (i = 1; i <= n; i++) if (r[i] != p && !(r[i] in keep)) ok = 0
+                           if (ok) { keep[p]; grew = 1 }
+                       }
+                   } while (grew)
+                   for (p in keep) print p
+               }' "$OUT/.keep" - > "$OUT/.portable"
+
+    # Last, the tools the far side's rebuild of that glue needs: desktop-file-utils,
+    # texinfo, libxml2 and so on. They are in no runtime closure, so no export
+    # has carried them, and without one the rebuild falls through to a compiler
+    # bootstrap. Rather than list them, ask: build this system with another
+    # hostname and one more home package, which dirties all the glue, and take
+    # the direct inputs of what changed.
+    PROBE="$(nix build --no-link --print-out-paths --impure --expr "
+        (((builtins.getFlake \"git+file://$PWD\").nixosConfigurations.wsl.extendModules {
+            modules = [ ({ lib, pkgs, ... }: {
+                networking.hostName = lib.mkForce \"release-probe\";
+                home-manager.sharedModules = [ {
+                    home.packages = [ (pkgs.writeTextDir \"share/release-probe\" \"\") ];
+                } ];
+            }) ];
+        }).config.system.build.toplevel)")"
+    nix derivation show -r "$(nix-store -qd "$TOPLEVEL")" | jq -r '.derivations | keys[]' | sort > "$OUT/.real"
+    nix derivation show -r "$(nix-store -qd "$PROBE")" > "$OUT/.probe.json"
+    jq -r '.derivations | keys[]' "$OUT/.probe.json" | sort | comm -13 "$OUT/.real" - > "$OUT/.dirty"
+    jq -r --rawfile dirty "$OUT/.dirty" --rawfile real "$OUT/.real" '
+        ($real | split("\n") | map({ key: ., value: true }) | from_entries) as $known
+        | .derivations as $d
+        | $dirty | split("\n")[] | select(. != "")
+        | $d[.].inputs.drvs | to_entries[] | select($known[.key]) | .key as $k
+        | .value.outputs[]
+        | ($d[$k].outputs[.].path | if . then "/nix/store/" + . else null end) // $d[$k].env[.]
+    ' "$OUT/.probe.json" | sort -u | comm -23 - "$OUT/store-paths" > "$OUT/.kit"
+    say "  $(wc -l < "$OUT/.portable") paths of packages, $(wc -l < "$OUT/.kit") build tools"
+
+    # --import registers paths in stream order and each one's references must
+    # already be valid, so export them dependencies first, the order -qR prints.
+    # shellcheck disable=SC2046,SC2086
+    nix-store -qR $(cat "$OUT/.portable" "$OUT/.kit") "$STDENV" $INPUTS > "$OUT/delta-paths"
     xargs nix-store --export < "$OUT/delta-paths" > "$OUT/wsl-delta.nar"
-    say "  $(wc -l < "$OUT/base-refs") baseline reference(s) assumed present on the far side"
-    rm -f "$OUT/.delta"
+    say "  $(wc -l < "$OUT/delta-paths") paths exported, $(du -h "$OUT/wsl-delta.nar" | cut -f1)"
+    rm -f "$OUT"/.delta "$OUT"/.keep "$OUT"/.portable "$OUT"/.real "$OUT"/.probe.json "$OUT"/.dirty "$OUT"/.kit
     printf 'toplevel=%s\nstdenv=%s\n' "$TOPLEVEL" "$STDENV" > "$OUT/TRANSFER"
     exit 0
 elif [ -n "$SINCE_PATHS" ]; then
