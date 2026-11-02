@@ -99,16 +99,34 @@ ported scripts, not the delta. The delta sets none of them.
 
 ## dotfiles: wiring is NOT trivial
 
-`inside-seed/dotfiles/` holds the new configs as plain files, laid out as they
-sit under `$HOME`: nvim, tmux, fish, `.bashrc`. Outside they are generated, by
+`inside-seed/dotfiles/` holds every config changed since `921bfd6`, which covers
+0.2.0 and everything after it, as plain files. Outside they are generated, by
 `scripts/export-dotfiles.sh`. The inner `dotfiles/` layout is unknown here, so
-map them onto it.
+map them onto it. Paths are relative to `$HOME`, except `session-env`.
+
+| File | Change since base |
+|---|---|
+| `.config/nvim/init.lua` | Changed: new extras |
+| `.config/nvim/lua/config/{options,autocmds}.lua` | New: yank-only clipboard, basedpyright |
+| `.config/nvim/lua/plugins/{completion,lsp,lualine,markdown,nix-pins}.lua` | New |
+| `.config/nvim/lua/plugins/_lazyvim_nix_default.lua` | Removed: delete it if inner has it |
+| `.config/tmux/tmux.conf` | Changed: status line |
+| `.config/fish/config.fish`, `.bashrc` | Changed: thread caps, PID warning |
+| `session-env` | Changed: seven variables, below |
+
+`session-env` is image ENV, one `KEY=VALUE` per line, and normally comes from the
+delta. New since base: the five `OPENCODE_DISABLE_*`, `PIP_FIND_LINKS` and
+`UV_FIND_LINKS`. Also new, and not in that file because it needs a shell:
+`~/.local/bin` on PATH.
+
+Not new, so not here: git, starship, atuin, tealdeer, `lg.fish`, `.profile`,
+`.bash_profile`. Their content is unchanged; only store hashes moved.
 
 1. **The same files are already in the delta**, at
    `/opt/twentyx/home-defaults`. If inner's bootstrap still links from there,
    the configs arrive with no dotfiles work at all. Decide this first.
-2. **Five files name `/nix/store` paths:** `.bashrc`, `config.fish`, `init.lua`,
-   `plugins/markdown.lua`, `plugins/nix-pins.lua`. They resolve only against this
+2. **Six files name `/nix/store` paths:** `.bashrc`, `config.fish`, `init.lua`,
+   `plugins/markdown.lua`, `plugins/nix-pins.lua`, `session-env`. They resolve only against this
    release's pod-delta, and every later release changes them. Do not hand-edit
    the hashes; re-export.
 3. **nvim is more than these files.** It also needs these links, which are in
@@ -122,10 +140,8 @@ map them onto it.
    own stub that sources it. A plain copy to `~/.bashrc` loses bootstrap's env.
 6. **Pods only.** WSL gets its config from `apply.sh`.
 
-The user-facing nvim changes, if porting by hand and not by file:
-`lua/plugins/{completion,lsp,lualine,markdown}.lua`,
-`lua/config/{options,autocmds}.lua`, the extras in `init.lua` (`dap.core`,
-`lang.python`, `lang.toml`, `lang.yaml`), and the OSC 52 block at its top.
+If porting nvim by hand and not by file, also carry the extras in `init.lua`:
+`dap.core`, `lang.python`, `lang.toml`, `lang.yaml`.
 
 ## Check after applying
 

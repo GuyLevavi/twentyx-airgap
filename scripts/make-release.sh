@@ -76,7 +76,8 @@ fill() {
 }
 fill release/apply.sh | sed -e "/^@BASE_REFS@$/{r $WORK/wsl/base-refs" -e 'd}' > "$OUT/apply.sh"
 chmod 0755 "$OUT/apply.sh"
-fill release/HANDOVER.md > "$OUT/HANDOVER.md"
+# The changelog goes in too, one heading level down.
+{ fill release/HANDOVER.md; echo; sed 's/^#/##/' CHANGELOG.md; } > "$OUT/HANDOVER.md"
 
 cat > "$OUT/MANIFEST.txt" <<MANIFEST
 RELEASE=$RELEASE

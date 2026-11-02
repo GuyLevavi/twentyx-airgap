@@ -10,8 +10,11 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-FILES="$(nix build --no-link --print-out-paths --impure --expr \
-    '(builtins.getFlake (toString ./.)).packages.x86_64-linux.runai-layer-nvim.passthru.files')"
+passthru() {
+    nix build --no-link --print-out-paths --impure --expr \
+        "(builtins.getFlake (toString ./.)).packages.x86_64-linux.runai-layer-nvim.passthru.$1"
+}
+FILES="$(passthru files)"
 
 rm -rf dotfiles
 for rel in .bashrc \
@@ -24,4 +27,6 @@ for rel in .bashrc \
     # -L: home-manager's tree is symlinks into the store.
     cp -rL --no-preserve=mode,ownership,timestamps "$FILES/$rel" "dotfiles/$rel"
 done
+# Not a file under $HOME: image ENV, one KEY=VALUE per line.
+cp --no-preserve=mode,ownership,timestamps "$(passthru sessionEnv)" dotfiles/session-env
 find dotfiles -type f -exec chmod 0644 {} +

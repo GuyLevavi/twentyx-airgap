@@ -208,6 +208,7 @@ config/pi/, pi/               pi settings, preload extension, agents, prompts
 scripts/make-release.sh       run OUTSIDE -> twentyx-store/<RELEASE>/: one delta release
 scripts/export-dotfiles.sh    run OUTSIDE -> dotfiles/, the pod configs as plain files
 release/                      templates for a release's apply.sh and HANDOVER.md
+CHANGELOG.md                  what changed, from 0.2.0 on; goes into HANDOVER.md
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz (--since: delta layers)
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (--since-paths: delta)
 scripts/check-nvim-offline.sh run OUTSIDE -> starts LazyVim with no network; run before a transfer

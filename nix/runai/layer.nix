@@ -84,7 +84,7 @@ runCommand (if basePaths == null then "runai-layer.tar.gz" else "runai-layer-del
       gnutar
       gzip
     ];
-    passthru = { inherit profile files closure basePaths; };
+    passthru = { inherit profile files closure basePaths sessionEnv; };
     meta.description = "Nix toolchain tree for crane-append onto RunAI bases";
   }
   ''
