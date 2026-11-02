@@ -30,14 +30,14 @@ ARG NPM_REGISTRY
 # node that cannot exec.
 # Base first, then the delta over it, exactly as the image stacks them. Not a
 # glob in tar order: "-delta" sorts before ".tar", which would unpack them
-# backwards and leave the old /opt/airgap on top.
+# backwards and leave the old /opt/twentyx on top.
 COPY dist/nix-layer-nvim*.tar.gz /tmp/nix/
 RUN tar -xzf /tmp/nix/nix-layer-nvim.tar.gz -C / \
  && if [ -f /tmp/nix/nix-layer-nvim-delta.tar.gz ]; then \
       tar -xzf /tmp/nix/nix-layer-nvim-delta.tar.gz -C /; fi \
  && rm -rf /tmp/nix
 
-ENV PATH=/opt/airgap/profile/bin:${PATH}
+ENV PATH=/opt/twentyx/profile/bin:${PATH}
 
 # Prove the closure survived the round trip before spending a network call on
 # npm. A broken interpreter path fails here, in CI, rather than in a pod.
@@ -53,15 +53,15 @@ RUN node --version && npm --version
 # The LSP servers that used to be installed here now come from the Nix closure
 # (see nix/modules/nvim.nix), so this list is deliberately one entry long.
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    mkdir -p /out/opt/airgap/node-globals && \
+    mkdir -p /out/opt/twentyx/node-globals && \
     npm config set registry "${NPM_REGISTRY}" && \
-    npm install -g --ignore-scripts --prefix /out/opt/airgap/node-globals \
+    npm install -g --ignore-scripts --prefix /out/opt/twentyx/node-globals \
       @earendil-works/pi-coding-agent
 
 # npm writes bin/ entries as relative symlinks and `#!/usr/bin/env node`
-# shebangs, both of which resolve correctly once /opt/airgap/profile/bin is on
+# shebangs, both of which resolve correctly once /opt/twentyx/profile/bin is on
 # PATH. Check it here rather than discovering it at pod start.
-RUN test -e /out/opt/airgap/node-globals/bin/pi
+RUN test -e /out/opt/twentyx/node-globals/bin/pi
 
 # OpenShift assigns an arbitrary UID at runtime whose only guaranteed group is
 # 0, so everything must be group-owned by 0 and group-readable.

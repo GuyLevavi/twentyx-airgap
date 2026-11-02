@@ -13,13 +13,13 @@
 # with builtins only and starts no subprocess (--kill aside), so a single free
 # PID (this bash) is enough. When a shell will not start, reach it directly:
 #
-#   runai exec <workspace> -- /opt/airgap/libexec/airgap-pids
-#   runai exec <workspace> -- /opt/airgap/libexec/airgap-pids --kill <sid>
+#   runai exec <workspace> -- /opt/twentyx/libexec/airgap-pids
+#   runai exec <workspace> -- /opt/twentyx/libexec/airgap-pids --kill <sid>
 #
 # Retry if the exec itself fails; slots free up as things die.
 set -uo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 # shellcheck source=libexec/airgap-limits.sh
 . "$AIRGAP_ROOT/libexec/airgap-limits.sh"
 

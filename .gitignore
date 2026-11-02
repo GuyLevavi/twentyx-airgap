@@ -1,6 +1,7 @@
 # Git holds TEXT ONLY. Everything binary is computed by Nix, not committed:
 # the closure IS the manifest, so there is no blob list to keep in sync.
 dist/
+twentyx-store/
 result
 result-*
 node_modules/

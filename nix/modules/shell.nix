@@ -52,8 +52,8 @@ in
       # Thread pools sized to the pod's CPU quota, and an early warning before
       # the pids cgroup runs out -- after that, this shell would not start.
       # See libexec/airgap-limits.sh and `airgap pids`.
-      if [ -r /opt/airgap/libexec/airgap-limits.sh ]; then
-        . /opt/airgap/libexec/airgap-limits.sh
+      if [ -r /opt/twentyx/libexec/airgap-limits.sh ]; then
+        . /opt/twentyx/libexec/airgap-limits.sh
         if [[ $- == *i* ]] && airgap_pids_usage \
             && (( AIRGAP_PIDS_CUR * 4 >= AIRGAP_PIDS_MAX * 3 )); then
           printf '\033[33mwarn:\033[0m %s of %s PIDs in use; see: airgap pids\n' \
@@ -233,7 +233,7 @@ in
       # the node. See libexec/airgap-tmux-status.
       set -g status-interval 5
       set -g status-right-length 80
-      set -g status-right "#(/opt/airgap/libexec/airgap-tmux-status) #{session_name} "
+      set -g status-right "#(/opt/twentyx/libexec/airgap-tmux-status 2>/dev/null) #{session_name} "
     '';
   };
 }

@@ -169,10 +169,21 @@ The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- 
 - **harlequin** has no Redis, Kafka or Mongo support: it is SQL only. Candidates if
   needed: `iredis`/`redis` cli, `kcat`, `mongosh` (heavy).
 
+## 10. Release format  [SETTLED -- set by inner]
+
+Inner is the source of truth and is ahead of this repo; its layout is not visible
+from here. A release is `twentyx-store/<RELEASE>/`, see `scripts/make-release.sh`.
+Root is `/opt/twentyx`. Inner builds the repo layer (`docker/mklayer.sh`) and
+`binary-layer.tar.gz` (`scripts/build-binary-layer.sh`) itself.
+
+`d13208ce9f` (base release `20261013-d13208ce9f`) is an inner commit. Deltas assume
+it holds the closure of outside `921bfd6`. `KIND=full` is not implemented. If the
+apply fails its reference check, get the real closure lists back out.
+
 ## 9. 0.2.1 requests from inside  [IMPLEMENTED -- verify in the gap]
 
 - **Pods dying with "os error 11"**: see README, "When a pod stops forking".
-  First thing to run on the next occurrence is `/opt/airgap/libexec/airgap-pids`
+  First thing to run on the next occurrence is `/opt/twentyx/libexec/airgap-pids`
   via `runai exec`, and keep its output. The `pids.max` value, `pids.events
   max=N`, and whether the top owner is python (thread pools), many `exec`
   sessions (dropped connections) or zombies tell which of the three it was.

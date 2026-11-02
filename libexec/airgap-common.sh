@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers. Sourced, never executed.
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 
 say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }

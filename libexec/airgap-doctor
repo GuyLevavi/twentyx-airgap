@@ -6,7 +6,7 @@
 # sudos, and never touches the network except to probe the model endpoint.
 set -uo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 # shellcheck source=libexec/airgap-limits.sh
 . "$AIRGAP_ROOT/libexec/airgap-limits.sh"

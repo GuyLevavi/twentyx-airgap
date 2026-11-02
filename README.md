@@ -77,25 +77,30 @@ deliberately) and build from string literals with no fetches, so a config edit
 rebuilds **offline, in seconds**. Adding a *package* is what needs a transfer.
 The closure enforces the rule that discipline used to.
 
-### Delta transfers
+### Releases
 
 A closure change no longer means re-shipping the closure. What crosses is the
-set difference against what the far side already holds:
+set difference against what the far side already holds, as one folder,
+`twentyx-store/<RELEASE>/`:
 
 ```
-./scripts/make-transfer.sh <rev-inside> \
-    --layers-since <dir of the nix-layer-nvim.tar.gz inside> \
-    --wsl-since dist/baselines/wsl-<rev-inside>.store-paths
+./scripts/make-release.sh --base-release <id inside> \
+    --pod-base <the full layer tarball inside> \
+    --wsl-base dist/baselines/wsl-<rev inside>.store-paths
 ```
 
-- **RunAI**: each full layer records its closure at `opt/airgap/store-paths`,
+`make-release.sh` lists what the folder holds. `release/` has the templates for
+`apply.sh` and `HANDOVER.md`: write the handover for each release before cutting
+it. The inner repo is the source of truth, and builds its own repo layer.
+
+- **RunAI**: each full layer records its closure at `opt/twentyx/store-paths`,
   so the old tarball *is* the baseline. The delta layer is appended directly
   above it; the full layer has to stay in Artifactory.
 - **WSL**: every export writes the closure it delivered to
   `dist/baselines/wsl-<rev>.store-paths`. Nothing comes back across the gap,
   so **keep those files** — they are the only record of what is inside.
-  `nix-import.sh` checks a delta's references against the local store first,
-  and names any that are missing instead of failing halfway.
+  `apply.sh` checks a delta's references against the local store first, and
+  names any that are missing instead of failing halfway.
 
 ## Images: append, don't rebuild
 
@@ -151,8 +156,8 @@ memory pressure, the top thread owners and the sessions holding them. It uses
 bash builtins only, so it still runs when the pod is out of PIDs, which is when
 you need it:
 
-    runai exec <ws> -- /opt/airgap/libexec/airgap-pids              # retry until one exec gets in
-    runai exec <ws> -- /opt/airgap/libexec/airgap-pids --kill <sid>
+    runai exec <ws> -- /opt/twentyx/libexec/airgap-pids              # retry until one exec gets in
+    runai exec <ws> -- /opt/twentyx/libexec/airgap-pids --kill <sid>
 
 Interactive shells warn at 75% use, and `airgap doctor` fails above it. The cap
 itself is set by the cluster (CRI-O `pids_limit`, or the kubelet's
@@ -200,7 +205,9 @@ nix/pkgs/                     what nixpkgs lacks: PBS python, slim harlequin, op
 bin/airgap                    dispatcher
 libexec/airgap-*              bootstrap, doctor, refresh, update, pi, entrypoint
 config/pi/, pi/               pi settings, preload extension, agents, prompts
-scripts/make-transfer.sh      run OUTSIDE -> one transfer dir: git bundle + patches, both deltas
+scripts/make-release.sh       run OUTSIDE -> twentyx-store/<RELEASE>/: one delta release
+scripts/export-dotfiles.sh    run OUTSIDE -> dotfiles/, the pod configs as plain files
+release/                      templates for a release's apply.sh and HANDOVER.md
 scripts/build-layers.sh       run OUTSIDE -> dist/*.tar.gz (--since: delta layers)
 scripts/nix-export.sh         run OUTSIDE -> a sharded binary cache (--since-paths: delta)
 scripts/check-nvim-offline.sh run OUTSIDE -> starts LazyVim with no network; run before a transfer

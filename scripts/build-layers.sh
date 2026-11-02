@@ -13,7 +13,7 @@
 #
 # With --since, <prevdir> holds the nix-layer-nvim.tar.gz already inside the
 # gap, and the nix layer becomes nix-layer-nvim-delta.tar.gz instead: only the
-# store paths that one does not carry, plus a complete /opt/airgap. CI appends
+# store paths that one does not carry, plus a complete /opt/twentyx. CI appends
 # it on top of the previous layer (see docker/assemble.sh), so the previous
 # one must stay in Artifactory.
 #
@@ -41,13 +41,15 @@ build() {
         nix build --no-link --print-out-paths ".#$pkg"
         return
     fi
-    # The base layer recorded its own closure at opt/airgap/store-paths, which
+    # The base layer recorded its own closure at opt/twentyx/store-paths, which
     # is the exact set the far side has: no need to rebuild, or even still
     # have, whatever produced it.
     local paths
     paths="$(mktemp)"
-    tar -xzOf "$base" --occurrence=1 opt/airgap/store-paths > "$paths" \
-        || { echo "no opt/airgap/store-paths in $base" >&2; rm -f "$paths"; return 1; }
+    # Layers cut before the rename to /opt/twentyx hold it under opt/airgap.
+    tar -xzOf "$base" --occurrence=1 opt/twentyx/store-paths > "$paths" 2>/dev/null \
+        || tar -xzOf "$base" --occurrence=1 opt/airgap/store-paths > "$paths" \
+        || { echo "no store-paths in $base" >&2; rm -f "$paths"; return 1; }
     nix build --no-link --print-out-paths --impure --expr "
         (builtins.getFlake (toString ./.)).packages.\${builtins.currentSystem}.$pkg.override {
           basePaths = builtins.path { path = $paths; name = \"base-store-paths\"; };

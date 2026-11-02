@@ -11,7 +11,7 @@
 # ours, a real file is yours, and refreshing swaps one back for the other.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 
 # PID 1 must be an init. Whatever the base would have run there -- code-server's
 # node, a shell, `sleep infinity` -- never reaps the children it did not start,

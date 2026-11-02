@@ -5,7 +5,7 @@
 #
 # The store closure MUST land at literal /nix/store: every Nix-built binary
 # names its ELF interpreter by absolute store path, so relocating the tree to
-# /opt/airgap/nix would produce several hundred megabytes of binaries that
+# /opt/twentyx/nix would produce several hundred megabytes of binaries that
 # cannot exec. Appending as an image layer puts it at / for free.
 {
   lib,
@@ -15,10 +15,10 @@
   gnutar,
   gzip,
   hm,
-  # A previous layer's opt/airgap/store-paths. When set this builds a DELTA:
-  # all of /opt/airgap, but only the store paths that base does not already
+  # A previous layer's opt/twentyx/store-paths. When set this builds a DELTA:
+  # all of /opt/twentyx, but only the store paths that base does not already
   # carry. crane-appended on top of that base, the image ends up with exactly
-  # the new closure -- an upper OCI layer replaces /opt/airgap's symlinks and
+  # the new closure -- an upper OCI layer replaces /opt/twentyx's symlinks and
   # files, and every store path it omits is already in the layer below.
   basePaths ? null,
 }:
@@ -88,17 +88,17 @@ runCommand (if basePaths == null then "runai-layer.tar.gz" else "runai-layer-del
     meta.description = "Nix toolchain tree for crane-append onto RunAI bases";
   }
   ''
-    mkdir -p root/opt/airgap
-    ln -s ${profile} root/opt/airgap/profile
-    ln -s ${files}   root/opt/airgap/home-defaults
+    mkdir -p root/opt/twentyx
+    ln -s ${profile} root/opt/twentyx/profile
+    ln -s ${files}   root/opt/twentyx/home-defaults
 
     # Record the closure inside the image so `airgap doctor` can verify the
     # layer arrived intact without needing Nix to ask.
-    cp ${closure}/store-paths root/opt/airgap/store-paths
-    printf '%s' "${evalHome}" > root/opt/airgap/eval-home
+    cp ${closure}/store-paths root/opt/twentyx/store-paths
+    printf '%s' "${evalHome}" > root/opt/twentyx/eval-home
 
     # Consumed by docker/assemble.sh, one KEY=VALUE per line.
-    cp ${sessionEnv} root/opt/airgap/session-env
+    cp ${sessionEnv} root/opt/twentyx/session-env
 
     # Everything is group-0 and group-readable: OpenShift assigns an arbitrary
     # UID at runtime and only GID 0 is guaranteed. Store paths are already

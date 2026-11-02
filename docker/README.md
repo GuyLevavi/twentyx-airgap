@@ -60,7 +60,7 @@ Both were being clobbered before; both are silent failures rather than build err
 
 ## Session variables are image ENV, not shell config
 
-`layer.nix` writes `/opt/airgap/session-env` and `assemble.sh` turns each line into `--env`.
+`layer.nix` writes `/opt/twentyx/session-env` and `assemble.sh` turns each line into `--env`.
 A shell rc only reaches processes that source it, which excludes exactly the ones that break most
 confusingly: `runai exec -- cmd`, code-server's task runner, anything the agent spawns. Those need
 `TERMINFO_DIRS` and `LOCALE_ARCHIVE` as much as an interactive shell does.

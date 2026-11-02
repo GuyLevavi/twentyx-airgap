@@ -12,7 +12,7 @@
 # the pod. What stays text here is this repo's own scripts and the pi package.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 HOME_DIR="$(airgap_home)"
 
@@ -32,7 +32,7 @@ fi
 
 say "now at $(git -C "$CHECKOUT" rev-parse --short HEAD)"
 
-# The image's /opt/airgap is read-only at runtime, so a text update works by
+# The image's /opt/twentyx is read-only at runtime, so a text update works by
 # pointing AIRGAP_ROOT at the checkout instead of mutating the image.
 #
 # Both shells, because fish is what you type in and bash is what scripts and

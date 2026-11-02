@@ -15,7 +15,7 @@
 # back. Nothing is deleted; the backup keeps its timestamp in the name.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 
 # $HOME is only correct once bootstrap's shell drop-in has run. Anything

@@ -20,7 +20,7 @@
 # file up and restoring the symlink.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 
 # Resolved, not used as-is: both are symlinks into the store, and `find` does

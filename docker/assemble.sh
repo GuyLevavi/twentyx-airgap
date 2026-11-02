@@ -16,7 +16,7 @@
 #
 # The nix layer may be followed by a DELTA (scripts/build-layers.sh --since):
 # only the store paths the previous transfer lacked, plus a complete
-# /opt/airgap. It is appended directly above the layer it was computed
+# /opt/twentyx. It is appended directly above the layer it was computed
 # against, which therefore stays in Artifactory -- the delta alone is not a
 # working image.
 #
@@ -59,7 +59,7 @@ if [ -f "$RUNAI_CLI" ]; then
     EXTRALAYERS+=(-f dist/runai-layer.tar)
 fi
 
-# The topmost nix layer owns /opt/airgap, session-env included.
+# The topmost nix layer owns /opt/twentyx, session-env included.
 NIXLAYERS=(-f "$LAYER_NIX")
 TOPLAYER="$LAYER_NIX"
 if [ -f "$LAYER_NIX_DELTA" ]; then
@@ -93,7 +93,7 @@ session_env_args() {
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         printf -- '--env\n%s\n' "$line"
-    done < <(tar -xzOf "$layer" --occurrence=1 opt/airgap/session-env 2>/dev/null || true)
+    done < <(tar -xzOf "$layer" --occurrence=1 opt/twentyx/session-env 2>/dev/null || true)
 }
 
 mapfile -t ENVARGS < <(session_env_args "$TOPLAYER")
@@ -115,7 +115,7 @@ for variant in $VARIANTS; do
         echo "  warn: $base declares no PATH; using a conservative default" >&2
         BASEPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     fi
-    NEWPATH="/opt/airgap/bin:/opt/airgap/node-globals/bin:/opt/airgap/profile/bin:${BASEPATH}"
+    NEWPATH="/opt/twentyx/bin:/opt/twentyx/node-globals/bin:/opt/twentyx/profile/bin:${BASEPATH}"
 
     # Same reasoning for the entrypoint: the vscode-* bases launch code-server
     # from theirs. airgap-entrypoint bootstraps and then hands over, so record
@@ -134,10 +134,10 @@ for variant in $VARIANTS; do
     # Image config only; no layer traffic.
     crane mutate "$dest" -t "$dest" \
         "${ENVARGS[@]}" \
-        --env AIRGAP_ROOT=/opt/airgap \
+        --env AIRGAP_ROOT=/opt/twentyx \
         --env "PATH=${NEWPATH}" \
         --env "AIRGAP_BASE_ENTRYPOINT=${BASE_ENTRY}" \
-        --entrypoint /opt/airgap/libexec/airgap-entrypoint \
+        --entrypoint /opt/twentyx/libexec/airgap-entrypoint \
         --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
         --label "airgap.variant=${variant}" \
         --label "airgap.flavor=nvim" >/dev/null

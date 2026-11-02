@@ -3,6 +3,7 @@
 # cache split into transferable chunks.
 #
 #   ./scripts/nix-export.sh [outdir] [--limit BYTES] [--since-paths FILE] [--cache DIR]
+#   ./scripts/nix-export.sh [outdir] --since-paths FILE --nar
 #
 # This replaces vendor/manifest.toml. There is no list of blobs to maintain,
 # because Nix computes the closure: whatever the config references is what gets
@@ -28,10 +29,14 @@ SINCE_PATHS=""
 # ship are pruned first, so a persistent cache never leaks stale paths into
 # the chunks.
 PERSIST=""
+# The release format (scripts/make-release.sh): one `nix-store --export` stream,
+# which imports with nothing but nix-store, plus the paths it builds on.
+NAR=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --limit)       LIMIT="${2:?}"; shift 2 ;;
         --since-paths) SINCE_PATHS="$(realpath "${2:?}")"; shift 2 ;;
+        --nar)         NAR=1; shift ;;
         --cache)       PERSIST="$(realpath -m --relative-to=. "${2:?}")"; shift 2 ;;
         *)             OUT="$1"; shift ;;
     esac
@@ -117,7 +122,23 @@ say "exporting closure to a binary cache"
 # shellcheck disable=SC2086
 nix path-info -r "$TOPLEVEL" "$STDENV" $INPUTS | sort -u > "$OUT/store-paths"
 
-if [ -n "$SINCE_PATHS" ]; then
+if [ -n "$NAR" ]; then
+    [ -n "$SINCE_PATHS" ] || { echo "--nar needs --since-paths" >&2; exit 1; }
+    comm -13 <(sort -u "$SINCE_PATHS") "$OUT/store-paths" > "$OUT/.delta"
+    say "delta: $(wc -l < "$OUT/.delta") of $(wc -l < "$OUT/store-paths") paths are new"
+    # --import registers paths in stream order and each one's references must
+    # already be valid, so export them dependencies first. -qR prints that
+    # order; filtering keeps it.
+    # shellcheck disable=SC2086
+    nix-store -qR "$TOPLEVEL" "$STDENV" $INPUTS | grep -Fxf "$OUT/.delta" > "$OUT/delta-paths"
+    xargs -r nix path-info --json --json-format 1 < "$OUT/delta-paths" \
+        | jq -r '.[].references[]' | sort -u | comm -23 - "$OUT/.delta" > "$OUT/base-refs"
+    xargs nix-store --export < "$OUT/delta-paths" > "$OUT/wsl-delta.nar"
+    say "  $(wc -l < "$OUT/base-refs") baseline reference(s) assumed present on the far side"
+    rm -f "$OUT/.delta"
+    printf 'toplevel=%s\nstdenv=%s\n' "$TOPLEVEL" "$STDENV" > "$OUT/TRANSFER"
+    exit 0
+elif [ -n "$SINCE_PATHS" ]; then
     comm -13 <(sort -u "$SINCE_PATHS") "$OUT/store-paths" > "$OUT/.delta"
     say "delta: $(wc -l < "$OUT/.delta") of $(wc -l < "$OUT/store-paths") paths are new"
     prune_cache "$OUT/.delta"

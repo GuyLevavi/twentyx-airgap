@@ -18,7 +18,7 @@ description: >
 
 | Layer | Path | Lifetime | Writable |
 |---|---|---|---|
-| Packaged defaults | `$AIRGAP_ROOT` (`/opt/airgap`) | image | build time only |
+| Packaged defaults | `$AIRGAP_ROOT` (`/opt/twentyx`) | image | build time only |
 | User overrides + state | `$AIRGAP_STATE` (`/code/<user>/.airgap`) | persistent | yes |
 | Running config | `$HOME` | **until pod restart** | yes, pointlessly |
 

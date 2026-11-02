@@ -24,7 +24,7 @@
 # Node runs clean. Children run exactly as an interactive shell does.
 set -euo pipefail
 
-AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/airgap}"
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 . "$AIRGAP_ROOT/libexec/airgap-common.sh"
 
 # Byte-for-byte. The extension must reproduce this exactly, never approximate it.

@@ -20,6 +20,6 @@
   },
 
   "packages": [
-    "/opt/airgap/pi"
+    "/opt/twentyx/pi"
   ]
 }
