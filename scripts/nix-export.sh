@@ -189,7 +189,10 @@ if [ -n "$NAR" ]; then
     # already be valid, so export them dependencies first, the order -qR prints.
     # shellcheck disable=SC2046,SC2086
     nix-store -qR $(cat "$OUT/.portable" "$OUT/.kit") "$STDENV" $INPUTS > "$OUT/delta-paths"
-    xargs nix-store --export < "$OUT/delta-paths" > "$OUT/wsl-delta.nar"
+    # argv, not xargs: xargs may split the list into several exports, and
+    # --import stops at the first one's end marker.
+    mapfile -t DELTA < "$OUT/delta-paths"
+    nix-store --export "${DELTA[@]}" > "$OUT/wsl-delta.nar"
     say "  $(wc -l < "$OUT/delta-paths") paths exported, $(du -h "$OUT/wsl-delta.nar" | cut -f1)"
     rm -f "$OUT"/.delta "$OUT"/.keep "$OUT"/.portable "$OUT"/.real "$OUT"/.probe.json "$OUT"/.dirty "$OUT"/.kit
     printf 'toplevel=%s\nstdenv=%s\n' "$TOPLEVEL" "$STDENV" > "$OUT/TRANSFER"
