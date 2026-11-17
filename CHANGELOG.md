@@ -2,6 +2,16 @@
 
 Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
+## Unreleased
+
+- **PID logger:** `airgap pids --watch` writes one line every 5 minutes to
+  `~/.local/state/twentyx/pids.log` (on the PVC). The line covers PID use, refused
+  forks, memory, OOM kills, zombies, exec sessions and the top thread owners. When
+  forks start failing, or use reaches 75%, it also writes a full `airgap pids`
+  report to `pids-full.log`. A new pod keeps the previous pod's logs as `*.1`.
+  The entrypoint starts it, and interactive shells start it as a fallback.
+  Set `AIRGAP_PIDS_WATCH=0` to turn it off.
+
 ## Release after 20261102-717fbad554
 
 `20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's

@@ -163,6 +163,10 @@ you need it:
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids              # retry until one exec gets in
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids --kill <sid>
 
+A logger (`airgap pids --watch`) records the budget every 5 minutes to
+`~/.local/state/twentyx/pids.log`, and writes a full report to `pids-full.log`
+once forks start failing. After a restart, the dead pod's logs are `*.1`.
+
 Interactive shells warn at 75% use, and `airgap doctor` fails above it. The cap
 itself is set by the cluster (CRI-O `pids_limit`, or the kubelet's
 `podPidsLimit`). If `airgap pids` shows real training needing more, ask the

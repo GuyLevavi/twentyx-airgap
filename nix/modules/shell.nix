@@ -59,6 +59,14 @@ in
           printf '\033[33mwarn:\033[0m %s of %s PIDs in use; see: airgap pids\n' \
             "$AIRGAP_PIDS_CUR" "$AIRGAP_PIDS_MAX" >&2
         fi
+        # The entrypoint starts the PID logger; this covers a workload whose
+        # command bypasses it. The logger itself refuses to run twice.
+        if [[ $- == *i* && "''${AIRGAP_PIDS_WATCH:-1}" != 0 ]] \
+            && ! { read -r __w < "$HOME/.local/state/twentyx/pids-watch.pid" \
+                   && [ -d "/proc/$__w" ]; } 2>/dev/null; then
+          ( /opt/twentyx/libexec/airgap-pids --watch </dev/null >/dev/null 2>&1 & )
+        fi
+        unset __w
       fi
     ''
     + ''
@@ -100,6 +108,18 @@ in
           for __v in OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS NUMEXPR_MAX_THREADS RAYON_NUM_THREADS GOMAXPROCS
             set -q $__v; or set -gx $__v $__n
           end
+        end
+      end
+
+      # Same fallback start of the PID logger as bash's rc.
+      if status is-interactive; and test "$AIRGAP_PIDS_WATCH" != 0
+        and test -x /opt/twentyx/libexec/airgap-pids
+        set -l __w
+        set -l __pf $HOME/.local/state/twentyx/pids-watch.pid
+        test -r $__pf; and read __w < $__pf
+        if test -z "$__w"; or not test -d /proc/$__w
+          /opt/twentyx/libexec/airgap-pids --watch </dev/null >/dev/null 2>&1 &
+          disown 2>/dev/null
         end
       end
     '';
