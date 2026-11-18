@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Summary: relocate $HOME onto the PVC and materialize it from the Nix layer
+#
+# Idempotent. Safe to run repeatedly: at pod start, after `airgap update`, or
+# by hand.
+#
+# The pod's real $HOME (/home/jensen) is wiped on every restart. The previous
+# design symlinked selected pieces onto the PVC, which only ever rescued the
+# state we remembered to enumerate -- and there is always another tool writing
+# a dotfile nobody listed. So $HOME is relocated wholesale and everything is
+# durable by default.
+#
+# Two layers, not three, now that Nix computes the defaults:
+#   $AIRGAP_ROOT/home-defaults   immutable, from the Nix closure
+#   $HOME                        durable, on the PVC; a real file here is a
+#                                user override and is never touched
+#
+# That is what makes `airgap refresh` meaningful: a default is a symlink into
+# the store, an override is a real file, and refreshing is backing the real
+# file up and restoring the symlink.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+# Resolved, not used as-is: both are symlinks into the store, and `find` does
+# not descend into a symlink given as its starting point -- it matches only the
+# link itself, so the path-strip below silently no-ops and every default gets
+# linked to a garbage path built from the store path.
+DEFAULTS="$(readlink -f "$AIRGAP_ROOT/home-defaults" 2>/dev/null || echo "$AIRGAP_ROOT/home-defaults")"
+PROFILE="$AIRGAP_ROOT/profile"
+# pi is an npm global, so it lives outside the Nix profile in its own layer.
+NODE_GLOBALS="$AIRGAP_ROOT/node-globals"
+
+USER_R="$(airgap_user)"
+DHOME="$(airgap_home)"
+
+if airgap_home_is_durable; then
+    mkdir -p "$DHOME"
+    # OpenShift gives us an arbitrary UID whose only guaranteed group is 0.
+    # setgid keeps anything created here group-owned by 0, so a later pod under
+    # a different UID can still write its own state.
+    chmod g+rwxs "$DHOME" 2>/dev/null || true
+else
+    warn "no writable /data or /code -- this session is EPHEMERAL."
+    warn "shell history, agent sessions and nvim state will die with the pod."
+fi
+
+export HOME="$DHOME"
+
+# Cache is deliberately NOT durable. The PVC is network-backed, and nvim, the
+# LSP servers and pip on a network filesystem are painfully slow. A cache is
+# reconstructible by definition, so it belongs on fast local disk.
+CACHE="${AIRGAP_CACHE:-/tmp/airgap-cache-$(id -u)}"
+mkdir -p "$CACHE"
+
+# The exception: opencode keeps its resolved plugin node_modules, bun lockfile
+# and models.json under XDG_CACHE_HOME. On /tmp they are gone after every
+# restart, and the next start waits out network timeouts trying to rebuild
+# them -- inside the gap, rebuilding them is not possible. So that one
+# directory lives on the PVC. Not when opencode already made a real one in
+# this pod: that would swap its state out from under a running instance.
+if airgap_home_is_durable && { [ -L "$CACHE/opencode" ] || [ ! -e "$CACHE/opencode" ]; }; then
+    mkdir -p "$DHOME/.local/share/opencode-cache"
+    ln -sfn "$DHOME/.local/share/opencode-cache" "$CACHE/opencode"
+fi
+
+mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.local/state"
+
+# ── link the Nix-built defaults into $HOME ────────────────────────────────
+# A symlink pointing into the store is ours and gets refreshed. Anything else
+# is the user's and is left strictly alone.
+if [ -d "$DEFAULTS" ]; then
+    while IFS= read -r src; do
+        rel="${src#"$DEFAULTS"/}"
+        # Belt and braces: if the strip did not fire, `rel` is still absolute
+        # and would build a path outside $HOME. Skip rather than write there.
+        [ "$rel" = "$src" ] && { warn "skipping unstrippable default: $src"; continue; }
+        # .cache is deliberately ephemeral (see above); do not seed it onto
+        # the PVC just because home-manager keeps a .keep file there.
+        case "$rel" in .cache/*) continue ;; esac
+        dst="$HOME/$rel"
+        # home-manager generates .bashrc, but our env must be exported before
+        # it runs (it execs fish). Park it and let the stub below source it.
+        [ "$rel" = ".bashrc" ] && dst="$HOME/.bashrc.hm"
+        mkdir -p "$(dirname "$dst")"
+        if [ -L "$dst" ]; then
+            [ "$(readlink "$dst")" = "$src" ] || { rm -f "$dst"; ln -s "$src" "$dst"; }
+        elif [ -e "$dst" ]; then
+            :   # a real file: a user override. Never clobber it.
+        else
+            ln -s "$src" "$dst"
+        fi
+    done < <(find "$DEFAULTS" -type f -o -type l)
+else
+    warn "$DEFAULTS missing -- is the Nix layer present in this image?"
+fi
+
+# ── runtime-resolved environment ──────────────────────────────────────────
+# Nix owns everything static. This drop-in owns only what cannot be known
+# until the workspace name resolves at pod start.
+mkdir -p "$HOME/.config/fish/conf.d"
+cat > "$HOME/.config/fish/conf.d/00-airgap.fish" <<EOF
+# Generated by airgap-bootstrap. Do not edit -- rewritten on every pod start.
+# Put your own fish config in conf.d/50-*.fish, which survives on the PVC.
+set -gx AIRGAP_ROOT "$AIRGAP_ROOT"
+set -gx AIRGAP_USER "$USER_R"
+set -gx HOME "$DHOME"
+set -gx XDG_CONFIG_HOME "$DHOME/.config"
+set -gx XDG_DATA_HOME "$DHOME/.local/share"
+set -gx XDG_STATE_HOME "$DHOME/.local/state"
+set -gx XDG_CACHE_HOME "$CACHE"
+set -gx PIP_CACHE_DIR "$CACHE/pip"
+set -gx NPM_CONFIG_CACHE "$CACHE/npm"
+# Model weights are enormous and must never land on ephemeral disk.
+set -gx TORCH_HOME "$DHOME/.local/share/torch"
+set -gx HF_HOME "$DHOME/.local/share/huggingface"
+fish_add_path --global --prepend "$PROFILE/bin"
+test -d "$NODE_GLOBALS/bin"; and fish_add_path --global --prepend "$NODE_GLOBALS/bin"
+EOF
+
+# home-manager bakes its eval-time home into some generated values. The rewrite
+# that fixes them lives in nix/modules/shell.nix, NOT here: fish sources
+# conf.d/*.fish before config.fish, so a drop-in written from this script would
+# always run before the values it needs to correct even exist.
+#
+# A drop-in from an older image would now be both stale and wrong, so remove it.
+rm -f "$HOME/.config/fish/conf.d/99-airgap-rehome.fish"
+
+# ── bash: login shell, and the fallback code-server terminals get ─────────
+cat > "$HOME/.bashrc" <<EOF
+# Generated by airgap-bootstrap. Do not edit; rewritten on every pod start.
+export AIRGAP_ROOT="$AIRGAP_ROOT"
+export AIRGAP_USER="$USER_R"
+export HOME="$DHOME"
+export XDG_CONFIG_HOME="$DHOME/.config"
+export XDG_DATA_HOME="$DHOME/.local/share"
+export XDG_STATE_HOME="$DHOME/.local/state"
+export XDG_CACHE_HOME="$CACHE"
+export TORCH_HOME="$DHOME/.local/share/torch"
+export HF_HOME="$DHOME/.local/share/huggingface"
+for d in "$PROFILE/bin" "$NODE_GLOBALS/bin"; do
+    [ -d "\$d" ] || continue
+    case ":\$PATH:" in *":\$d:"*) ;; *) PATH="\$d:\$PATH" ;; esac
+done
+export PATH
+# home-manager puts the session variables in .profile, which only a LOGIN bash
+# reads -- and our .bash_profile stub deliberately does not chain to it. Source
+# them here instead, so TERMINFO_DIRS and LOCALE_ARCHIVE reach a plain
+# \`bash -c\` too. Before .bashrc.hm, whose initExtra rewrites the eval-time
+# home out of them.
+[ -r "$PROFILE/etc/profile.d/hm-session-vars.sh" ] && . "$PROFILE/etc/profile.d/hm-session-vars.sh"
+[ -r "$DHOME/.bashrc.hm" ] && . "$DHOME/.bashrc.hm"
+for f in "$DHOME"/.config/bashrc.d/*.sh; do [ -r "\$f" ] && . "\$f"; done
+: # keep the exit status clean; the loop above may end on a failed test
+EOF
+grep -qs bashrc "$HOME/.bash_profile" 2>/dev/null || \
+    echo '[ -r ~/.bashrc ] && . ~/.bashrc' > "$HOME/.bash_profile"
+
+# ── agent state on the PVC ────────────────────────────────────────────────
+mkdir -p "$HOME/.pi/agent"/{sessions,agents,extensions}
+for r in agents prompts skills; do
+    [ -d "$AIRGAP_ROOT/pi/$r" ] || continue
+    mkdir -p "$HOME/.pi/agent/$r"
+    for f in "$AIRGAP_ROOT/pi/$r"/*; do
+        [ -e "$f" ] && link_into "$f" "$HOME/.pi/agent/$r/$(basename "$f")"
+    done
+done
+for c in settings.json models.json; do
+    [ -f "$HOME/.pi/agent/$c" ] || \
+        cp "$AIRGAP_ROOT/config/pi/$c" "$HOME/.pi/agent/$c" 2>/dev/null || true
+done
+
+exit 0

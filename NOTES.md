@@ -1,189 +1,195 @@
-# Notes: open items and the why (outside)
+# Open items -- fill in from work
 
-What is still open, and the reasoning behind the pieces that are
-load-bearing and must not be "simplified". The pod-side why (session.env,
-preload split, identity, `$HOME` rule) is in `inside-seed/NOTES.md`.
+Blockers are marked. Everything else has a working default.
 
-## Open items
+## 1. RunAI preload antidote  [RESOLVED -- implemented]
 
-- **`nixos-wsl.tar.gz` size.** The first real rebase (2026-10-13) came out
-  at 3074 MB, over the 3072 MB/file cap: `nixos-install` copied the closure
-  with this host's `auto-optimise-store = true`, filling the rootfs with
-  `nix/store/.links` (4.1 GB), and the builder's `tar --hard-dereference`
-  stores every optimised file twice. `transfer.sh` now runs the builder with
-  `NIX_CONFIG="auto-optimise-store = false"`; the closure alone gzips to
-  ~1.5 GB. If it ever crosses again, the transfer refuses; trim the closure,
-  never split the file (7z cannot shrink a gzip).
-- **Measured at a rehearsal rebase (2026-10-13):** `pod-full.tar.gz.7z`
-  1170 MB, `wsl-full.nar.7z` 1042 MB, the kit 658 MB, ~5 min. Unpacked,
-  `wsl-full.nar` is several GB: check the inside GitLab's
-  `max_package_size` before the first push.
-- **opencode is AVX2-only** (bun compile without `--baseline`): it SIGILLs on
-  a pre-Haswell node. The fix would be a local overlay, not a downgrade.
-- **First release on the real bases and runners** (inside NOTES.md lists the
-  pod-side checks).
+The interceptors:
 
-## Nothing evaluates Nix inside the gap
+    /runai/shared/pid/preloader.so
+    /runai/shared/memory/loader.so
 
-The old WSL side rebuilt config inside, and it never worked: the shipped
-closure lacked the build-time inputs every home-manager rebuild needs
-(`lndir`, `babelfish`, `json2x`, `jq.dev`, buildEnv's `builder.pl`), and the
-only rebuild that succeeded was a no-op. So the model is: this machine builds
-everything, files cross, the far side only imports.
+The working antidote does **not** unset `LD_PRELOAD`; it *replaces* it with libc:
 
-- WSL keeps the `nix-store`/`nix-env` binaries for import, profile switching,
-  rollback and GC. `nix.settings.substituters = lib.mkForce [ ]` (a plain
-  `[ ]` still merges in `cache.nixos.org`); no flakes, no `nix-command`.
-- Config is the inner repo's text, linked into `$HOME`; the closure only
-  provides binaries and binary-coupled defaults under stable paths
-  (`/opt/twentyx/profile`, `/opt/twentyx/home-defaults`). A store path baked
-  into a config goes stale on the next update; a stable path does not.
+    LD_PRELOAD="${LIBC:-/lib/x86_64-linux-gnu/libc.so.6}"   # LIBC via ldconfig + awk
 
-## Deltas: cumulative against one pinned base
+That is better than unsetting, and `libexec/airgap-pi` now matches it exactly: libc is already
+loaded in every process, so preloading it is a no-op, while `LD_PRELOAD` stays populated for
+anything that branches on whether it is set.
 
-Nothing comes back out of the gap to say what a machine has, so every delta
-is computed against `base.rev`, which every machine is known to have (it
-installed from that base's rootfs, or imported its full NAR). Store paths
-are immutable, so a delta is just the paths HEAD adds; skipping or
-reordering deltas is harmless. Removed packages linger until a rebase (disk
-only). The transfer builds the base's closures from `git+file:.?rev=<base>`,
-so the flake attribute names are a contract with every past base: renaming
-one needs a rebase.
+Implemented and tested across four cases:
 
-- **Pods:** a tar layer. `pod-tar.sh` writes the `/opt/twentyx` tree first
-  (so `assemble.sh` finds `session-env` with `--occurrence=1`), then the store
-  paths, deterministically (`--sort=name --mtime=@1 --owner=0`, `gzip -n`).
-  The delta's `opt/` overlays the full layer's: identical paths, no
-  whiteouts.
-- **The setuid sudo** is a tar member with mode 4555: a mode bit in a tar
-  header is data, while Nix forbids setuid *files* in outputs.
-- **WSL:** a NAR, because NixOS-WSL remounts `/nix/store` read-only (a plain
-  `tar -x` fails) and `nix-store --import` is atomic, verifies hashes and
-  refuses a delta whose references are missing. `nix-store --load-db` was
-  rejected: it registers paths whose files do not exist as valid. An empty
-  export (8 bytes) imports as a no-op, so a release always has the same
-  files. The NAR is one `nix-store --export` with the paths as argv:
-  concatenated exports import only up to the first end marker.
-- `apply.sh` roots the base (`/nix/var/nix/gcroots/twentyx-base`), so the
-  monthly GC cannot collect what later deltas assume.
+| `LD_PRELOAD` in | result |
+|---|---|
+| both RunAI `.so`s | replaced with libc |
+| RunAI + a legitimate `.so` | replaced with libc (original stashed, restored for children) |
+| unrelated `.so` only | **untouched** |
+| unset | no-op |
 
-## The rootfs builder needs real root
+**Bug found while testing:** `ldconfig -p \| awk '...exit'` returns 141 (SIGPIPE) under
+`set -o pipefail`, because awk's early `exit` closes the pipe. With `set -e` that silently kills
+the launcher and pi never starts. Fixed with `|| true`. **Check the original antidote script for
+the same latent bug** -- it only shows up when the shell has `pipefail` set.
 
-The upstream NixOS-WSL builder chroots and bind-mounts, hence `sudo`. A
-previous rootless builder existed only to dodge user-namespace EINVALs; with
-real root those workarounds are gone. No `--chown home/jensen`: it runs
-before `nixos-install` (it is for `--extra-files`), and activation creates
-the home as 1000:100 anyway. The rootfs is built from `base.rev`, so a fresh
-install already has the base.
+Still worth confirming in-pod: whether pi/node is affected by the preloaders at all. If not, set
+`AIRGAP_PRELOAD_STRIP=0` and nothing else changes.
 
-## WSL switches exit 4 (WSL >= 2.9.8)
+## 2. Identity on the shared PVC  [RESOLVED -- implemented]
 
-`switch-to-configuration` returns 4 when units fail although the switch
-happened. Two WSL-side sources, both fixed in `wsl.nix`:
+Probe output confirmed: every runtime user is `jensen`, uid 10001, gid 0, and the hostname is
+`<workspace-name>-<n>-<n>` where workspace names follow a `<username>-<whatever>` convention.
+The OS knows nothing about who you are; the hostname is the only platform-provided signal, and it
+is not stable across sessions.
 
-- WSL's init generates `wsl-mnt-guard.service` (`ExecStart=/bin/true`);
-  NixOS-WSL's minimal `/bin` lacked `true`. `wsl.extraBin` adds it
-  (NixOS-WSL#1100).
-- `wsl.interop.register = true` re-bound `WSLInterop`, which WSL's init
-  already binds (`-EEXIST`). Left at the upstream default (false).
+Resolution chain in `airgap_user()`, first hit wins:
 
-`apply.sh` still treats exit 4 as a warning and prints `systemctl --failed`.
+1. `$AIRGAP_USER` (explicit override)
+2. local part of `git config user.email` -- set declaratively via `airgap.git.userEmail`
+3. hostname, stripped of the `-<n>-<n>` suffix, leading component
+4. `$USERNAME` / `$USER`
 
-## No signing, by decision
+Rule 3 is **wrong for any username containing a dash**. That is exactly why it sits below the git
+identity rather than above it, and why `airgap doctor` prints which rule fired -- a surprising
+answer should be visible, not silently misfile a session's history in a new directory.
 
-Integrity is the store hash: a damaged path fails on that path, and
-`nix-store --import` checks every NAR hash. There is no `require-sigs` and no
-substituter on WSL at all, because nothing fetches.
+It picks `/data/<user>` (falling back to `/code/<user>`) as the relocated `$HOME`. A wrong guess
+is cosmetic, never destructive.
 
-## opencode on old kernels
+## 3. Artifactory + transfer flow  [SETTLED -- reshaped by Nix]
 
-nixpkgs patchelfs bun, and patchelf's header sort moves `PT_GNU_STACK` first;
-`bun build --compile` recycles that slot so the highest-vaddr `PT_LOAD` comes
-first. Linux <= 6.6 (WSL2, RHEL 8/9) then never maps the BSS and SIGSEGVs in
-ld.so. `opencodeFixed` runs `nix/scripts/fix-phdr-order.py` in `postFixup`
-and fails the build if the layout is still unsafe; `tests/test-container.sh`
-asserts the shipped LOADs ascend. nixpkgs #520383 / #523047, opencode #26846.
+Fully airgapped. Build-time network reaches **internal Artifactory only**; pip resolves there.
 
-## Zed, offline
+Two independent flows, which used to be one:
 
-The remote server ships in the closure under the client's **exact full
-version string** (`nix/zed-client-version.nix`), re-pinned with the kit's
-installer: the client treats the file as present iff `<file> version` exits
-0, so nothing downloads. It sits in `home-defaults/.zed_server/`, and the
-inside links `~/.zed_server` to that directory once. The kit vendors the
-nix/toml/tombi/dockerfile/env extensions (nixd and tombi have no built-in
-adapter); `UNPACK.ps1` extracts them and drops `extensions\index.json`, which
-Zed rebuilds at startup.
+    WSL      outside -> nix-export.sh -> binary cache, sharded
+                     -> physical transfer
+                     -> nix-import.sh -> /var/cache/nix-transfer -> nixos-rebuild
 
-## VS Code, offline
+    IMAGES   outside -> build-layers.sh -> nix-layer-nvim{,-delta}.tar.gz
+                     -> physical transfer
+                     -> push-artifactory.sh -> generic-local/airgap/<ver>/
+                     -> CI fetches, builds node-layer, crane appends
 
-Remote-WSL demands a server for the client's exact commit.
-`nix/vscode-version.nix` pins release + commit; `nix/vscode-extensions.nix`
-pins each `.vsix` by explicit fetchurl. A oneshot in `wsl.nix` extracts the
-server when absent and installs the extensions with the server's own CLI;
-the LSP pins are an inside dotfile
-(`.vscode-server/data/Machine/settings.json`).
+- Git holds **text only** -- now literally true. There is no `vendor/` and no blob list: the
+  closure is computed, so the only binary artifacts are Nix build outputs.
+- `push-artifactory.sh` uses the `jf` CLI with a `curl` fallback, for the chicken-and-egg where
+  `jf` itself is not yet on the box.
+- npm-local: pi, so `pi install npm:@corp/airgap-pi` works in-cluster.
+- generic-local: the layer tarballs.
 
-**Fallback if Remote-WSL fails on the real machine:** the stock server's node
-runs through `programs.nix-ld`; if the vsce-sign libssl check defeats that,
-re-add the `nixos-vscode-server` flake input and module (it RPATH-patches the
-bundled node) and drop the oneshot's extraction. Never both.
+**What replaced the two-checksum scheme.** `manifest.toml` hashed upstream archives (*did I
+download what upstream published?*) and `CHECKSUMS.sha256` hashed extracted files (*did the
+transfer corrupt anything?*). Nix covers both, better: the flake lock pins inputs by hash, and the
+binary cache is verified per **store path** rather than per tarball -- so a damaged chunk fails on
+the path it damaged, not on "the transfer". Transfers are unsigned on purpose: they are carried by
+hand, so a key would guard against nobody. The layer tarballs keep a plain `.sha256` sidecar, because CI
+fetches them over HTTP and has no Nix to ask.
 
-## LazyVim, offline
+## 4. Base images  [editor resolved; names for you to fill in]
 
-`nix/packages/nvim-plugins.nix` builds one linkFarm: every plugin under the
-name lazy.nvim derives from its URL, plus treesitter `parser/` and
-`queries/`. The inner repo's nvim config points lazy's `dev` at it
-(`TWENTYX_NVIM_PLUGINS`, `fallback = false`), with installs, checker and
-Mason off. Its `.check` (a flake check, so every transfer runs it) runs a
-headless nvim **in the Nix sandbox** against
-`inside-seed/dotfiles/.config/nvim`, kept out of the tree so the closure
-never depends on inside text: every spec must resolve, every parser
-exist, every LSP be on PATH, `:messages` be clean. A plugin the inside wants
-is therefore a request: add it to `pluginAttrs` and to the seed's spec
-together.
+Internal flavors: `base-slim`, `base-pytorch`, `vscode-slim`, `vscode-pytorch`. Preconfigured
+with registries and CA certs, so Stage 1 builds on an internal slim base, not a public image.
 
-## Pod closure roots
+Editor is **code-server** (Coder). Consequences, already implemented:
 
-The pod closure is rooted at the profile, `home-defaults` **and the
-session-env file**. Before that, three store paths named by image ENV
-(`TWENTYX_NVIM_PLUGINS`, `LOCALE_ARCHIVE`, the wezterm terminfo in
-`TERMINFO_DIRS`) were missing from every pod image.
+With code-server deferred (item 7), the build stage no longer needs `vscode-slim` -- it only runs
+`npm install`, so `base-slim` is the cheaper `BASE_IMAGE` in `.gitlab-ci.yml`.
 
-## How this is tested without the gap
+Fill in yourself: registry hostname, repo paths, tag convention
+(`AIRGAP_BASE_REGISTRY` / `AIRGAP_BASE_TAG` in `.gitlab-ci.yml`).
 
-`tests/test-container.sh` packs a release with `pod-tar.sh`, assembles the
-image with `inside-seed/docker/` against a mock base (ubuntu:24.04 in a local
-registry), and runs it as the problematic pod: `--user 10001:0`, tmpfs PVC, a
-hostile preloader, an env-injection mount, plus a `podman exec` session like
-`runai exec`. It checks HOME relocation, closure integrity, the preload split,
-ascending `PT_LOAD`s, dotfile links and real-file precedence, git identity,
-Zed/code-server links, session.env in bash and fish, sudoers + setuid sudo,
-and layer determinism. Harness artifacts, not bugs: the sudo PAM error under
-rootless podman, and exit 139 vs 134 for a signal death.
+## 6. Arbitrary UID: ask the base-image owners for one line  [cosmetic today]
 
-`tests/test-gpu-cuda.sh` is opt-in for a GPU host (CDI setup in its header).
+Probe findings: `uid=10001 gid=0(root) groups=0(root),1001650000`, and every shell start prints
+`groups: cannot find name for group id 1001650000`.
 
-## The local store repair (2026-09)
+Standard OpenShift arbitrary-UID behaviour: the pod gets a UID and a supplementary GID that
+exist in no `/etc/passwd` or `/etc/group`.
 
-The default store had never held the layer's build-plan closure (6,034
-paths: `.drv` files, patches, sources); builds had lived in the chroot store
-`/tmp/airgap-test-store`. Three damage classes:
+**We cannot fix this from our layer.** Stage 1 exports only `/out`, so a `chmod` on `/etc` is
+discarded, and shipping our own `/etc/passwd` would clobber whatever the pytorch base defines.
 
-1. *file + row missing* (545 `.drv`s): `nix copy` skips these; needs a file
-   copy **and** row registration;
-2. *row present, file lost*: `nix copy` silently skips them, and `nix build`
-   trips later; only a file copy fixes them;
-3. *rows for paths in no store*: harmless unless referenced;
-   `sudo nix-store --verify --check-contents --repair` cleans up.
+Mitigated instead:
 
-The repair that worked:
+- `airgap-bootstrap` sets `USER`, `LOGNAME` and `HOME` in the generated fish and bash drop-ins,
+  which most tools consult before attempting a passwd lookup.
+- `airgap-entrypoint` registers the UID and names the groups **if** `/etc/passwd` and
+  `/etc/group` happen to be writable, and stays quiet if not.
+- `airgap doctor` reports whether self-registration is possible and which groups are unnamed.
 
-    nix path-info --store /tmp/airgap-test-store -r <top-drv...>
-    sudo xargs -a missing.txt -I{} cp -a "/tmp/airgap-test-store{}" /nix/store/
-    sudo nix copy --from /tmp/airgap-test-store --to daemon <top-drv...>
-    sudo nix-store --verify --check-contents --repair
+The real fix is one line in the base image, worth requesting from its owners:
 
-`/nix/store` on this machine was never read-only (remount-rw fails `EBUSY`),
-and `nix copy` as root from a chroot store leaves root-owned locks there:
-`sudo chown -R <you> /tmp/airgap-test-store`.
+```dockerfile
+RUN chgrp 0 /etc/passwd /etc/group && chmod g+w /etc/passwd /etc/group
+```
+
+This is the documented OpenShift pattern for images that must run as an arbitrary UID. Until
+then the warning is noise, not breakage.
+
+## 7. code-server  [DEFERRED -- base image's is good enough for now]
+
+The base `vscode-*` images ship code-server, and shadowing it was dropped: it was a tier-3 blob,
+a bundled-Node microarchitecture risk, and a vsix install step, all to fix a version skew nobody
+has hit yet.
+
+What was kept from that work, because it costs nothing:
+
+- `assemble.sh` records the base's ENTRYPOINT in `AIRGAP_BASE_ENTRYPOINT` and `airgap-entrypoint`
+  hands over to it. Without that, replacing ENTRYPOINT to run bootstrap would give you a
+  `vscode-*` workspace whose IDE never starts.
+- Session variables are image ENV, so code-server's task runner -- not a login shell -- still gets
+  `TERMINFO_DIRS` and `LOCALE_ARCHIVE`.
+
+If it comes back, the interesting part is smarter vsix management, not the binary. The bundled
+Node check is worth keeping in whatever does: it is the same failure that segfaulted OpenCode.
+
+## 5. First transfer should be deliberately small
+
+Superseded: 0.2 ships the nvim layer only (the editor-less flavor was dropped inside), and from
+then on as deltas.
+
+That proves transfer -> Artifactory -> node layer -> `crane append` -> pod end to end, including
+the two things that can only fail against real internal bases: `PATH` prepending on a pytorch base
+and ENTRYPOINT hand-over on a `vscode-*` one.
+
+The WSL side has its own chicken-and-egg, which is `nix build .#wsl-tarball` -- see `wsl/README.md`.
+
+## 8. 0.2 requests from inside  [IMPLEMENTED -- verify in the gap]
+
+- **open-code-review needs tool calling on the vLLM server**
+  (`--enable-auto-tool-choice` plus a Qwen tool-call parser). Without it every
+  file fails with "No tool calls parsed". The wrapper fills in OCR_LLM_* from
+  AIRGAP_LLM_*. With the ~70k window: `ocr review --max-tokens 40000 --concurrency 2`.
+- **python 3.10 / 3.11** are python-build-standalone with a sysconfig rewritten
+  from clang to `cc`. Worth a first test: `uv venv -p 3.10 && uv pip install <an sdist>`
+  on a pytorch base, which proves the base's gcc + our make + the wheelhouse together.
+- **The `-nvim` layer of 0.1 was broken offline**: it cloned lazy.nvim on first start,
+  and several plugins on every start. If 0.1 nvim was ever tried inside and
+  "hung", that was why. `scripts/check-nvim-offline.sh` now guards it.
+- **harlequin** has no Redis, Kafka or Mongo support: it is SQL only. Candidates if
+  needed: `iredis`/`redis` cli, `kcat`, `mongosh` (heavy).
+
+## 10. Release format  [SETTLED -- set by inner]
+
+Inner is the source of truth and is ahead of this repo; its layout is not visible
+from here. A release is `twentyx-store/<RELEASE>/`, see `scripts/make-release.sh`.
+Root is `/opt/twentyx`. Inner builds the repo layer (`docker/mklayer.sh`) and
+`binary-layer.tar.gz` (`scripts/build-binary-layer.sh`) itself.
+
+`d13208ce9f` (base release `20261013-d13208ce9f`) is an inner commit. Deltas assume
+it holds the closure of outside `921bfd6`. `KIND=full` is not implemented. If the
+apply fails its reference check, get the real closure lists back out.
+
+## 9. 0.2.1 requests from inside  [IMPLEMENTED -- verify in the gap]
+
+- **Pods dying with "os error 11"**: see README, "When a pod stops forking".
+  First thing to run on the next occurrence is `/opt/twentyx/libexec/airgap-pids`
+  via `runai exec`, and keep its output. The `pids.max` value, `pids.events
+  max=N`, and whether the top owner is python (thread pools), many `exec`
+  sessions (dropped connections) or zombies tell which of the three it was.
+  If cpu.max is `max` (no CPU limit set on the workload), the thread caps do
+  nothing; set `AIRGAP_THREADS` in the workload env, or ask for a CPU limit.
+- **runai CLI** is installed by hand from the control plane into `~/.local/bin`, or
+  baked in by CI via `RUNAI_CLI_URL`. Never transferred.
+- **ffmpeg/ffprobe**: `ffmpeg-headless` 9.0.1, every codec, about 190 MB of closure.
+  CLI only; torchaudio/torchvision keep the base image's libav*.

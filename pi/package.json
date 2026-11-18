@@ -1,0 +1,17 @@
+{
+  "name": "@corp/airgap-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "pi resources for the airgapped RunAI workspace: preload handling, subagents, token-frugal defaults",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

@@ -1,12 +1,9 @@
 # Git holds TEXT ONLY. Everything binary is computed by Nix, not committed:
 # the closure IS the manifest, so there is no blob list to keep in sync.
 dist/
-build/
+twentyx-store/
 result
 result-*
 node_modules/
 *.log
 .DS_Store
-
-# A CA bundle never lands here; it lives in the inner repo's env/.
-/ca-bundle.crt

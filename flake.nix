@@ -7,34 +7,38 @@
     # physical transfer, not a download.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     nixos-wsl = {
       url = "github:nix-community/NixOS-WSL";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Vendored into the store by nix/profile.nix (no flake.nix upstream).
-    # Pinned to the same revision the owner uses; the agents in the gap lose
-    # every workflow without them.
-    matt-skills = {
-      url = "github:mattpocock/skills";
-      flake = false;
-    };
+    # VS Code Server ships a prebuilt node that hardcodes
+    # /lib64/ld-linux-x86-64.so.2, which does not exist on NixOS. Without this
+    # module, connecting VS Code (Windows) to NixOS-WSL hangs forever on
+    # "Setting up VS Code Server" — the exact thing that works today only
+    # because Fedora is FHS.
+    # No `follows`: this flake declares no nixpkgs input, and overriding a
+    # non-existent one is a warning on every single evaluation.
+    vscode-server.url = "github:nix-community/nixos-vscode-server";
 
-    # workmux: package, tmux integration and the opencode status plugin all
-    # come from this ONE revision, so the plugin can never skew from the
-    # binary. nixpkgs follows, so no second nixpkgs closure.
-    workmux = {
-      url = "github:raine/workmux";
+    lazyvim = {
+      url = "github:pfassina/lazyvim-nix/v16.0.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
   };
 
   outputs =
     {
       self,
       nixpkgs,
+      home-manager,
       nixos-wsl,
+      vscode-server,
       ...
     }@inputs:
     let
@@ -44,64 +48,82 @@
         config.allowUnfree = true;
       };
 
-      # One profile builder for both targets. `wsl` only flips WSL-only
-      # packages and locale vars; the pod layer takes the same attrs.
-      mkProfile =
-        wsl:
-        import ./nix/profile.nix {
-          inherit pkgs inputs wsl;
-          lib = nixpkgs.lib;
+      # The username differs per target: `gl` in WSL, resolved at runtime from
+      # the RunAI workspace name in a pod. Only the WSL side needs it at eval.
+      username = "gl";
+
+      runaiHome = home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        extraSpecialArgs = {
+          inherit inputs;
+          username = "jensen";
         };
+        modules = [
+          ./nix/modules/home.nix
+          {
+            airgap.target = "runai";
+            home.username = "jensen";
+            # Replaced at runtime by airgap-bootstrap once the workspace name
+            # resolves; at eval time it only has to be *a* path.
+            home.homeDirectory = "/home/jensen";
+          }
+        ];
+      };
     in
     {
-      # ── WSL: a full NixOS system ────────────────────────────────────────
+      # ── WSL: a full NixOS system, rebuilt offline ──────────────────────
       nixosConfigurations.wsl = nixpkgs.lib.nixosSystem {
         inherit system;
-        # nix/hosts/wsl.nix imports nix/profile.nix, which needs the flake
-        # inputs (matt-skills, workmux).
-        specialArgs = { inherit inputs; };
+        specialArgs = { inherit inputs username; };
         modules = [
           nixos-wsl.nixosModules.default
+          vscode-server.nixosModules.default
+          home-manager.nixosModules.home-manager
           ./nix/hosts/wsl.nix
+          {
+            home-manager = {
+              useGlobalPkgs = true;
+              useUserPackages = true;
+              backupFileExtension = "hm-bak";
+              extraSpecialArgs = { inherit inputs username; };
+              users.${username} = {
+                imports = [ ./nix/modules/home.nix ];
+                airgap.target = "wsl";
+              };
+            };
+          }
         ];
       };
 
-      # ── what scripts/transfer builds, here AND at base.rev ───────────────
-      # The attribute names are the contract between a transfer and its base:
-      # the script builds both from `git+file:.?rev=<base.rev>`, so renaming
-      # one needs a --rebase. Nothing below ever runs Nix in a pod.
+      # ── RunAI: evaluated HERE, never inside. Nothing below ever runs Nix
+      # in a pod; we extract the built tree and ship it as an OCI layer.
+      #
+      # One flavor, with the editor. A second, editor-less layer existed to
+      # save the ~250 MB nvim costs, but every workspace inside ended up on
+      # the nvim one, and two layers meant two deltas per transfer. The
+      # `-nvim` names stay: they are what is already in Artifactory, and the
+      # image tags people pull.
+      homeConfigurations.runai-nvim = runaiHome;
+
       packages.${system} = {
-        # The pod's /opt/twentyx tree + closure list; scripts/pod-tar.sh packs
-        # it with the store paths as an OCI layer.
-        pod-opt = pkgs.callPackage ./nix/runai/layer.nix (mkProfile false);
+        runai-layer-nvim = pkgs.callPackage ./nix/runai/layer.nix {
+          hm = self.homeConfigurations.runai-nvim;
+        };
+        default = self.packages.${system}.runai-layer-nvim;
 
-        # The WSL system; its closure ships as a NAR (install/apply.sh).
-        wsl-system = self.nixosConfigurations.wsl.config.system.build.toplevel;
-
-        # ── the very first install ───────────────────────────────────────
-        # The rootfs tarball `wsl --import` takes, built from base.rev so a
-        # fresh machine has the base every delta is computed against. The
-        # upstream builder, run under sudo:
-        #   sudo ./result/bin/nixos-wsl-tarball-builder nixos-wsl.tar.gz
+        # ── the very first transfer ────────────────────────────────────────
+        # Chicken and egg: nix-import.sh needs a NixOS-WSL machine, and there
+        # is not one yet. This builds the rootfs tarball that `wsl --import`
+        # takes, so the airgapped laptop can be created from a Windows shell
+        # with no Nix anywhere on it.
+        #
+        #   nix build .#wsl-tarball
+        #   sudo ./result/bin/nixos-wsl-tarball-builder     # -> nixos.wsl
+        #
+        # It runs as root because it assembles a filesystem image; it does not
+        # touch the running system.
         wsl-tarball = self.nixosConfigurations.wsl.config.system.build.tarballBuilder;
-
-        # ── the Windows-side half of the first install ──────────────────
-        # WSL2 MSI + the Zed, VS Code and WezTerm installers, shipped as ONE
-        # tar.gz. See nix/packages/windows-kit.nix for the re-pin procedure.
-        windows-kit =
-          (pkgs.callPackage ./nix/packages/windows-kit.nix {
-            zedVersion = pkgs.zed-editor.version;
-          }).kitTarball;
-
-        default = self.packages.${system}.pod-opt;
       };
-
-      # Built by `nix flake check`, which every transfer runs first.
-      checks.${system}.nvim-offline =
-        (import ./nix/packages/nvim-plugins.nix {
-          inherit pkgs;
-          lib = nixpkgs.lib;
-        }).check;
 
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
@@ -114,7 +136,6 @@
           go-containerregistry
           skopeo
           dive
-          p7zip
           jq
         ];
       };

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Append the layers onto each internal base, registry-side.
+#
+#   ./docker/assemble.sh <tag-prefix>
+#
+# crane fetches only each base's manifest and config; it never pulls or unpacks
+# the base layers. The 30GB pytorch bases therefore cost the same as the slim
+# ones, which is what keeps the build pod inside its ephemeral storage budget.
+#
+# Three layers, appended in ascending order of how often they change, so a
+# config edit re-uploads 72KB and cross-mounts the rest:
+#
+#   1. nix-layer-nvim the whole toolchain closure     monthly    ~634MB
+#   2. node-layer     pi and its node_modules         monthly    ~40MB
+#   3. repo-layer     dispatcher, libexec, configs    hourly     ~72KB
+#
+# The nix layer may be followed by a DELTA (scripts/build-layers.sh --since):
+# only the store paths the previous transfer lacked, plus a complete
+# /opt/twentyx. It is appended directly above the layer it was computed
+# against, which therefore stays in Artifactory -- the delta alone is not a
+# working image.
+#
+# One flavor, editor included. Its tags keep the `-nvim` suffix from when
+# there was an editor-less one beside it: those are the tags people pull.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+TAG_PREFIX="${1:?usage: assemble.sh <tag-prefix>}"
+
+REGISTRY="${AIRGAP_REGISTRY:?set AIRGAP_REGISTRY, e.g. quay.internal/ai}"
+BASE_REGISTRY="${AIRGAP_BASE_REGISTRY:-$REGISTRY}"
+VARIANTS="${AIRGAP_VARIANTS:-base-slim base-pytorch vscode-slim vscode-pytorch}"
+BASE_TAG="${AIRGAP_BASE_TAG:-latest}"
+
+LAYER_NIX="${AIRGAP_LAYER_NIX:-dist/nix-layer-nvim.tar.gz}"
+# Optional. Present only when this transfer was a delta.
+LAYER_NIX_DELTA="${AIRGAP_LAYER_NIX_DELTA:-dist/nix-layer-nvim-delta.tar.gz}"
+LAYER_NODE="${AIRGAP_LAYER_NODE:-dist/node-layer.tar}"
+LAYER_REPO="${AIRGAP_LAYER_REPO:-dist/repo-layer.tar}"
+# Optional: a runai CLI binary, fetched from the internal control plane by CI
+# (RUNAI_CLI_URL), so it always matches the cluster. Becomes /usr/local/bin/runai.
+RUNAI_CLI="${AIRGAP_RUNAI_CLI:-dist/runai}"
+
+command -v crane >/dev/null || { echo "crane not found (nix shell .# gives you one)" >&2; exit 1; }
+command -v jq    >/dev/null || { echo "jq not found" >&2; exit 1; }
+
+for f in "$LAYER_NIX" "$LAYER_NODE" "$LAYER_REPO"; do
+    [ -f "$f" ] || { echo "missing layer: $f" >&2; exit 1; }
+done
+
+EXTRALAYERS=()
+if [ -f "$RUNAI_CLI" ]; then
+    RUNAI_STAGE="$(mktemp -d)"
+    trap 'rm -rf "$RUNAI_STAGE"' EXIT
+    mkdir -p "$RUNAI_STAGE/usr/local/bin"
+    install -m 0755 "$RUNAI_CLI" "$RUNAI_STAGE/usr/local/bin/runai"
+    tar --owner=0 --group=0 --sort=name --mtime='@1' \
+        -C "$RUNAI_STAGE" -cf dist/runai-layer.tar usr
+    EXTRALAYERS+=(-f dist/runai-layer.tar)
+fi
+
+# The topmost nix layer owns /opt/twentyx, session-env included.
+NIXLAYERS=(-f "$LAYER_NIX")
+TOPLAYER="$LAYER_NIX"
+if [ -f "$LAYER_NIX_DELTA" ]; then
+    NIXLAYERS+=(-f "$LAYER_NIX_DELTA")
+    TOPLAYER="$LAYER_NIX_DELTA"
+fi
+
+# ── PATH must be PREPENDED, never replaced ────────────────────────────────
+# The pytorch bases put conda/site-packages directories on PATH, and torch does
+# not work without them. `crane mutate --env` overwrites, and there is no shell
+# at image-config level to expand $PATH -- so read the base's own value and
+# build the new one from it. `crane config` fetches the config blob only, which
+# is a few KB.
+base_path() {
+    crane config "$1" 2>/dev/null \
+        | jq -r '.config.Env[]? | select(startswith("PATH=")) | sub("^PATH=";"")' \
+        | head -1
+}
+
+# ── the Nix session variables become image ENV ────────────────────────────
+# A shell rc only reaches processes that source it. TERMINFO_DIRS and
+# LOCALE_ARCHIVE are needed by anything that renders text, including
+# `runai exec -- cmd` and code-server's task runner, neither of which is a
+# login shell. So they belong in the image config, not just in fish.
+#
+# --occurrence=1 makes tar stop at the first match instead of streaming the
+# whole 400MB archive; the file is in the first member because layer.nix tars
+# opt/ before appending the store.
+session_env_args() {
+    local layer="$1" line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf -- '--env\n%s\n' "$line"
+    done < <(tar -xzOf "$layer" --occurrence=1 opt/twentyx/session-env 2>/dev/null || true)
+}
+
+mapfile -t ENVARGS < <(session_env_args "$TOPLAYER")
+[ "${#ENVARGS[@]}" -gt 0 ] || echo "  warn: no session-env in $TOPLAYER" >&2
+
+echo "layers:"
+for f in "$LAYER_NIX" "$LAYER_NIX_DELTA" "$LAYER_NODE" "$LAYER_REPO" dist/runai-layer.tar; do
+    [ -f "$f" ] && printf '  %-8s %s\n' "$(du -h "$f" | cut -f1)" "$f"
+done
+
+for variant in $VARIANTS; do
+    base="${BASE_REGISTRY}/${variant}:${BASE_TAG}"
+
+    BASEPATH="$(base_path "$base")"
+    if [ -z "$BASEPATH" ]; then
+        # No PATH in the base config means the runtime falls back to the
+        # kernel default. Reproduce it rather than shipping a PATH that
+        # silently drops /sbin.
+        echo "  warn: $base declares no PATH; using a conservative default" >&2
+        BASEPATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    fi
+    NEWPATH="/opt/twentyx/bin:/opt/twentyx/node-globals/bin:/opt/twentyx/profile/bin:${BASEPATH}"
+
+    # Same reasoning for the entrypoint: the vscode-* bases launch code-server
+    # from theirs. airgap-entrypoint bootstraps and then hands over, so record
+    # what it should hand over TO instead of discarding it.
+    BASE_ENTRY="$(crane config "$base" 2>/dev/null \
+        | jq -r '((.config.Entrypoint // []) + (.config.Cmd // [])) | join(" ")')"
+
+    dest="${REGISTRY}/workspace:${TAG_PREFIX}-${variant}-nvim"
+
+    echo "==> ${variant}"
+    echo "    base ${base}"
+
+    crane append -b "$base" -t "$dest" \
+        "${NIXLAYERS[@]}" -f "$LAYER_NODE" "${EXTRALAYERS[@]}" -f "$LAYER_REPO" >/dev/null
+
+    # Image config only; no layer traffic.
+    crane mutate "$dest" -t "$dest" \
+        "${ENVARGS[@]}" \
+        --env AIRGAP_ROOT=/opt/twentyx \
+        --env "PATH=${NEWPATH}" \
+        --env "AIRGAP_BASE_ENTRYPOINT=${BASE_ENTRY}" \
+        --entrypoint /opt/twentyx/libexec/airgap-entrypoint \
+        --label "org.opencontainers.image.revision=${TAG_PREFIX}" \
+        --label "airgap.variant=${variant}" \
+        --label "airgap.flavor=nvim" >/dev/null
+
+    echo "    -> ${dest}"
+done
+
+echo "done: $(echo "$VARIANTS" | wc -w) variant(s)"

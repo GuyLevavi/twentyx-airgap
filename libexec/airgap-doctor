@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Summary: diagnose the environment -- layers, closure, terminal, endpoint
+#
+# Run this first when something is wrong, and paste its output into a bug
+# report. Everything is read-only and non-interactive; it never prompts, never
+# sudos, and never touches the network except to probe the model endpoint.
+set -uo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+# shellcheck source=libexec/airgap-limits.sh
+. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
+
+# $HOME is only correct once bootstrap's shell drop-in has run. Anything
+# launched outside an interactive login -- `runai exec -- airgap doctor`, a
+# cron, code-server's task runner -- still sees the pod's original /home/jensen
+# and would report on a directory nobody uses. Resolve it the same way
+# bootstrap does, so all three agree by construction.
+HOME="$(airgap_home)"
+export HOME
+
+fails=0
+check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fails=$((fails+1)); fi; }
+kv()    { printf '  %-22s %s\n' "$1" "$2"; }
+
+# ── layers ────────────────────────────────────────────────────────────────
+say "layers"
+kv "AIRGAP_ROOT" "$AIRGAP_ROOT"
+kv "HOME"        "$HOME"
+# No subshell, so the provenance variables set as a side effect survive.
+airgap_user >/dev/null
+kv "user" "$AIRGAP_USER_RESOLVED (uid $(id -u), gid $(id -g))"
+kv "identity via" "$AIRGAP_USER_SOURCE"
+case "$AIRGAP_USER_SOURCE" in
+    hostname*)
+        warn "identity came from the workspace name, which changes between sessions."
+        warn "it is also wrong for any username containing a dash."
+        warn "pin it: set airgap.git.userEmail in Nix, or export AIRGAP_USER=<you>" ;;
+esac
+kv "version" "$(cat "$AIRGAP_ROOT/VERSION" 2>/dev/null || echo dev)"
+
+if airgap_home_is_durable; then
+    ok "HOME is on the PVC -- state survives a restart"
+else
+    bad "HOME is EPHEMERAL: no writable /data or /code."
+    bad "shell history, agent sessions and nvim state will die with the pod."
+    fails=$((fails+1))
+fi
+check "\$HOME is writable" "[ -w '$HOME' ]"
+
+# ── the Nix layer ─────────────────────────────────────────────────────────
+# This is the check that matters most: the layer is several hundred megabytes
+# of content-addressed store paths, and a truncated transfer or a botched
+# `crane append` produces binaries that vanish rather than binaries that error.
+say "nix closure"
+PROFILE="$AIRGAP_ROOT/profile"
+DEFAULTS="$(readlink -f "$AIRGAP_ROOT/home-defaults" 2>/dev/null || true)"
+
+if [ -d "$PROFILE/bin" ]; then
+    ok "profile $(readlink -f "$PROFILE")"
+    kv "binaries" "$(find -L "$PROFILE/bin" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+else
+    bad "no $PROFILE/bin -- the Nix layer is missing from this image"
+    fails=$((fails+1))
+fi
+
+if [ -f "$AIRGAP_ROOT/store-paths" ]; then
+    total=0; missing=0
+    while IFS= read -r p; do
+        total=$((total + 1))
+        [ -e "$p" ] || { missing=$((missing + 1)); [ "$missing" -le 3 ] && bad "absent: $p"; }
+    done < "$AIRGAP_ROOT/store-paths"
+    if [ "$missing" -eq 0 ]; then
+        ok "all $total store paths present"
+    else
+        bad "$missing of $total store paths absent -- the layer did not arrive intact"
+        fails=$((fails+1))
+    fi
+else
+    warn "no $AIRGAP_ROOT/store-paths; cannot verify the closure"
+fi
+
+# ── defaults actually installed ───────────────────────────────────────────
+# A silent no-op here is a real failure mode we have already hit once: the
+# defaults tree is a symlink into the store, and `find` does not descend into a
+# symlink given as its starting point -- so the install loop matched one entry,
+# wrote nothing, and exited 0. Count both sides rather than trusting it.
+say "defaults"
+if [ -n "$DEFAULTS" ] && [ -d "$DEFAULTS" ]; then
+    want="$(find "$DEFAULTS" \( -type f -o -type l \) 2>/dev/null | wc -l)"
+    have="$(find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' 2>/dev/null | wc -l)"
+    kv "packaged" "$want"
+    kv "linked into \$HOME" "$have"
+    if [ "$want" -gt 0 ] && [ "$have" -eq 0 ]; then
+        bad "nothing was linked -- run: airgap bootstrap"
+        fails=$((fails+1))
+    elif [ "$have" -lt "$((want / 2))" ]; then
+        warn "fewer links than defaults; some may be overridden by real files (expected) --"
+        warn "check with: airgap refresh list"
+    else
+        ok "defaults are linked"
+    fi
+
+    # Staleness. After an image update the store paths change, and any link
+    # bootstrap did not rewrite now points at a path that no longer exists.
+    # These are silent: the file simply appears to be missing.
+    stale="$(find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | wc -l)"
+    if [ "$stale" -gt 0 ]; then
+        bad "$stale dangling link(s) into /nix/store -- stale from a previous image"
+        find "$HOME" -maxdepth 4 -type l -lname '/nix/store/*' ! -exec test -e {} \; -print 2>/dev/null | head -3 | sed 's/^/       /'
+        bad "fix with: airgap bootstrap"
+        fails=$((fails+1))
+    else
+        ok "no stale links from a previous image"
+    fi
+else
+    bad "no $AIRGAP_ROOT/home-defaults -- the Nix layer is incomplete"
+    fails=$((fails+1))
+fi
+
+# home-manager bakes its eval-time home into some generated values. Bootstrap
+# rewrites them; if it did not, things like STARSHIP_CONFIG point at a
+# directory that does not exist and fail silently.
+# Check the outcome rather than the mechanism: are there still variables in
+# THIS environment pointing at the eval-time home? That is the symptom, and it
+# is what actually breaks (starship silently loses its config, completions
+# silently never load).
+EVAL_HOME="$(cat "$AIRGAP_ROOT/eval-home" 2>/dev/null || true)"
+if [ -n "$EVAL_HOME" ] && [ "$EVAL_HOME" != "$HOME" ]; then
+    stragglers=""
+    while IFS= read -r v; do
+        case "${!v-}" in *"$EVAL_HOME"*) stragglers="$stragglers $v" ;; esac
+    done < <(compgen -e)
+    if [ -z "$stragglers" ]; then
+        ok "home relocated from $EVAL_HOME; no stale paths in the environment"
+    else
+        bad "variables still point at $EVAL_HOME:$stragglers"
+        bad "start a new shell; if it persists, the rehome hook did not run"
+        fails=$((fails+1))
+    fi
+fi
+
+# ── tools ─────────────────────────────────────────────────────────────────
+say "tools"
+for t in fish rg fd bat eza fzf zoxide starship atuin direnv tmux git jq node; do
+    if command -v "$t" >/dev/null 2>&1; then
+        ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
+    else
+        bad "$(printf '%-9s missing' "$t")"; fails=$((fails+1))
+    fi
+done
+# Optional by flavor: absence is a fact, not a failure.
+for t in nvim pi nvtop ffmpeg ffprobe; do
+    if command -v "$t" >/dev/null 2>&1; then ok "$(printf '%-9s %s' "$t" "$(command -v "$t")")"
+    else warn "$t not in this image flavor"; fi
+done
+# Installed by hand from the control plane, never shipped. See README.
+if command -v runai >/dev/null 2>&1; then
+    ok "$(printf '%-9s %s' runai "$(command -v runai)")"
+else
+    warn "runai CLI not installed -- see README, \"The runai CLI\""
+fi
+
+# ── limits ────────────────────────────────────────────────────────────────
+# The pod's PID budget, which threads share with processes. Exhausting it is
+# what "Resource temporarily unavailable (os error 11)" means; airgap pids
+# shows what is holding it.
+if [ -x "$AIRGAP_ROOT/libexec/airgap-pids" ]; then
+    "$AIRGAP_ROOT/libexec/airgap-pids" --summary | sed 1d
+    if airgap_pids_usage 2>/dev/null && [ $(( AIRGAP_PIDS_CUR * 4 )) -ge $(( AIRGAP_PIDS_MAX * 3 )) ]; then
+        bad "$AIRGAP_PIDS_CUR of $AIRGAP_PIDS_MAX PIDs in use -- run: airgap pids"
+        fails=$((fails+1))
+    fi
+fi
+
+# ── terminal ──────────────────────────────────────────────────────────────
+# The difference between a working headless nvim and a monochrome one that
+# mangles every glyph. Nothing in a foreign container sets these for us.
+say "terminal"
+kv "TERM"          "${TERM:-unset}"
+kv "COLORTERM"     "${COLORTERM:-unset (expect truecolor)}"
+kv "LANG"          "${LANG:-unset}"
+kv "LOCALE_ARCHIVE" "${LOCALE_ARCHIVE:-unset}"
+if [ -t 1 ]; then ok "stdout is a TTY"
+else warn "not a TTY -- use 'runai exec -it', not 'runai attach'"; fi
+if infocmp "${TERM:-dumb}" >/dev/null 2>&1; then
+    ok "terminfo entry for ${TERM:-dumb} resolves"
+else
+    bad "no terminfo for '${TERM:-dumb}' -- tmux will refuse to start"
+    kv "TERMINFO_DIRS" "${TERMINFO_DIRS:-unset}"
+    fails=$((fails+1))
+fi
+if [ -n "${LOCALE_ARCHIVE:-}" ] && [ ! -e "${LOCALE_ARCHIVE}" ]; then
+    bad "LOCALE_ARCHIVE points at a path that does not exist"; fails=$((fails+1))
+fi
+if [ -n "${TMUX:-}" ]; then
+    # OSC 52 is the only route from a yank in the pod to the Windows clipboard.
+    for opt in allow-passthrough set-clipboard; do
+        v="$(tmux show -gv "$opt" 2>/dev/null)"
+        case "$v" in on) ok "tmux $opt=on" ;;
+                     *)  bad "tmux $opt=$v -- clipboard yanks will not reach Windows"
+                         fails=$((fails+1)) ;;
+        esac
+    done
+else
+    warn "not inside tmux; a dropped exec session will kill your work"
+fi
+
+# ── gpu / preloaders ──────────────────────────────────────────────────────
+say "gpu / preloaders"
+kv "LD_PRELOAD"             "${LD_PRELOAD:-}"
+kv "AIRGAP_ORIG_LD_PRELOAD" "${AIRGAP_ORIG_LD_PRELOAD:-}"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    ok "nvidia-smi: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+else
+    warn "nvidia-smi not present (fine on a slim/CPU workspace)"
+fi
+# The interesting failure: CUDA works in the shell but not under the agent.
+if command -v python >/dev/null 2>&1; then
+    kv "torch.cuda (shell)" \
+        "$(python -c 'import torch;print(torch.cuda.is_available())' 2>/dev/null || echo 'n/a')"
+    kv "torch.cuda (agent)" \
+        "$(LD_PRELOAD="${AIRGAP_ORIG_LD_PRELOAD:-${LD_PRELOAD:-}}" \
+           python -c 'import torch;print(torch.cuda.is_available())' 2>/dev/null || echo 'n/a')"
+fi
+
+# ── model endpoint ────────────────────────────────────────────────────────
+say "model endpoint"
+BASE="${AIRGAP_LLM_BASE_URL:-}"
+if [ -z "$BASE" ]; then
+    warn "AIRGAP_LLM_BASE_URL unset -- pi will not find the vLLM endpoint"
+    fails=$((fails+1))
+else
+    kv "base url" "$BASE"
+    kv "token"    "$([ -n "${AIRGAP_LLM_API_KEY:-}" ] && echo set || echo MISSING)"
+    if curl -sf --max-time 5 "$BASE/models" >/dev/null 2>&1; then
+        ok "reachable: $(curl -sf --max-time 5 "$BASE/models" | jq -r '.data[].id' 2>/dev/null | paste -sd, -)"
+    else
+        bad "cannot reach $BASE/models"; fails=$((fails+1))
+    fi
+fi
+
+# ── network posture ───────────────────────────────────────────────────────
+say "network posture (airgapped: these SHOULD fail)"
+for h in registry.npmjs.org github.com pypi.org; do
+    if curl -sf --max-time 3 "https://$h" >/dev/null 2>&1; then
+        warn "$h is REACHABLE -- not as airgapped as assumed"
+    else
+        ok "$h unreachable (expected)"
+    fi
+done
+
+echo
+[ "$fails" -eq 0 ] && say "all checks passed" || say "$fails check(s) failed"
+exit 0

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Summary: container entrypoint -- materialize $HOME, then exec the payload
+#
+# $HOME is relocated onto the PVC by airgap-bootstrap, so what survives a
+# restart is everything rather than a hand-maintained list. Two layers:
+#
+#   $AIRGAP_ROOT/home-defaults   packaged defaults, symlinks into /nix/store
+#   $HOME (on the PVC)           real files, which are user overrides
+#
+# That is what makes `airgap refresh` a well-defined operation: a symlink is
+# ours, a real file is yours, and refreshing swaps one back for the other.
+set -euo pipefail
+
+AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
+
+# PID 1 must be an init. Whatever the base would have run there -- code-server's
+# node, a shell, `sleep infinity` -- never reaps the children it did not start,
+# so every process orphaned by a dropped `runai exec` session ends as a zombie
+# that keeps its PID until the pod dies. Hours of that, plus thread pools, is
+# how pids.max runs out and nothing can fork any more (see airgap pids).
+#
+# So re-exec this very script under tini, once. tini reaps, forwards signals
+# to the payload's process group (-g), and exits with its status.
+if [ "$$" -eq 1 ] && [ -z "${AIRGAP_UNDER_INIT:-}" ]; then
+    for tini in "$AIRGAP_ROOT/profile/bin/tini" "$(command -v tini 2>/dev/null)"; do
+        if [ -x "$tini" ]; then
+            export AIRGAP_UNDER_INIT=1
+            exec "$tini" -g -- "$0" "$@"
+        fi
+    done
+    unset tini
+fi
+
+. "$AIRGAP_ROOT/libexec/airgap-common.sh"
+
+# Before anything long-lived starts, so code-server, its terminals and
+# everything else under PID 1 inherit thread pools sized to the CPU quota
+# rather than to the host. `runai exec` shells get the same from bash's rc.
+# shellcheck source=libexec/airgap-limits.sh
+. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
+
+"$AIRGAP_ROOT/libexec/airgap-bootstrap" || warn "bootstrap incomplete, continuing"
+
+# OpenShift runs us under an arbitrary UID (observed: uid 10001, gid 0, plus a
+# nameless supplementary group such as 1001650000) with no /etc/passwd or
+# /etc/group entry. Symptoms: `groups: cannot find name for group id 1001650000`
+# on every shell start, and git/ssh/starship failing to resolve the user.
+#
+# The image must therefore make /etc/passwd and /etc/group group-writable at
+# build time (gid 0 is the only group guaranteed at runtime); see
+# Containerfile.toolchain. If it did not, we degrade quietly rather than fail.
+UID_NOW="$(id -u)"
+if ! getent passwd "$UID_NOW" >/dev/null 2>&1 && [ -w /etc/passwd ]; then
+    printf '%s:x:%s:0:workspace user:%s:/bin/bash\n' \
+        "${USERNAME:-jensen}" "$UID_NOW" "$HOME" >> /etc/passwd
+fi
+
+# Name every supplementary group we hold, which is what silences
+# `groups: cannot find name for group id ...` at shell start.
+if [ -w /etc/group ]; then
+    for g in $(id -G 2>/dev/null); do
+        getent group "$g" >/dev/null 2>&1 && continue
+        printf 'workspace-%s:x:%s:\n' "$g" "$g" >> /etc/group
+    done
+fi
+
+# Hand over. With arguments (`runai exec ... -- cmd`) we run them; without,
+# we defer to whatever the BASE image was going to run.
+#
+# That fallback is why assemble.sh records AIRGAP_BASE_ENTRYPOINT: replacing
+# ENTRYPOINT is how this script gets to run at all, but on the vscode-* bases
+# the thing it replaced was the code-server launcher. Discarding it would give
+# you a workspace whose IDE never starts.
+if [ "$#" -ne 0 ]; then
+    exec "$@"
+fi
+
+if [ -n "${AIRGAP_BASE_ENTRYPOINT:-}" ]; then
+    # Deliberately word-split: the value is a command line captured from the
+    # image config, not a filename.
+    # shellcheck disable=SC2086
+    exec ${AIRGAP_BASE_ENTRYPOINT}
+fi
+
+exec /bin/bash -l
