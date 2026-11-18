@@ -4,6 +4,9 @@
 #   airgap pids              limits, top thread owners, sessions, zombies
 #   airgap pids --summary    the limits only (airgap doctor uses this)
 #   airgap pids --kill SID   TERM then KILL every process in session SID
+#   airgap pids --watch      log a line every 5 min to ~/.local/state/twentyx/
+#                            pids.log, plus a full report whenever forks start
+#                            failing; the entrypoint and shells start one
 #
 # Threads count against pids.max exactly like processes do. Once the budget is
 # spent, nothing can fork or start a thread -- fish, starship, atuin and most
@@ -21,7 +24,7 @@ set -uo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 # shellcheck source=libexec/airgap-limits.sh
-. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
+AIRGAP_PIN=0 . "$AIRGAP_ROOT/libexec/airgap-limits.sh"
 
 TOP=12
 HZ=100   # USER_HZ; asking getconf would cost a fork
@@ -107,6 +110,8 @@ UPTIME=0
 
 scan() {
     local d line rest comm pid state ppid sid tty thr start _
+    BYCOMM_T=() BYCOMM_N=() SESS_T=() SESS_N=() SESS_LEAD=() ZPARENT=()
+    ZOMBIES=0 TOTAL_T=0
     read -r UPTIME _ < /proc/uptime; UPTIME="${UPTIME%.*}"
     for d in /proc/[0-9]*; do
         pid="${d#/proc/}"
@@ -233,8 +238,77 @@ kill_session() {
     kill -KILL "${pids[@]}" 2>/dev/null
 }
 
+# One "key=value ..." line of the pids/memory counters -> LINE.
+counters() {
+    local k v ev=0 oom=0 mem=?
+    LINE=""
+    if airgap_pids_usage; then LINE+="pids=$AIRGAP_PIDS_CUR/$AIRGAP_PIDS_MAX"
+    else LINE+="pids=${AIRGAP_PIDS_CUR:-?}/max"; fi
+    if cg pids.events pids/pids.events; then
+        while read -r k v; do [ "$k" = max ] && ev="$v"; done < "$CGF"
+    fi
+    REFUSED="$ev"
+    [ -r /sys/fs/cgroup/memory.current ] && { read -r mem < /sys/fs/cgroup/memory.current; mem="$(( mem >> 20 ))M"; }
+    if [ -r /sys/fs/cgroup/memory.events ]; then
+        while read -r k v; do [ "$k" = oom_kill ] && oom="$v"; done < /sys/fs/cgroup/memory.events
+    fi
+    LINE+=" refused=$ev mem=$mem oom_kill=$oom"
+}
+
+# Background logger: the next time a pod degrades, the history of how it got
+# there is on the PVC, even if nothing can be run by then. Fork-free per tick.
+watch() {
+    local interval="${AIRGAP_PIDS_WATCH_INTERVAL:-300}" dir pidf old sleepfd
+    local last_refused=-1 last_full=0 now s exec_n exec_t k top cmd=()
+    . "$AIRGAP_ROOT/libexec/airgap-common.sh"
+    dir="$(airgap_home)/.local/state/twentyx"
+    mkdir -p "$dir" || exit 1
+    pidf="$dir/pids-watch.pid"
+    if read -r old 2>/dev/null < "$pidf" && [ "$old" != "$$" ] \
+        && mapfile -d "" cmd 2>/dev/null < "/proc/$old/cmdline" \
+        && [[ "${cmd[*]}" == *airgap-pids*--watch* ]]; then
+        exit 0
+    fi
+    echo "$$" > "$pidf"
+    # No live watcher means a new pod: keep the last one's log, which is the
+    # run that degraded.
+    local f
+    for f in pids.log pids-full.log; do
+        [ -f "$dir/$f" ] && mv -f "$dir/$f" "$dir/$f.1"
+    done
+    trap '' HUP
+    exec {sleepfd}<> <(:)
+    printf '%(%F %T)T start pid=%s uid=%s ulimit_u=%s\n' -1 "$$" "$UID" "$(ulimit -u)" >> "$dir/pids.log"
+    while :; do
+        counters
+        scan
+        exec_n=0 exec_t=0
+        for s in "${!SESS_LEAD[@]}"; do
+            IFS='|' read -r _ k _ <<< "${SESS_LEAD[$s]}"
+            [ "$k" = 0 ] || continue
+            exec_n=$(( exec_n + 1 )) exec_t=$(( exec_t + SESS_T[$s] ))
+        done
+        TOP=3; top_of BYCOMM_T; top=""
+        for k in "${TOPKEYS[@]}"; do top+="$k:${BYCOMM_T[$k]} "; done
+        printf -v now '%(%s)T' -1
+        printf '%(%F %T)T %s threads=%s zombies=%s exec_sessions=%s/%st top=%s\n' -1 \
+            "$LINE" "$TOTAL_T" "$ZOMBIES" "$exec_n" "$exec_t" "${top% }" >> "$dir/pids.log"
+        # Full report when forks start failing, or at 75%, at most every 30 min.
+        if { [ "$last_refused" -ge 0 ] && [ "$REFUSED" -gt "$last_refused" ]; } \
+            || { airgap_pids_usage && (( AIRGAP_PIDS_CUR * 4 >= AIRGAP_PIDS_MAX * 3 )); }; then
+            if (( now - last_full >= 1800 )); then
+                last_full=$now; TOP=12
+                { printf '\n===== %(%F %T)T =====\n' -1; summary; report; } >> "$dir/pids-full.log" 2>&1
+            fi
+        fi
+        last_refused="$REFUSED"
+        read -r -t "$interval" -u "$sleepfd" _ || :
+    done
+}
+
 case "${1:-}" in
     --summary) summary ;;
+    --watch)   watch ;;
     --kill)    kill_session "${2:?usage: airgap pids --kill <sid>}" ;;
     ""|--all)  summary; report ;;
     -h|--help) sed -n '3,19p' "$0" ;;
