@@ -130,8 +130,10 @@ map them onto it. Paths are relative to `$HOME`, except `session-env`.
 | `.config/nvim/lua/config/{options,autocmds}.lua` | New: yank-only clipboard, basedpyright |
 | `.config/nvim/lua/plugins/{completion,lsp,lualine,markdown,nix-pins}.lua` | New |
 | `.config/nvim/lua/plugins/_lazyvim_nix_default.lua` | Removed: delete it if inner has it |
+| `.config/nvim/lua/plugins/treesitter.lua` | New: parsers from the store, see below |
 | `.config/tmux/tmux.conf` | Changed: status line |
 | `.config/fish/config.fish`, `.bashrc` | Changed: thread caps, PID warning |
+| `.config/starship.toml` | Changed: pod badge. Not exported to `dotfiles/`; it is in `home-defaults` (below). If inner keeps its own copy, set its `[hostname]` table to `ssh_only = false`, `detect_env_vars = ["KUBERNETES_SERVICE_HOST", "SSH_CONNECTION"]`, `format = "[ ⎈ $hostname ](bold fg:black bg:yellow) "` |
 | `session-env` | Changed: seven variables, below |
 
 `session-env` is image ENV, one `KEY=VALUE` per line, and normally comes from the
@@ -139,26 +141,31 @@ delta. New since base: the five `OPENCODE_DISABLE_*`, `PIP_FIND_LINKS` and
 `UV_FIND_LINKS`. Also new, and not in that file because it needs a shell:
 `~/.local/bin` on PATH.
 
-Not new, so not here: git, starship, atuin, tealdeer, `lg.fish`, `.profile`,
+Not new, so not here: git, atuin, tealdeer, `lg.fish`, `.profile`,
 `.bash_profile`. Their content is unchanged; only store hashes moved.
 
 1. **The same files are already in the delta**, at
    `/opt/twentyx/home-defaults`. If inner's bootstrap still links from there,
    the configs arrive with no dotfiles work at all. Decide this first.
-2. **Six files name `/nix/store` paths:** `.bashrc`, `config.fish`, `init.lua`,
-   `plugins/markdown.lua`, `plugins/nix-pins.lua`, `session-env`. They resolve only against this
+2. **Seven files name `/nix/store` paths:** `.bashrc`, `config.fish`, `init.lua`,
+   `plugins/markdown.lua`, `plugins/nix-pins.lua`, `plugins/treesitter.lua`, `session-env`. They resolve only against this
    release's pod-delta, and every later release changes them. Do not hand-edit
    the hashes; re-export.
 3. **nvim is more than these files.** It also needs these links, which are in
    `home-defaults` and not in `dotfiles/`:
    `.local/share/nvim/lazy/lazy.nvim` and
-   `.local/share/nvim/site/{pack/hm,parser,queries}`. Without `lazy.nvim`,
-   `init.lua` runs `git clone`, which fails in the gap, and nvim exits at start.
+   `.local/share/nvim/site/pack/hm`. Without `lazy.nvim`, `init.lua` runs
+   `git clone`, which fails in the gap, and nvim exits at start. `site/parser`
+   and `site/queries` are no longer needed: `plugins/treesitter.lua` points at
+   the store.
 4. **A real file in `$HOME` beats a default.** On a PVC with older copies, the
    new config stays hidden until `airgap refresh`, or until they are removed.
 5. **`.bashrc`:** outside, bootstrap parks this as `~/.bashrc.hm` and writes its
    own stub that sources it. A plain copy to `~/.bashrc` loses bootstrap's env.
 6. **Pods only.** WSL gets its config from the rebuild in step 3.
+7. **Undo the tree-sitter workaround:** remove `~/.local/bin/tree-sitter` and
+   any local `:TSUpdate` patch once `plugins/treesitter.lua` is in. Parsers are
+   fixed by the release; `:TSUpdate` and `:TSInstall` cannot work offline.
 
 If porting nvim by hand and not by file, also carry the extras in `init.lua`:
 `dap.core`, `lang.python`, `lang.toml`, `lang.yaml`.
@@ -172,8 +179,13 @@ In a new pod:
     airgap pids --summary             # thread cap matches the CPU limit
     ffprobe -version; python3.10 -V; uv --version; harlequin --version
     nvim --headless "+checkhealth dap" +qa
+    nvim --headless "+lua io.write(#require('nvim-treesitter').get_installed('parsers'))" +qa   # 26
 
 Then open tmux and look for `cpu x/y  mem x/yG  pids x/y` on the right, and time
 `opencode` across a pod restart.
+
+From WSL, `runai exec` into the pod: the prompt starts with a yellow
+`⎈ <hostname>` badge. If not, `airgap refresh starship` drops an older
+`~/.config/starship.toml` on the PVC that hides the new one.
 
 On WSL: `nvim`, `ffprobe -version`, `python3.10 -V`.

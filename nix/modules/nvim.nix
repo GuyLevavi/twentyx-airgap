@@ -12,6 +12,16 @@
 }:
 let
   cfg = config.airgap;
+
+  # lazyvim-nix's parser and query links, as one store dir. nvim-treesitter
+  # only counts parsers under its install_dir, so pinning it here keeps them
+  # in lua/plugins next to the extras that want them, instead of in a $HOME
+  # link that dotfiles/ never carries. A parser missing there makes LazyVim
+  # compile it, which in the gap fails as "tree-sitter CLI" missing.
+  treesitterDir = pkgs.linkFarm "lazyvim-treesitter-site" {
+    parser = config.xdg.dataFile."nvim/site/parser".source;
+    queries = config.xdg.dataFile."nvim/site/queries".source;
+  };
 in
 {
   config = lib.mkIf cfg.nvim.enable {
@@ -102,6 +112,15 @@ in
                 opts.completion.menu.auto_show = false
                 opts.completion.ghost_text.enabled = false
               end,
+            },
+          }
+        '';
+
+        treesitter = ''
+          return {
+            {
+              "nvim-treesitter/nvim-treesitter",
+              opts = { install_dir = "${treesitterDir}" },
             },
           }
         '';

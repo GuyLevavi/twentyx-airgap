@@ -10,9 +10,9 @@
 # that way: the starter cloning lazy.nvim itself, and blink.cmp, catppuccin and
 # the dap/yaml dependencies never making it into the dev path.
 #
-# Checks: no clone attempts, the markdown, python and nushell LSPs attach,
-# render-markdown loads, the imported options are in force, and a debugpy
-# session stops on a breakpoint.
+# Checks: no clone attempts, every parser LazyVim wants is installed, the
+# markdown, python and nushell LSPs attach, render-markdown loads, the imported
+# options are in force, and a debugpy session stops on a breakpoint.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -30,8 +30,12 @@ T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 H="$T/home"
 mkdir -p "$H/w"
-# Copied, not symlinked: lazy.nvim writes state next to its config.
-cp -rL "$FILES/.config" "$FILES/.local" "$H/"
+# Copied, not symlinked: lazy.nvim writes state next to its config. Of .local
+# only lazy.nvim itself: the parser links under nvim/site are not in
+# dotfiles/, so the config must find its parsers without them.
+cp -rL "$FILES/.config" "$H/"
+mkdir -p "$H/.local/share/nvim/lazy"
+cp -rL "$FILES/.local/share/nvim/lazy/lazy.nvim" "$H/.local/share/nvim/lazy/"
 chmod -R u+w "$H"
 printf '# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n' > "$H/w/t.md"
 printf 'x = 1\ny = x + 1\nprint(y)\n' > "$H/w/t.py"
@@ -47,6 +51,16 @@ end
 local function clients()
   return table.concat(vim.tbl_map(function(c) return c.name end, vim.lsp.get_clients({ bufnr = 0 })), ",")
 end
+
+-- A parser LazyVim wants but cannot find, it compiles, which in the gap ends
+-- in "tree-sitter CLI" missing.
+require("lazy").load({ plugins = { "nvim-treesitter" } })
+local ts_spec = require("lazy.core.config").plugins["nvim-treesitter"]
+local ts_opts = require("lazy.core.plugin").values(ts_spec, "opts", false)
+local missing = vim.tbl_filter(function(lang)
+  return not LazyVim.treesitter.have(lang)
+end, ts_opts.ensure_installed or {})
+check("treesitter parsers", #missing == 0, table.concat(missing, ","))
 
 vim.cmd.edit(vim.env.HOME .. "/w/t.md")
 vim.wait(10000, function() return #vim.lsp.get_clients({ bufnr = 0 }) > 0 end)

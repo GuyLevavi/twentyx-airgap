@@ -64,6 +64,10 @@ if [ -w /etc/group ]; then
     done
 fi
 
+# Logs the PID budget to the PVC, so a pod that degrades leaves a history.
+[ "${AIRGAP_PIDS_WATCH:-1}" = 0 ] \
+    || "$AIRGAP_ROOT/libexec/airgap-pids" --watch </dev/null >/dev/null 2>&1 &
+
 # Hand over. With arguments (`runai exec ... -- cmd`) we run them; without,
 # we defer to whatever the BASE image was going to run.
 #

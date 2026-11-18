@@ -2,11 +2,43 @@
 
 Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
+## Unreleased
+
+- **PID logger:** `airgap pids --watch` writes one line every 5 minutes to
+  `~/.local/state/twentyx/pids.log` (on the PVC). The line covers PID use, refused
+  forks, memory, OOM kills, zombies, exec sessions and the top thread owners. When
+  forks start failing, or use reaches 75%, it also writes a full `airgap pids`
+  report to `pids-full.log`. A new pod keeps the previous pod's logs as `*.1`.
+  The entrypoint starts it, and interactive shells start it as a fallback.
+  Set `AIRGAP_PIDS_WATCH=0` to turn it off.
+- **CPU pinning:** pins the pod to as many CPUs as its quota allows.
+  Bun, JavaScriptCore, Node, Rust and Go size their thread pools from the CPUs
+  they can see, which is the whole node. The 0.2.1 caps only covered OpenMP,
+  MKL, BLAS, Rayon and Go, so opencode and the JS language servers were left
+  sized to the host. `AIRGAP_PIN=0` in the workload env turns it off. It applies to the entrypoint
+  and to every `runai exec` shell, and ships `taskset` alone.
+
+### nvim: "tree-sitter CLI missing", and `:TSUpdate` errors
+
+- **Cause:** nvim-treesitter only counts parsers under
+  `~/.local/share/nvim/site/parser`, a `home-defaults` link that `dotfiles/`
+  does not carry. Without it, LazyVim tries to compile every parser, which
+  offline fails as a missing tree-sitter CLI.
+- **Fix:** new `lua/plugins/treesitter.lua` sets `install_dir` to the parsers'
+  store path, so the config finds them with no `$HOME` link.
+- **Undo inside:** the `~/.local/bin/tree-sitter` symlink, and any local
+  `:TSUpdate` patch. The CLI only lets LazyVim try a download that fails offline.
+- `check-nvim-offline.sh` now runs without the `.local` links and fails on any
+  missing parser.
+
 ## Release after 20261102-717fbad554
 
 `20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's
 system and refused to import on inner's. Use this one instead.
 
+- **Pod prompt badge.** A `runai exec` shell now starts its prompt with a yellow
+  `⎈ <hostname>` badge, so it no longer looks like a local pane. It also still
+  shows over SSH. Only `.config/starship.toml` changes (`nix/modules/shell.nix`).
 - `wsl-delta.nar.tar.gz` no longer depends on any base: it is closed under
   references, and imports into any store.
 - It leaves out outside's system and profiles, which inner cannot use, and adds

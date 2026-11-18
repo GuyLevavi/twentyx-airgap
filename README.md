@@ -178,6 +178,16 @@ you need it:
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids              # retry until one exec gets in
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids --kill <sid>
 
+The caps miss runtimes that size themselves from the CPUs they can see:
+Bun (opencode), JavaScriptCore, Node and Rust. In a pod those see the whole
+node. So the pod is pinned to `AIRGAP_CPUS` CPUs, and every runtime sees the
+quota. Pinning can cost some speed when those CPUs are busy on the node. Set
+`AIRGAP_PIN=0` in the workload env to turn it off.
+
+A logger (`airgap pids --watch`) records the budget every 5 minutes to
+`~/.local/state/twentyx/pids.log`, and writes a full report to `pids-full.log`
+once forks start failing. After a restart, the dead pod's logs are `*.1`.
+
 Interactive shells warn at 75% use, and `airgap doctor` fails above it. The cap
 itself is set by the cluster (CRI-O `pids_limit`, or the kubelet's
 `podPidsLimit`). If `airgap pids` shows real training needing more, ask the
