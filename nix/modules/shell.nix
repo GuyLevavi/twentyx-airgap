@@ -144,12 +144,30 @@ in
     };
   };
 
+  # The secondary shell: typed from fish, never a login shell. It inherits the
+  # environment fish already rehomed and clamped, so it needs no rehome of its own.
+  programs.nushell = {
+    enable = true;
+    settings.show_banner = false;
+  };
+
   programs.starship = {
     enable = true;
     enableBashIntegration = false;
     enableFishIntegration = true;
+    enableNushellIntegration = true;
     settings = {
       add_newline = false;
+      # "nu" before the prompt character in nu only; fish and bash stay unmarked.
+      # The space lives in the indicator: a "( )" group around a styled one never renders.
+      shell = {
+        disabled = false;
+        fish_indicator = "";
+        bash_indicator = "";
+        nu_indicator = "nu ";
+        style = "bold green";
+        format = "[$indicator]($style)";
+      };
       # In a pod the hostname IS the workspace name, and it is the fastest way
       # to notice you are typing into the wrong session. Locally it is noise,
       # so it only shows over a remote connection.
@@ -170,6 +188,7 @@ in
     enable = true;
     enableBashIntegration = false;
     enableFishIntegration = true;
+    enableNushellIntegration = true;
   };
 
   programs.fzf = {
@@ -183,6 +202,7 @@ in
     enable = true;
     enableBashIntegration = false;
     enableFishIntegration = true;
+    enableNushellIntegration = true;
     settings = {
       auto_sync = false;
       update_check = false;
@@ -194,6 +214,7 @@ in
   programs.direnv = {
     enable = true;
     enableFishIntegration = true;
+    enableNushellIntegration = true;
     # nix-direnv drags the entire Nix package in — 161 MB of closure for a
     # feature that cannot work in a pod that has no Nix.
     nix-direnv.enable = cfg.target == "wsl";
