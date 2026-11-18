@@ -157,14 +157,14 @@ Not new, so not here: git, starship, atuin, tealdeer, `lg.fish`, `.profile`,
    `git clone`, which fails in the gap, and nvim exits at start. `site/parser`
    and `site/queries` are no longer needed: `plugins/treesitter.lua` points at
    the store.
-7. **Undo the tree-sitter workaround:** remove `~/.local/bin/tree-sitter` and
-   any local `:TSUpdate` patch once `plugins/treesitter.lua` is in. Parsers are
-   fixed by the release; `:TSUpdate` and `:TSInstall` cannot work offline.
 4. **A real file in `$HOME` beats a default.** On a PVC with older copies, the
    new config stays hidden until `airgap refresh`, or until they are removed.
 5. **`.bashrc`:** outside, bootstrap parks this as `~/.bashrc.hm` and writes its
    own stub that sources it. A plain copy to `~/.bashrc` loses bootstrap's env.
 6. **Pods only.** WSL gets its config from the rebuild in step 3.
+7. **Undo the tree-sitter workaround:** remove `~/.local/bin/tree-sitter` and
+   any local `:TSUpdate` patch once `plugins/treesitter.lua` is in. Parsers are
+   fixed by the release; `:TSUpdate` and `:TSInstall` cannot work offline.
 
 If porting nvim by hand and not by file, also carry the extras in `init.lua`:
 `dap.core`, `lang.python`, `lang.toml`, `lang.yaml`.
