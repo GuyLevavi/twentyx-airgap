@@ -24,7 +24,7 @@ set -uo pipefail
 
 AIRGAP_ROOT="${AIRGAP_ROOT:-/opt/twentyx}"
 # shellcheck source=libexec/airgap-limits.sh
-. "$AIRGAP_ROOT/libexec/airgap-limits.sh"
+AIRGAP_PIN=0 . "$AIRGAP_ROOT/libexec/airgap-limits.sh"
 
 TOP=12
 HZ=100   # USER_HZ; asking getconf would cost a fork

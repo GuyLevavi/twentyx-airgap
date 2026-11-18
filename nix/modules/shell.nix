@@ -111,6 +111,11 @@ in
         end
       end
 
+      # AIRGAP_PIN for a fish started directly; see libexec/airgap-limits.sh.
+      if test "$AIRGAP_PIN" = 1; and set -q AIRGAP_CPUS
+        AIRGAP_PIN_PID=$fish_pid bash -c '. /opt/twentyx/libexec/airgap-limits.sh' 2>/dev/null
+      end
+
       # Same fallback start of the PID logger as bash's rc.
       if status is-interactive; and test "$AIRGAP_PIDS_WATCH" != 0
         and test -x /opt/twentyx/libexec/airgap-pids

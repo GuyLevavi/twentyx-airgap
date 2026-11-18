@@ -163,6 +163,12 @@ you need it:
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids              # retry until one exec gets in
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids --kill <sid>
 
+The caps miss runtimes that size themselves from the CPUs they can see:
+Bun (opencode), JavaScriptCore, Node and Rust. In a pod those see the whole
+node. Set `AIRGAP_PIN=1` in the workload env to pin the pod to `AIRGAP_CPUS`
+CPUs, so every runtime sees the quota. Pinning can cost some speed when those
+CPUs are busy on the node.
+
 A logger (`airgap pids --watch`) records the budget every 5 minutes to
 `~/.local/state/twentyx/pids.log`, and writes a full report to `pids-full.log`
 once forks start failing. After a restart, the dead pod's logs are `*.1`.

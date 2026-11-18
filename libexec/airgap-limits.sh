@@ -60,3 +60,30 @@ airgap_pids_usage() {
     done
     return 1
 }
+
+# Opt-in (AIRGAP_PIN=1): pin this process, and so everything it starts, to
+# AIRGAP_CPUS of the CPUs it may use. Bun, JavaScriptCore, Node, Rust and Go
+# size their pools from the CPUs they can see, which in a pod is the whole node.
+# The window starts at an offset from the hostname, so pods on one node do not
+# all crowd onto CPU 0..N-1. Costs one fork (taskset); skipped when it has none.
+__airgap_pin() {
+    local ts="${AIRGAP_ROOT:-/opt/twentyx}/profile/bin/taskset" k v r a b i h=0 c
+    local cpus=() pick=()
+    [ "${AIRGAP_PIN:-0}" = 1 ] && [ -n "${AIRGAP_CPUS:-}" ] && [ -x "$ts" ] || return 0
+    while read -r k v; do [ "$k" = Cpus_allowed_list: ] && break; done < /proc/self/status
+    [ "$k" = Cpus_allowed_list: ] || return 0
+    for r in ${v//,/ }; do
+        a="${r%-*}" b="${r#*-}"
+        for (( i = a; i <= b; i++ )); do cpus+=("$i"); done
+    done
+    [ "${#cpus[@]}" -gt "$AIRGAP_CPUS" ] || return 0
+    local host="${HOSTNAME:-}"
+    for (( i = 0; i < ${#host}; i++ )); do printf -v c '%d' "'${host:i:1}"; h=$(( h + c )); done
+    for (( i = 0; i < AIRGAP_CPUS; i++ )); do
+        pick+=("${cpus[(h + i) % ${#cpus[@]}]}")
+    done
+    v="${pick[*]}"
+    "$ts" -cp "${v// /,}" "${AIRGAP_PIN_PID:-$$}" >/dev/null 2>&1 || :
+}
+__airgap_pin
+unset -f __airgap_pin
