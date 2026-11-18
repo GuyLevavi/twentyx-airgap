@@ -126,7 +126,7 @@ map them onto it. Paths are relative to `$HOME`, except `session-env`.
 
 | File | Change since base |
 |---|---|
-| `.config/nvim/init.lua` | Changed: new extras, OSC 52 clipboard without a display |
+| `.config/nvim/init.lua` | Changed: new extras (`lang.nushell` among them), OSC 52 clipboard without a display |
 | `.config/nvim/lua/config/{options,autocmds}.lua` | New: yank-only clipboard, basedpyright |
 | `.config/nvim/lua/plugins/{completion,lsp,lualine,markdown,nix-pins}.lua` | New |
 | `.config/nvim/lua/plugins/_lazyvim_nix_default.lua` | Removed: delete it if inner has it |
@@ -134,6 +134,7 @@ map them onto it. Paths are relative to `$HOME`, except `session-env`.
 | `.config/tmux/tmux.conf` | Changed: status line, `terminal-features *:clipboard` |
 | `.config/fish/config.fish`, `.bashrc` | Changed: thread caps, PID warning |
 | `.config/starship.toml` | Changed: pod badge. Not exported to `dotfiles/`; it is in `home-defaults` (below). If inner keeps its own copy, set its `[hostname]` table to `ssh_only = false`, `detect_env_vars = ["KUBERNETES_SERVICE_HOST", "SSH_CONNECTION"]`, `format = "[ ⎈ $hostname ](bold fg:black bg:yellow) "` |
+| `.config/nushell/` | New: `nu` config with starship/zoxide/atuin/direnv. Not exported to `dotfiles/`; it is in `home-defaults` |
 | `session-env` | Changed: seven variables, below |
 
 `session-env` is image ENV, one `KEY=VALUE` per line, and normally comes from the
@@ -168,7 +169,7 @@ Not new, so not here: git, atuin, tealdeer, `lg.fish`, `.profile`,
    fixed by the release; `:TSUpdate` and `:TSInstall` cannot work offline.
 
 If porting nvim by hand and not by file, also carry the extras in `init.lua`:
-`dap.core`, `lang.python`, `lang.toml`, `lang.yaml`.
+`dap.core`, `lang.python`, `lang.toml`, `lang.yaml`, `lang.nushell`.
 
 ## Check after applying
 
@@ -180,6 +181,12 @@ In a new pod:
     ffprobe -version; python3.10 -V; uv --version; harlequin --version
     nvim --headless "+checkhealth dap" +qa
     nvim --headless "+lua io.write(#require('nvim-treesitter').get_installed('parsers'))" +qa   # 26
+
+    nu -c 'version | get version'       # nushell, a secondary shell
+    taskset -cp 1                     # pinned to as many CPUs as the quota (AIRGAP_PIN=0 turns it off)
+    tail -1 ~/.local/state/twentyx/pids.log   # a line every 5 min from airgap pids --watch
+
+In nvim, yank a line and paste it on the Windows side: OSC 52 carries it.
 
 Then open tmux and look for `cpu x/y  mem x/yG  pids x/y` on the right, and time
 `opencode` across a pod restart.

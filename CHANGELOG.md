@@ -31,6 +31,13 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
   `"+p` returns the last yank rather than reading `"`.
 - **tmux** forwards OSC 52 to the terminal even when the outer `TERM`'s
   terminfo has no `Ms`.
+- **Pod prompt badge.** A `runai exec` shell now starts its prompt with a yellow
+  `⎈ <hostname>` badge, so it no longer looks like a local pane. It also still
+  shows over SSH. Only `.config/starship.toml` changes (`nix/modules/shell.nix`).
+- **nushell:** `nu`, typed from fish, is a secondary shell (never a login shell)
+  with the starship, zoxide, atuin and direnv integrations. Its prompt shows a
+  green `nu` marker; fish and bash prompts are unchanged. nvim gets LazyVim's
+  `lang.nushell` extra, the `nu` parser and `nu --lsp`.
 
 ### nvim: "tree-sitter CLI missing", and `:TSUpdate` errors
 
@@ -50,9 +57,6 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 `20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's
 system and refused to import on inner's. Use this one instead.
 
-- **Pod prompt badge.** A `runai exec` shell now starts its prompt with a yellow
-  `⎈ <hostname>` badge, so it no longer looks like a local pane. It also still
-  shows over SSH. Only `.config/starship.toml` changes (`nix/modules/shell.nix`).
 - `wsl-delta.nar.tar.gz` no longer depends on any base: it is closed under
   references, and imports into any store.
 - It leaves out outside's system and profiles, which inner cannot use, and adds
