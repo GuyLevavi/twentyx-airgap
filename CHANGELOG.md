@@ -2,6 +2,14 @@
 
 Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
+## Unreleased
+
+- **Clipboard in pods:** nvim uses OSC 52 wherever there is no X11/Wayland
+  (WSL unchanged), instead of only when a k8s env var made it through the exec.
+  `"+p` returns the last yank rather than reading `"`.
+- **tmux** forwards OSC 52 to the terminal even when the outer `TERM`'s
+  terminfo has no `Ms`.
+
 ## Release after 20261102-717fbad554
 
 `20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's

@@ -126,11 +126,11 @@ map them onto it. Paths are relative to `$HOME`, except `session-env`.
 
 | File | Change since base |
 |---|---|
-| `.config/nvim/init.lua` | Changed: new extras |
+| `.config/nvim/init.lua` | Changed: new extras, OSC 52 clipboard without a display |
 | `.config/nvim/lua/config/{options,autocmds}.lua` | New: yank-only clipboard, basedpyright |
 | `.config/nvim/lua/plugins/{completion,lsp,lualine,markdown,nix-pins}.lua` | New |
 | `.config/nvim/lua/plugins/_lazyvim_nix_default.lua` | Removed: delete it if inner has it |
-| `.config/tmux/tmux.conf` | Changed: status line |
+| `.config/tmux/tmux.conf` | Changed: status line, `terminal-features *:clipboard` |
 | `.config/fish/config.fish`, `.bashrc` | Changed: thread caps, PID warning |
 | `session-env` | Changed: seven variables, below |
 

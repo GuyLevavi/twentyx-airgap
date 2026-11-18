@@ -1,17 +1,22 @@
 vim.g.node_host_prog='/nix/store/qg0isnbvfc9xpimcmva6mf10zw7hx2hc-node-client-5.4.0/bin/neovim-node-host';vim.g.loaded_perl_provider=0;vim.g.loaded_ruby_provider=0;vim.g.python3_host_prog='/nix/store/g38xy15izkpi610gf4azdhvd30jiw5iz-nvim-host-python3-3.14.7-env/bin/nvim-python3'
-if vim.env.SSH_TTY or vim.env.KUBERNETES_SERVICE_HOST or vim.env.RUNAI_JOB_NAME then
+if vim.env.SSH_TTY or (vim.fn.has("wsl") == 0 and not (vim.env.WAYLAND_DISPLAY or vim.env.DISPLAY)) then
+  -- Paste answers from what we last copied: WezTerm refuses OSC 52 reads, and
+  -- reading '"' would recurse into this provider if 'clipboard' gains unnamedplus.
+  local osc52 = require("vim.ui.clipboard.osc52")
+  local last = { ["+"] = { { "" }, "v" }, ["*"] = { { "" }, "v" } }
+  local function copy(reg)
+    local send = osc52.copy(reg)
+    return function(lines, regtype)
+      last[reg] = { lines, regtype }
+      send(lines, regtype)
+    end
+  end
   vim.g.clipboard = {
     name = "OSC 52",
-    copy = {
-      ["+"] = require("vim.ui.clipboard.osc52").copy("+"),
-      ["*"] = require("vim.ui.clipboard.osc52").copy("*"),
-    },
-    -- Reading the clipboard over OSC 52 requires the emulator to answer,
-    -- which many refuse to do for security. Paste from the terminal
-    -- instead; a paste that silently hangs is worse than no paste.
+    copy = { ["+"] = copy("+"), ["*"] = copy("*") },
     paste = {
-      ["+"] = function() return vim.split(vim.fn.getreg('"'), "\n") end,
-      ["*"] = function() return vim.split(vim.fn.getreg('"'), "\n") end,
+      ["+"] = function() return last["+"] end,
+      ["*"] = function() return last["*"] end,
     },
   }
 end
