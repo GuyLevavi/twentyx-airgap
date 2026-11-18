@@ -23,6 +23,9 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 `20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's
 system and refused to import on inner's. Use this one instead.
 
+- **Pod prompt badge.** A `runai exec` shell now starts its prompt with a yellow
+  `⎈ <hostname>` badge, so it no longer looks like a local pane. It also still
+  shows over SSH. Only `.config/starship.toml` changes (`nix/modules/shell.nix`).
 - `wsl-delta.nar.tar.gz` no longer depends on any base: it is closed under
   references, and imports into any store.
 - It leaves out outside's system and profiles, which inner cannot use, and adds

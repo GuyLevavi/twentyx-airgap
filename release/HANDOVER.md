@@ -132,6 +132,7 @@ map them onto it. Paths are relative to `$HOME`, except `session-env`.
 | `.config/nvim/lua/plugins/_lazyvim_nix_default.lua` | Removed: delete it if inner has it |
 | `.config/tmux/tmux.conf` | Changed: status line |
 | `.config/fish/config.fish`, `.bashrc` | Changed: thread caps, PID warning |
+| `.config/starship.toml` | Changed: pod badge. Not exported to `dotfiles/`; it is in `home-defaults` (below). If inner keeps its own copy, set its `[hostname]` table to `ssh_only = false`, `detect_env_vars = ["KUBERNETES_SERVICE_HOST", "SSH_CONNECTION"]`, `format = "[ ⎈ $hostname ](bold fg:black bg:yellow) "` |
 | `session-env` | Changed: seven variables, below |
 
 `session-env` is image ENV, one `KEY=VALUE` per line, and normally comes from the
@@ -139,7 +140,7 @@ delta. New since base: the five `OPENCODE_DISABLE_*`, `PIP_FIND_LINKS` and
 `UV_FIND_LINKS`. Also new, and not in that file because it needs a shell:
 `~/.local/bin` on PATH.
 
-Not new, so not here: git, starship, atuin, tealdeer, `lg.fish`, `.profile`,
+Not new, so not here: git, atuin, tealdeer, `lg.fish`, `.profile`,
 `.bash_profile`. Their content is unchanged; only store hashes moved.
 
 1. **The same files are already in the delta**, at
@@ -175,5 +176,9 @@ In a new pod:
 
 Then open tmux and look for `cpu x/y  mem x/yG  pids x/y` on the right, and time
 `opencode` across a pod restart.
+
+From WSL, `runai exec` into the pod: the prompt starts with a yellow
+`⎈ <hostname>` badge. If not, `airgap refresh starship` drops an older
+`~/.config/starship.toml` on the PVC that hides the new one.
 
 On WSL: `nvim`, `ffprobe -version`, `python3.10 -V`.

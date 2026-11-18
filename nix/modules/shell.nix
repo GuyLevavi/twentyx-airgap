@@ -176,11 +176,16 @@ in
     settings = {
       add_newline = false;
       # In a pod the hostname IS the workspace name, and it is the fastest way
-      # to notice you are typing into the wrong session. Locally it is noise,
-      # so it only shows over a remote connection.
+      # to notice you are typing into the wrong session. Locally it is noise.
+      # `runai exec` is not SSH, so key on KUBERNETES_SERVICE_HOST, which the
+      # kubelet puts in every pod's env, exec sessions included.
       hostname = {
-        ssh_only = true;
-        format = "[$hostname]($style) ";
+        ssh_only = false;
+        detect_env_vars = [
+          "KUBERNETES_SERVICE_HOST"
+          "SSH_CONNECTION"
+        ];
+        format = "[ ⎈ $hostname ](bold fg:black bg:yellow) ";
       };
       # A prompt that lies about the environment is worse than no prompt: these
       # are the two that change what a command will do.
