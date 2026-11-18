@@ -4,6 +4,15 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
 ## Unreleased
 
+- **harlequin theme:** a Nix-owned `~/.config/harlequin/config.toml` sets
+  `tokyo-night`, the nearest match for nvim's tokyonight. harlequin removes
+  Textual's ANSI themes, so it cannot use the terminal's own palette. Try
+  another theme for one session with `harlequin -t <name>`.
+- **harlequin wrapper:** unsets `PYTHONPATH`/`PYTHONHOME`. The wrapper put both
+  ahead of its own packages, so a base image that exports either would have
+  replaced pyarrow/duckdb and crashed harlequin on import. Tested offline:
+  postgres needs no `psql`/`pg_dump` (psycopg loads libpq by store path), sqlite
+  needs no `sqlite3` CLI, and `ssh` is needed only for `--ssh-host`.
 - **PID logger:** `airgap pids --watch` writes one line every 5 minutes to
   `~/.local/state/twentyx/pids.log` (on the PVC). The line covers PID use, refused
   forks, memory, OOM kills, zombies, exec sessions and the top thread owners. When
