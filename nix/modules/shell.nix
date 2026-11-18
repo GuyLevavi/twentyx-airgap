@@ -27,6 +27,22 @@ let
   # conf.d/*.fish BEFORE config.fish, so a conf.d drop-in -- the obvious place
   # -- is guaranteed to run too early and silently do nothing.
   evalHome = config.home.homeDirectory;
+
+  # atuin's nu hooks are background jobs, which starship's jobs module counts
+  # as yours (✦). Label atuin's and leave them out of the count; the greps fail
+  # the build if either upstream init stops matching.
+  atuinNu = pkgs.runCommand "atuin-nushell-config.nu" {
+    nativeBuildInputs = [ pkgs.writableTmpDirAsHomeHook ];
+  } ''
+    ${lib.getExe config.programs.atuin.package} init nu \
+      | sed 's/job spawn {/job spawn --description atuin {/' >$out
+    grep -q 'job spawn --description atuin' $out
+  '';
+  starshipNu = pkgs.runCommand "starship-nushell-config.nu" { } ''
+    ${lib.getExe config.programs.starship.package} init nu \
+      | sed 's/(job list | length)/(job list | where description? != "atuin" | length)/' >$out
+    grep -q 'description? != "atuin"' $out
+  '';
 in
 {
   programs.bash = {
@@ -174,13 +190,18 @@ in
   programs.nushell = {
     enable = true;
     settings.show_banner = false;
+    # After fzf, as home-manager orders atuin's, so atuin keeps Ctrl-R.
+    extraConfig = lib.mkOrder 2000 ''
+      use ${starshipNu}
+      source ${atuinNu}
+    '';
   };
 
   programs.starship = {
     enable = true;
     enableBashIntegration = false;
     enableFishIntegration = true;
-    enableNushellIntegration = true;
+    enableNushellIntegration = false; # atuin-aware copy in programs.nushell
     settings = {
       add_newline = false;
       # "nu" before the prompt character in nu only; fish and bash stay unmarked.
@@ -232,7 +253,7 @@ in
     enable = true;
     enableBashIntegration = false;
     enableFishIntegration = true;
-    enableNushellIntegration = true;
+    enableNushellIntegration = false; # see programs.nushell
     settings = {
       auto_sync = false;
       update_check = false;
