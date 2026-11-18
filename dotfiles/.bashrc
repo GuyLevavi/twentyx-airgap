@@ -46,6 +46,14 @@ if [ -r /opt/twentyx/libexec/airgap-limits.sh ]; then
     printf '\033[33mwarn:\033[0m %s of %s PIDs in use; see: airgap pids\n' \
       "$AIRGAP_PIDS_CUR" "$AIRGAP_PIDS_MAX" >&2
   fi
+  # The entrypoint starts the PID logger; this covers a workload whose
+  # command bypasses it. The logger itself refuses to run twice.
+  if [[ $- == *i* && "${AIRGAP_PIDS_WATCH:-1}" != 0 ]] \
+      && ! { read -r __w < "$HOME/.local/state/twentyx/pids-watch.pid" \
+             && [ -d "/proc/$__w" ]; } 2>/dev/null; then
+    ( /opt/twentyx/libexec/airgap-pids --watch </dev/null >/dev/null 2>&1 & )
+  fi
+  unset __w
 fi
 
 if [[ $- == *i* && -z "${BASH_EXECS_FISH:-}" && -z "${IN_NIX_SHELL:-}" ]]; then

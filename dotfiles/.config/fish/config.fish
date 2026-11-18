@@ -32,6 +32,23 @@ if not set -q OMP_NUM_THREADS; and test -r /sys/fs/cgroup/cpu.max
     end
 end
 
+# AIRGAP_PIN for a fish started directly; see libexec/airgap-limits.sh.
+if test "$AIRGAP_PIN" != 0; and set -q AIRGAP_CPUS
+    AIRGAP_PIN_PID=$fish_pid bash -c '. /opt/twentyx/libexec/airgap-limits.sh' 2>/dev/null
+end
+
+# Same fallback start of the PID logger as bash's rc.
+if status is-interactive; and test "$AIRGAP_PIDS_WATCH" != 0
+    and test -x /opt/twentyx/libexec/airgap-pids
+    set -l __w
+    set -l __pf $HOME/.local/state/twentyx/pids-watch.pid
+    test -r $__pf; and read __w <$__pf
+    if test -z "$__w"; or not test -d /proc/$__w
+        /opt/twentyx/libexec/airgap-pids --watch </dev/null >/dev/null 2>&1 &
+        disown 2>/dev/null
+    end
+end
+
 status is-login; and begin
 
     # Login shell initialisation
