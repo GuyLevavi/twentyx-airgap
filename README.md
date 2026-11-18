@@ -88,9 +88,24 @@ set difference against what the far side already holds, as one folder,
     --wsl-base dist/baselines/wsl-<rev inside>.store-paths
 ```
 
+The protocol, in order; every check is outside, before the crossing:
+
+1. Write the handover (`release/HANDOVER.md`, `CHANGELOG.md`) and commit. A
+   dirty tree is refused.
+2. Run `make-release.sh`. It refuses to cut the release unless:
+   - `dotfiles/` is exactly what `export-dotfiles.sh` makes from this commit
+     (it names `/nix/store` paths, so a stale export points at paths no
+     layer carries);
+   - `check-nvim-offline.sh` passes (LazyVim with no network);
+   - every `/nix/store` path in `dotfiles/` is in the pod layer;
+   - every path it ships matches its NAR hash in the Nix DB (`nix store
+     verify`), so a store damaged since the build fails here, not in the gap.
+3. Carry `twentyx-store/<RELEASE>/` as it is: one folder, nothing renamed
+   or added. Inside, `nix-store --import` and `airgap doctor` are the checks.
+
 `make-release.sh` lists what the folder holds. `release/` has the templates for
-`apply.sh` and `HANDOVER.md`: write the handover for each release before cutting
-it. The inner repo is the source of truth, and builds its own repo layer.
+`apply.sh` and `HANDOVER.md`. The inner repo is the source of truth, and builds
+its own repo layer.
 
 Nothing here assumes what the far side holds. Inner runs its own build of a
 diverged repo, and a wrong guess costs a crossing.
@@ -162,6 +177,16 @@ you need it:
 
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids              # retry until one exec gets in
     runai exec <ws> -- /opt/twentyx/libexec/airgap-pids --kill <sid>
+
+The caps miss runtimes that size themselves from the CPUs they can see:
+Bun (opencode), JavaScriptCore, Node and Rust. In a pod those see the whole
+node. So the pod is pinned to `AIRGAP_CPUS` CPUs, and every runtime sees the
+quota. Pinning can cost some speed when those CPUs are busy on the node. Set
+`AIRGAP_PIN=0` in the workload env to turn it off.
+
+A logger (`airgap pids --watch`) records the budget every 5 minutes to
+`~/.local/state/twentyx/pids.log`, and writes a full report to `pids-full.log`
+once forks start failing. After a restart, the dead pod's logs are `*.1`.
 
 Interactive shells warn at 75% use, and `airgap doctor` fails above it. The cap
 itself is set by the cluster (CRI-O `pids_limit`, or the kubelet's

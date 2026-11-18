@@ -219,6 +219,12 @@ in
     ++ lib.optionals (!wsl) [
       # PID 1 in the pod; see libexec/airgap-entrypoint. 28 KB.
       tini
+      # taskset alone, for AIRGAP_PIN (libexec/airgap-limits.sh); the rest of
+      # util-linux would shadow the base image's mount, kill and friends.
+      (pkgs.runCommand "taskset" { } ''
+        mkdir -p $out/bin
+        ln -s ${pkgs.util-linuxMinimal}/bin/taskset $out/bin/taskset
+      '')
     ]
     ++ lib.optionals cfg.tools.gpu.enable [
       # The one cluster-side tool that IS worth carrying into the pod: it

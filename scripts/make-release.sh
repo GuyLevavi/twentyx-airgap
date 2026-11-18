@@ -14,6 +14,11 @@
 #   inside-seed.tar        this repo's tree at the release commit
 #   crane-layer.tar        crane and its closure at nix/store/..., for CI
 #
+# Every check runs here, before the folder exists (README "Releases"): the
+# release refuses to be cut unless dotfiles/ is the export of this commit,
+# every store path it names ships in the pod layer, LazyVim works with no
+# network, and every shipped path still matches its NAR hash.
+#
 # The repo layer is not here: inner builds its own with docker/mklayer.sh.
 # KIND=full (nixos-wsl.tar.gz, pod-full.tar.gz, windows-kit.tar.gz) is not
 # implemented; we only cut deltas today.
@@ -38,6 +43,22 @@ say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
     exit 1
 }
 
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# ── pre-transfer gates ────────────────────────────────────────────────────
+# dotfiles/ names /nix/store paths and crosses as text, so a stale export
+# points pods at paths no layer carries.
+say "gate: dotfiles/ is this commit's export"
+./scripts/export-dotfiles.sh >/dev/null
+[ -z "$(git status --porcelain -- dotfiles)" ] || {
+    git status --short -- dotfiles >&2
+    die "dotfiles/ differs from a fresh export -- commit it, then cut the release"
+}
+
+say "gate: LazyVim offline"
+nvim_out="$(./scripts/check-nvim-offline.sh 2>&1)" \
+    || { printf '%s\n' "$nvim_out" >&2; die "LazyVim does not work offline"; }
+
 REV="$(git rev-parse HEAD)"
 RELEASE="$(date +%Y%m%d)-${REV:0:10}"
 OUT="twentyx-store/$RELEASE"
@@ -51,11 +72,25 @@ say "pod layer"
 ./scripts/build-layers.sh "$WORK/pod-out" > /dev/null
 install -m 0644 "$WORK/pod-out/nix-layer-nvim.tar.gz" "$OUT/pod-delta.tar.gz"
 
+say "gate: every store path dotfiles/ names is in the pod layer"
+tar -xzOf "$OUT/pod-delta.tar.gz" --occurrence=1 opt/twentyx/store-paths 2>/dev/null \
+    | sort -u > "$WORK/pod-paths" || true
+[ -s "$WORK/pod-paths" ] || die "the pod layer has no opt/twentyx/store-paths"
+grep -rhoE '/nix/store/[a-z0-9]{32}-[^/"'"'"' :;]*' dotfiles | sort -u \
+    | comm -23 - "$WORK/pod-paths" > "$WORK/unshipped"
+[ ! -s "$WORK/unshipped" ] || { cat "$WORK/unshipped" >&2; die "dotfiles/ names store paths the pod layer lacks"; }
+
 say "wsl delta"
 ./scripts/nix-export.sh "$WORK/wsl" --since-paths "$WSL_BASE" --nar
 tar --owner=0 --group=0 --mtime='@1' -C "$WORK/wsl" -cf - wsl-delta.nar \
     | gzip -n -6 > "$OUT/wsl-delta.nar.tar.gz"
 cp "$WORK/wsl/store-paths" "dist/baselines/wsl-${REV:0:7}.store-paths"
+
+say "gate: the shipped paths match their NAR hashes"
+# A store damaged since the build must fail here, not in the gap.
+sort -u "$WORK/pod-paths" "$WORK/wsl/delta-paths" | xargs -r nix store verify --no-trust 2>&1 \
+    | { grep -v "^checking '" >&2 || true; } \
+    || die "nix store verify failed -- repair the store, then cut the release"
 
 say "crane layer"
 CRANE="$(nix build --no-link --print-out-paths .#nixosConfigurations.wsl.pkgs.crane)"
