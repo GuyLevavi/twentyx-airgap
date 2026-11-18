@@ -2,6 +2,21 @@
 
 Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
+## Unreleased
+
+### nvim: "tree-sitter CLI missing", and `:TSUpdate` errors
+
+- **Cause:** nvim-treesitter only counts parsers under
+  `~/.local/share/nvim/site/parser`, a `home-defaults` link that `dotfiles/`
+  does not carry. Without it, LazyVim tries to compile every parser, which
+  offline fails as a missing tree-sitter CLI.
+- **Fix:** new `lua/plugins/treesitter.lua` sets `install_dir` to the parsers'
+  store path, so the config finds them with no `$HOME` link.
+- **Undo inside:** the `~/.local/bin/tree-sitter` symlink, and any local
+  `:TSUpdate` patch. The CLI only lets LazyVim try a download that fails offline.
+- `check-nvim-offline.sh` now runs without the `.local` links and fails on any
+  missing parser.
+
 ## Release after 20261102-717fbad554
 
 `20261102-717fbad554` could not be applied. Its WSL delta was cut for outside's
