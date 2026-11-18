@@ -11,8 +11,8 @@
 # the dap/yaml dependencies never making it into the dev path.
 #
 # Checks: no clone attempts, every parser LazyVim wants is installed, the
-# markdown and python LSPs attach, render-markdown loads, the imported options
-# are in force, and a debugpy session stops on a breakpoint.
+# markdown, python and nushell LSPs attach, render-markdown loads, the imported
+# options are in force, and a debugpy session stops on a breakpoint.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -39,6 +39,7 @@ cp -rL "$FILES/.local/share/nvim/lazy/lazy.nvim" "$H/.local/share/nvim/lazy/"
 chmod -R u+w "$H"
 printf '# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n' > "$H/w/t.md"
 printf 'x = 1\ny = x + 1\nprint(y)\n' > "$H/w/t.py"
+printf 'let x = 1\n$x + 1\n' > "$H/w/t.nu"
 
 cat > "$T/check.lua" <<'EOF'
 local out, fail = {}, false
@@ -75,6 +76,12 @@ vim.cmd.edit(vim.env.HOME .. "/w/t.py")
 vim.wait(15000, function() return #vim.lsp.get_clients({ bufnr = 0 }) > 1 end)
 check("python lsps", clients():find("basedpyright") ~= nil, clients())
 
+vim.cmd.edit(vim.env.HOME .. "/w/t.nu")
+vim.wait(10000, function() return #vim.lsp.get_clients({ bufnr = 0 }) > 0 end)
+check("nushell lsp", clients():find("nushell") ~= nil, clients())
+check("nu parser", (pcall(vim.treesitter.language.add, "nu")))
+
+vim.cmd.edit(vim.env.HOME .. "/w/t.py")
 local dap = require("dap")
 local stopped = false
 dap.listeners.after.event_stopped["offline-check"] = function(_, body) stopped = body.reason end

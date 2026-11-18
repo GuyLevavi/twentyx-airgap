@@ -35,6 +35,7 @@ in
         lang.nix.enable = true;
         lang.yaml.enable = true;
         lang.toml.enable = true;
+        lang.nushell.enable = true;
         lang.python = {
           enable = true;
           # Both of these pull their dependency sets into the closure at build
@@ -60,6 +61,7 @@ in
         # Rust, ~15 MB. Replaces marksman, which brought a .NET runtime
         # along and was never wired to a server config anyway.
         markdown-oxide
+        nushell # `nu --lsp`; the same binary programs.nushell installs
 
         # The DAP adapter LazyVim's lang.python launches by name. It shares
         # the python3 lang.python already pulls in, so it costs only debugpy.
@@ -220,6 +222,7 @@ in
           python
           bash
           fish
+          nu
           yaml
           json
           toml
