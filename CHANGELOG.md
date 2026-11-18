@@ -4,6 +4,10 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
 ## Unreleased
 
+- **Release crosses as base64 parts:** big files arrive as `<file>.partN` in
+  `<RELEASE>-b64/`, with `part0` also as `part00`. Run `sh reassemble.sh
+  ./release` there first; it checks every part and file by sha256. See
+  "Reassemble first" in the handover.
 - **harlequin theme:** a Nix-owned `~/.config/harlequin/config.toml` sets
   `tokyo-night`, the nearest match for nvim's tokyonight. harlequin removes
   Textual's ANSI themes, so it cannot use the terminal's own palette. Try
