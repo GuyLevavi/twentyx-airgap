@@ -35,7 +35,17 @@ let
     };
   };
 in
-harlequin.override {
+(harlequin.override {
   python3Packages = python.pkgs;
   withBigQueryAdapter = false;
-}
+}).overridePythonAttrs (old: {
+  # The wrapper adds our site-packages *after* PYTHONPATH, so a base image or
+  # workspace that exports one shadows pyarrow/duckdb with its own builds and
+  # harlequin dies on import. Nothing it needs lives outside its closure.
+  makeWrapperArgs = (old.makeWrapperArgs or [ ]) ++ [
+    "--unset"
+    "PYTHONPATH"
+    "--unset"
+    "PYTHONHOME"
+  ];
+})

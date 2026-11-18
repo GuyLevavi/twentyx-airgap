@@ -106,6 +106,16 @@ in
     enableAutoUpdates = false;
   };
 
+  # harlequin drops Textual's ansi themes, so it cannot inherit the terminal's
+  # palette; tokyo-night is the nearest named match for nvim's tokyonight.
+  # Top-level `theme` is rejected: it is only valid inside a profile.
+  xdg.configFile."harlequin/config.toml".text = ''
+    default_profile = "airgap"
+
+    [profiles.airgap]
+    theme = "tokyo-night"
+  '';
+
   home.packages =
     with pkgs;
     [
