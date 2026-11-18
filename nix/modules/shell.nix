@@ -112,7 +112,7 @@ in
       end
 
       # AIRGAP_PIN for a fish started directly; see libexec/airgap-limits.sh.
-      if test "$AIRGAP_PIN" = 1; and set -q AIRGAP_CPUS
+      if test "$AIRGAP_PIN" != 0; and set -q AIRGAP_CPUS
         AIRGAP_PIN_PID=$fish_pid bash -c '. /opt/twentyx/libexec/airgap-limits.sh' 2>/dev/null
       end
 
