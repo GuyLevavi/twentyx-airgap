@@ -17,6 +17,11 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
   MKL, BLAS, Rayon and Go, so opencode and the JS language servers were left
   sized to the host. `AIRGAP_PIN=0` in the workload env turns it off. It applies to the entrypoint
   and to every `runai exec` shell, and ships `taskset` alone.
+- **Clipboard in pods:** nvim uses OSC 52 wherever there is no X11/Wayland
+  (WSL unchanged), instead of only when a k8s env var made it through the exec.
+  `"+p` returns the last yank rather than reading `"`.
+- **tmux** forwards OSC 52 to the terminal even when the outer `TERM`'s
+  terminfo has no `Ms`.
 
 ### nvim: "tree-sitter CLI missing", and `:TSUpdate` errors
 

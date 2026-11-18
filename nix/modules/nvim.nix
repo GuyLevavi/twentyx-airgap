@@ -242,24 +242,27 @@ in
       ))
     ];
 
-    # OSC 52 clipboard. In a RunAI pod there is no X11, no Wayland and no
-    # wl-copy, so the escape-sequence path is the only route from a yank in
-    # nvim to the Windows clipboard. tmux passes it through (see shell.nix) and
-    # WezTerm honours it at the far end.
+    # OSC 52 wherever there is no display server (WSL keeps its own provider),
+    # not by pod env vars, which an exec'd shell need not carry.
     programs.neovim.initLua = lib.mkAfter ''
-      if vim.env.SSH_TTY or vim.env.KUBERNETES_SERVICE_HOST or vim.env.RUNAI_JOB_NAME then
+      if vim.env.SSH_TTY or (vim.fn.has("wsl") == 0 and not (vim.env.WAYLAND_DISPLAY or vim.env.DISPLAY)) then
+        -- Paste answers from what we last copied: WezTerm refuses OSC 52 reads, and
+        -- reading '"' would recurse into this provider if 'clipboard' gains unnamedplus.
+        local osc52 = require("vim.ui.clipboard.osc52")
+        local last = { ["+"] = { { "" }, "v" }, ["*"] = { { "" }, "v" } }
+        local function copy(reg)
+          local send = osc52.copy(reg)
+          return function(lines, regtype)
+            last[reg] = { lines, regtype }
+            send(lines, regtype)
+          end
+        end
         vim.g.clipboard = {
           name = "OSC 52",
-          copy = {
-            ["+"] = require("vim.ui.clipboard.osc52").copy("+"),
-            ["*"] = require("vim.ui.clipboard.osc52").copy("*"),
-          },
-          -- Reading the clipboard over OSC 52 requires the emulator to answer,
-          -- which many refuse to do for security. Paste from the terminal
-          -- instead; a paste that silently hangs is worse than no paste.
+          copy = { ["+"] = copy("+"), ["*"] = copy("*") },
           paste = {
-            ["+"] = function() return vim.split(vim.fn.getreg('"'), "\n") end,
-            ["*"] = function() return vim.split(vim.fn.getreg('"'), "\n") end,
+            ["+"] = function() return last["+"] end,
+            ["*"] = function() return last["*"] end,
           },
         }
       end

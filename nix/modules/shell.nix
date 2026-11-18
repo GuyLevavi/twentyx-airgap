@@ -269,6 +269,8 @@ in
       # terminal emulator at the far end must honour it — WezTerm does.
       set -g allow-passthrough on
       set -g set-clipboard on
+      # Forward OSC 52 even when the outer TERM's terminfo has no Ms.
+      set -as terminal-features ",*:clipboard"
 
       bind | split-window -h -c "#{pane_current_path}"
       bind - split-window -v -c "#{pane_current_path}"
