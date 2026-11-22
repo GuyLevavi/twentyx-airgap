@@ -125,6 +125,7 @@
           skopeo
           dive
           jq
+          python3 # scripts/release-paths.sh
         ];
       };
     };
