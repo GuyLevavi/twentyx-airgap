@@ -9,27 +9,6 @@
 let
   extras = pkgs.callPackage ../pkgs/extras.nix { };
 
-  # nu's config, the pod's minus home-manager: nu loads every file in
-  # $XDG_DATA_DIRS/nushell/vendor/autoload, so it needs nothing in $HOME.
-  nuInit = pkgs.callPackage ../pkgs/nu-init.nix { };
-  nuAutoload = pkgs.runCommand "twentyx-nushell-autoload" { } ''
-    d=$out/share/nushell/vendor/autoload
-    mkdir -p $d
-    ${lib.getExe pkgs.zoxide} init nushell > $d/10-zoxide.nu
-    cat > $d/20-twentyx.nu <<'NU'
-    $env.config.show_banner = false
-    $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {||
-      if (which direnv | is-empty) { return }
-      direnv export json | from json | default {} | load-env
-      if ($env.PATH | describe) == "string" {
-        $env.PATH = ($env.PATH | split row (char esep))
-      }
-    })
-    use ${nuInit.starship}
-    source ${nuInit.atuin}
-    NU
-  '';
-
   # nixpkgs patchelf's bun, and `bun build --compile` recycles the moved
   # PT_GNU_STACK slot so the highest-vaddr PT_LOAD lands first; Linux <= 6.6
   # never maps the BSS. fix-phdr-order reorders and fails the build if unsafe.
@@ -177,7 +156,6 @@ let
 
     # ── Same build as the pod's (nix/modules/tools.nix) ────────────────────
     pkgs.nushell
-    nuAutoload
     pkgs.ffmpeg-headless
     pkgs.gnumake
     extras.harlequin

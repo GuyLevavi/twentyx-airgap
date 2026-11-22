@@ -37,28 +37,6 @@ sat in the store, off PATH. From this release on, every release switches.
     readlink -f /run/current-system   # = WSL_SYSTEM in MANIFEST.txt
     @WSL_SYSTEM@
     nu -c 'version | get version'; ffprobe -version; python3.10 -V; harlequin --version
-    ls /run/current-system/sw/share/nushell/vendor/autoload   # 10-zoxide.nu 20-twentyx.nu
-
-## Config: what comes from where
-
-The release changes the system, never `$HOME`. Your `$HOME` config is inner's
-`dotfiles/`, linked by `wsl/link.sh`, as before.
-
-- **nu** needs nothing in `$HOME`: starship, atuin (its jobs left out of
-  starship's count), zoxide and direnv load from
-  `/run/current-system/sw/share/nushell/vendor/autoload/`. A
-  `~/.config/nushell/config.nu` of yours still loads first; drop any
-  starship/atuin lines in it, or they run twice.
-- **starship** reads inner's `dotfiles/.config/starship.toml`. For the green
-  `nu` marker in nu (fish and bash stay unmarked), add:
-
-      [shell]
-      disabled = false
-      fish_indicator = ""
-      bash_indicator = ""
-      nu_indicator = "nu "
-      style = "bold green"
-      format = "[$indicator]($style)"
 
 ## Clean up
 
