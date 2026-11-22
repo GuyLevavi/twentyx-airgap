@@ -9,13 +9,16 @@ over the inner repo.
 
 ## Read this first: what this release assumes
 
-Outside cannot build inner's system. It only has `nixos-system-airgap-wsl`, and
-inner runs its own `nixos-system-twentyx-wsl`, from a repo outside never sees.
+Outside cannot build inner's system. Inner runs its own `nixos-system-twentyx-wsl`,
+from a repo outside never sees; outside's `nixos-system-twentyx-wsl` only shares
+the name.
 
 - WSL: `wsl-delta.nar.tar.gz` is not a system and assumes nothing about the store.
   It is closed under references, so it imports anywhere, and it holds what
   inner's rebuild cannot make offline: the new packages, and the tools the rebuild
-  uses. `apply.sh` imports it and stops. Inner's own rebuild does the switch.
+  uses. `apply.sh` imports it and stops: **nothing new is on PATH until inner's
+  own rebuild switches** (step 3). There is no toplevel to switch to on purpose:
+  outside's would replace inner's system.
 - Pods: `pod-delta.tar.gz` assumes nothing either. Despite the name it holds its
   whole closure, 692 store paths, plus a complete `/opt/twentyx`, so it works on
   whatever base it lands on. That is why it is larger than a delta.
@@ -38,10 +41,17 @@ inner runs its own `nixos-system-twentyx-wsl`, from a repo outside never sees.
    it. The next release replaces them.
 2. **Repo:** make the edits below, before rebuilding anything. The delta's configs
    expect them.
-3. **WSL system:** port the Nix changes from `inside-seed/nix/` (below), then
-   `nixos-rebuild dry-build` from the inner flake. Only config glue should be
-   listed: `home-manager-path`, `man-cache`, `etc`, the system itself. Then
-   `nixos-rebuild switch`.
+3. **WSL system:** port the Nix changes from `inside-seed/nix/` (below), keeping
+   inner's `networking.hostName` (`twentyx-wsl`). Then, from the inner flake:
+
+       nixos-rebuild dry-build --flake .#wsl
+       nixos-rebuild build --flake .#wsl
+       nix store diff-closures /run/current-system ./result
+       sudo nixos-rebuild switch --flake .#wsl
+
+   dry-build should list only config glue: `home-manager-path`, `man-cache`,
+   `etc`, the system itself. diff-closures should show the new packages and
+   nothing removed that inner relies on. Use inner's attribute if it is not `wsl`.
    If it lists a tarball or a compiler, stop: that package's hash differs from
    this release, and it cannot build here. See "Nix changes".
 4. **Pod image:** put `pod-delta.tar.gz` above the base nix layer, where the delta

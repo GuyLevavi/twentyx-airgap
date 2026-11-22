@@ -38,4 +38,9 @@ while read -r path; do
 done < "$IMPORTED"
 
 say "imported $RELEASE: $(wc -l < "$IMPORTED") paths, rooted at $ROOTS"
-echo "  next: port the edits in HANDOVER.md, then nixos-rebuild from the inner flake"
+cat <<'NEXT'
+  Nothing new is on PATH yet. Next, from the inner flake, after the edits in HANDOVER.md:
+    nixos-rebuild build --flake .#wsl
+    nix store diff-closures /run/current-system ./result   # only the new packages
+    sudo nixos-rebuild switch --flake .#wsl
+NEXT

@@ -22,7 +22,8 @@
     interop.register = true;
   };
 
-  networking.hostName = "airgap-wsl";
+  # The box's name: a rebuild from a seed with another one renames the host.
+  networking.hostName = "twentyx-wsl";
   time.timeZone = "Asia/Jerusalem";
   i18n.defaultLocale = "en_US.UTF-8";
 
