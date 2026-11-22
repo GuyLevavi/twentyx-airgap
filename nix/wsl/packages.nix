@@ -7,6 +7,8 @@
   wsl,
 }:
 let
+  extras = pkgs.callPackage ../pkgs/extras.nix { };
+
   # nixpkgs patchelf's bun, and `bun build --compile` recycles the moved
   # PT_GNU_STACK slot so the highest-vaddr PT_LOAD lands first; Linux <= 6.6
   # never maps the BSS. fix-phdr-order reorders and fails the build if unsafe.
