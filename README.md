@@ -114,15 +114,14 @@ The protocol, in order; every check is outside, before the crossing:
 `apply.sh` and `HANDOVER.md`. The inner repo is the source of truth, and builds
 its own repo layer.
 
-Nothing here assumes what the far side holds. Inner runs its own build of a
-diverged repo, and a wrong guess costs a crossing.
-
 - **RunAI**: `pod-delta.tar.gz` is the whole layer, so it fits any base.
-- **WSL**: `wsl-delta.nar.tar.gz` holds what a rebuild cannot make offline: the new
-  packages, and the build tools for the system's glue, all closed under
-  references. `--wsl-base` only decides what counts as new. `apply.sh` imports it
-  and adds GC roots, and `nixos-rebuild` from the inner flake does the switch.
-  Keep `dist/baselines/wsl-<rev>.store-paths`: nothing comes back across the gap.
+- **WSL**: outside builds the box's system (`.#wsl-system`, `nix/hosts/wsl.nix`
+  and `nix/wsl/`); nothing evaluates Nix inside. `wsl-delta.nar.tar.gz` is its
+  closure minus `--wsl-base`, and `apply.sh` imports it and switches. After
+  that the box holds exactly the new closure, which make-release writes to
+  `dist/baselines/wsl-<rev>.store-paths`: pass it as `--wsl-base` next time.
+  Keep those files: nothing comes back across the gap. A wrong base is caught
+  by `apply.sh` before it changes anything (`wsl-needs.txt`).
 
 Not done yet: the two payloads overlap heavily (672 of the pod's 692 paths are in
 the WSL closure). One payload, with `apply.sh` writing the pod layer from the

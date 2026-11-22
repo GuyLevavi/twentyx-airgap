@@ -4,6 +4,12 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
 ## Unreleased
 
+- **WSL: `sudo ./apply.sh` switches again.** Every release builds the box's
+  system (`twentyx-wsl`, the 20261013 config plus the new tools) and ships it
+  minus what the box holds; `apply.sh` imports it and switches. The November
+  releases only imported, because they assumed a flake inside that does not
+  exist, so their tools were in the store but not on PATH. The first release
+  after this one catches the box up.
 - **Release crosses as base64 parts:** big files arrive as `<file>.partN` in
   `<RELEASE>-b64/`, with `part0` also as `part00`. Run `sh reassemble.sh
   ./release` there first; it checks every part and file by sha256. See

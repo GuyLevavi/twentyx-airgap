@@ -10,20 +10,7 @@ let
   cfg = config.airgap;
   wsl = cfg.target == "wsl";
 
-  # Old interpreters for old wheels. See nix/pkgs/pbs-python.nix for why
-  # these are python-build-standalone and not nixpkgs' python. 3.10 is the
-  # last build upstream will ever cut: CPython 3.10 reached end of life.
-  pbsPython = pkgs.callPackage ../pkgs/pbs-python.nix { };
-  pbs310 = pbsPython {
-    version = "3.10.22";
-    release = "20261009";
-    hash = "sha256-yqZrMI4Q81uBFAVN99knkD+XH2Mc+jI3uExA1dXzVUk=";
-  };
-  pbs311 = pbsPython {
-    version = "3.11.18";
-    release = "20261026";
-    hash = "sha256-F8SXijbEltxTwIiZ742tGtJzT2Ml8I1gM6HmZBngryY=";
-  };
+  inherit (pkgs.callPackage ../pkgs/extras.nix { }) pbs310 pbs311 wheelhouse harlequin openCodeReview;
 
   # tealdeer downloads its page cache on first use. Inside the gap that is not
   # an error, it is a DNS lookup that hangs -- so the pages have to be a store
@@ -49,32 +36,6 @@ let
     cp -r ${tldrPages}/pages/common ${tldrPages}/pages/linux $out/tldr-pages/pages.en/
   '';
 
-  # pip source builds need a build backend. With build isolation pip fetches
-  # setuptools from the index, which inside the gap works only while
-  # Artifactory is reachable and mirrors it; with --no-build-isolation, or in
-  # a `uv venv` created without --seed, there is nothing to fetch it from at
-  # all. A find-links directory is consulted in addition to the index, so this
-  # costs nothing when the index works and rescues the build when it does not.
-  # Filenames are load-bearing: pip reads the version from the wheel name.
-  wheelhouse = pkgs.linkFarm "wheelhouse" (
-    map
-      (w: {
-        inherit (w) name;
-        path = pkgs.fetchurl w;
-      })
-      [
-        {
-          name = "setuptools-84.2.1-py3-none-any.whl";
-          url = "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl";
-          sha256 = "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2";
-        }
-        {
-          name = "wheel-0.48.0-py3-none-any.whl";
-          url = "https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/wheel-0.48.0-py3-none-any.whl";
-          sha256 = "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab";
-        }
-      ]
-  );
 in
 {
   home.sessionVariables = {
@@ -174,7 +135,7 @@ in
       # plugins baked in at build time -- sqlit pip-installs missing drivers at
       # runtime, which in here is only an error. SQL only: no Redis, Kafka or
       # Mongo. See nix/pkgs/harlequin.nix for why it is not the nixpkgs build.
-      (pkgs.callPackage ../pkgs/harlequin.nix { })
+      harlequin
 
       # ffmpeg and ffprobe for dataset work: probing, decoding, re-encoding.
       # The headless build: every codec, no SDL/X11/Wayland/PipeWire playback,
@@ -247,7 +208,7 @@ in
       # (--enable-auto-tool-choice plus a tool-call parser); without it every
       # file fails with "No tool calls parsed". With the ~70k window, cap it:
       #   ocr review --max-tokens 40000 --concurrency 2
-      (pkgs.callPackage ../pkgs/open-code-review.nix { })
+      openCodeReview
     ]
     ++ lib.optionals cfg.tools.data.enable [
       # visidata is 1.38 GB of closure — it pulls pandas, pyarrow, matplotlib,
