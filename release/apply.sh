@@ -1,46 +1,51 @@
 #!/usr/bin/env bash
-# WSL updater for twentyx release @RELEASE@ (delta on @BASE_RELEASE@).
-# Run inside the gap, from anywhere; it finds wsl-delta.nar.tar.gz beside itself.
+# WSL updater for twentyx release @RELEASE@. Run inside the gap, from the
+# release folder or anywhere; it reads the files beside itself.
 #
 #   sudo ./apply.sh
 #
-# Puts this release's packages, and the tools to rebuild with, into the store.
-# It does not switch: the running system is inner's own build, so that is
-# `nixos-rebuild` from the inner flake, after the edits in HANDOVER.md.
-#
-# The payload is closed under references, so it imports whatever the store
-# already holds. Safe to rerun: paths already in the store are skipped.
+# Imports this release's store paths and switches the system to its
+# WSL_SYSTEM (MANIFEST.txt). Safe to rerun. To undo:
+#   sudo nix-env -p /nix/var/nix/profiles/system --rollback
+#   sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch
 set -euo pipefail
 
-RELEASE="@RELEASE@"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAYLOAD="$HERE/wsl-delta.nar.tar.gz"
-ROOTS="/nix/var/nix/gcroots/twentyx-release"
+NEEDS="$HERE/wsl-needs.txt"
+PROFILE=/nix/var/nix/profiles/system
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 [ $# -eq 0 ] || { echo "usage: sudo apply.sh" >&2; exit 2; }
-[ "$(id -u)" -eq 0 ] || { echo "needs root: sudo $0" >&2; exit 1; }
-[ -f "$PAYLOAD" ] || { echo "missing $PAYLOAD" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "needs root: sudo $0"
+for f in "$PAYLOAD" "$NEEDS" "$HERE/MANIFEST.txt"; do [ -f "$f" ] || die "missing $f"; done
+SYSTEM="$(sed -n 's/^WSL_SYSTEM=//p' "$HERE/MANIFEST.txt")"
+RELEASE="$(sed -n 's/^RELEASE=//p' "$HERE/MANIFEST.txt")"
+[ -n "$SYSTEM" ] || die "MANIFEST.txt has no WSL_SYSTEM"
 
-IMPORTED="$(mktemp)"
-trap 'rm -f "$IMPORTED"' EXIT
+# The payload leaves out what outside knows this box holds. Check before
+# importing: a path missing here would stop the import partway.
+missing="$(xargs -r nix-store --check-validity --print-invalid < "$NEEDS")"
+if [ -n "$missing" ]; then
+    printf '  missing: %s\n' $missing >&2
+    die "this box lacks $(wc -w <<< "$missing") paths the release assumes. Nothing was changed; tell outside."
+fi
 
 say "importing $(du -h "$PAYLOAD" | cut -f1) payload"
-tar -xzOf "$PAYLOAD" wsl-delta.nar | nix-store --import > "$IMPORTED"
+tar -xzOf "$PAYLOAD" wsl-delta.nar | nix-store --import > /dev/null
+nix-store --check-validity "$SYSTEM"
 
-# Nothing refers to these until the rebuild, and the build tools never get a
-# referrer at all: without roots, the next GC undoes this import.
-rm -rf "$ROOTS"
-mkdir -p "$ROOTS"
-while read -r path; do
-    ln -s "$path" "$ROOTS/${path##*/}"
-done < "$IMPORTED"
+if [ "$(readlink -f /run/current-system)" = "$SYSTEM" ]; then
+    say "already on $RELEASE"
+else
+    say "switching to $RELEASE"
+    nix-env -p "$PROFILE" --set "$SYSTEM"
+    "$SYSTEM/bin/switch-to-configuration" switch
+fi
 
-say "imported $RELEASE: $(wc -l < "$IMPORTED") paths, rooted at $ROOTS"
-cat <<'NEXT'
-  Nothing new is on PATH yet. Next, from the inner flake, after the edits in HANDOVER.md:
-    nixos-rebuild build --flake .#wsl
-    nix store diff-closures /run/current-system ./result   # only the new packages
-    sudo nixos-rebuild switch --flake .#wsl
-NEXT
+# Roots left by the import-only releases of November; the system profile
+# holds everything now.
+rm -rf /nix/var/nix/gcroots/twentyx-release
+say "done: $RELEASE. New tools are on PATH in new shells."

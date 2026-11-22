@@ -9,16 +9,10 @@ over the inner repo.
 
 ## Read this first: what this release assumes
 
-Outside cannot build inner's system. Inner runs its own `nixos-system-twentyx-wsl`,
-from a repo outside never sees; outside's `nixos-system-twentyx-wsl` only shares
-the name.
-
-- WSL: `wsl-delta.nar.tar.gz` is not a system and assumes nothing about the store.
-  It is closed under references, so it imports anywhere, and it holds what
-  inner's rebuild cannot make offline: the new packages, and the tools the rebuild
-  uses. `apply.sh` imports it and stops: **nothing new is on PATH until inner's
-  own rebuild switches** (step 3). There is no toplevel to switch to on purpose:
-  outside's would replace inner's system.
+- WSL: outside builds the box's system, `nixos-system-twentyx-wsl`, and ships it.
+  `wsl-delta.nar.tar.gz` holds that system minus what the box already has, and
+  `apply.sh` imports it and switches to it. Nothing is rebuilt inside, and there
+  is no flake inside to rebuild from.
 - Pods: `pod-delta.tar.gz` assumes nothing either. Despite the name it holds its
   whole closure, 692 store paths, plus a complete `/opt/twentyx`, so it works on
   whatever base it lands on. That is why it is larger than a delta.
@@ -27,33 +21,24 @@ the name.
 
 | File | Use |
 |---|---|
-| `MANIFEST.txt` | RELEASE, KIND, BASE_RELEASE, source rev |
+| `MANIFEST.txt` | RELEASE, KIND, BASE_RELEASE, source rev, `WSL_SYSTEM` (the toplevel `apply.sh` switches to) |
 | `pod-delta.tar.gz` | nvim layer: its full closure, plus a complete `/opt/twentyx` |
-| `wsl-delta.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar: new packages and build tools, with their closures. Not unpacked beforehand: `apply.sh` streams it |
-| `apply.sh` | WSL updater: imports and adds GC roots. Does not switch |
+| `wsl-delta.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar: the WSL system's closure minus what the box holds. Not unpacked beforehand: `apply.sh` streams it |
+| `wsl-needs.txt` | Paths the stream refers to but leaves out. `apply.sh` checks the box has them before it changes anything |
+| `apply.sh` | WSL updater: checks, imports, switches |
 | `inside-seed.tar` | Outside repo at this release, under `inside-seed/`. **Not** a snapshot of inner, which is not visible from here. Reference to port from and diff against |
 | `crane-layer.tar` | crane and its closure, glibc included, at `nix/store/...`. Binary: `@CRANE@/bin/crane`. Nothing at `/bin/crane`: CI synthesizes that as before |
 
 ## Apply
 
-1. **WSL store:** `sudo ./apply.sh`. Safe on any store, and to rerun. Roots go in
-   `/nix/var/nix/gcroots/twentyx-release`, so a GC before the rebuild cannot undo
-   it. The next release replaces them.
-2. **Repo:** make the edits below, before rebuilding anything. The delta's configs
-   expect them.
-3. **WSL system:** port the Nix changes from `inside-seed/nix/` (below), keeping
-   inner's `networking.hostName` (`twentyx-wsl`). Then, from the inner flake:
-
-       nixos-rebuild dry-build --flake .#wsl
-       nixos-rebuild build --flake .#wsl
-       nix store diff-closures /run/current-system ./result
-       sudo nixos-rebuild switch --flake .#wsl
-
-   dry-build should list only config glue: `home-manager-path`, `man-cache`,
-   `etc`, the system itself. diff-closures should show the new packages and
-   nothing removed that inner relies on. Use inner's attribute if it is not `wsl`.
-   If it lists a tarball or a compiler, stop: that package's hash differs from
-   this release, and it cannot build here. See "Nix changes".
+1. **WSL:** `sudo ./apply.sh`. That is all: new tools are on PATH in a new
+   shell. Safe to rerun. It stops before changing anything if the box lacks a
+   path the release assumes; send outside the list it prints. To undo:
+   `sudo nix-env -p /nix/var/nix/profiles/system --rollback && sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch`.
+2. **Repo:** make the edits below. The pod layer's configs expect them.
+3. **WSL dotfiles:** the box's `$HOME` config still comes from inner's
+   `dotfiles/` via `wsl/link.sh`; the release only changes packages and the
+   system.
 4. **Pod image:** put `pod-delta.tar.gz` above the base nix layer, where the delta
    always goes, and feed it to `scripts/build-binary-layer.sh`. The outside repo
    has no such script, so check how it takes its inputs. `session-env` must be
@@ -64,21 +49,6 @@ the name.
 ## Inner repo edits
 
 All new or changed files are in `inside-seed.tar`, under `inside-seed/`.
-
-**Nix changes, for the WSL rebuild.** Take these as they are. A store path is a
-hash of its expression, so the imported packages only match a rebuild if the
-expressions match, on the same nixpkgs pin (`c043004`).
-
-- New: `nix/pkgs/pbs-python.nix`, `nix/pkgs/harlequin.nix`,
-  `nix/pkgs/open-code-review.nix`.
-- Changed: `nix/modules/tools.nix`, `nix/modules/nvim.nix`, `nix/modules/home.nix`,
-  `nix/modules/shell.nix`.
-
-Keep inner's own changes around them: hostname, users and the package list can
-differ, and dropping a package is fine. Changing how a package is built, or its
-overrides, means it no longer matches, and the rebuild will try to fetch or
-compile it. `nixos-rebuild dry-build` names the derivation; compare it with the
-same package in `/nix/var/nix/gcroots/twentyx-release`.
 
 **Required, the delta depends on these exact paths.** The first two are compiled
 into the delta's configs. Both fail quietly if absent, so a miss shows up as a
@@ -173,7 +143,7 @@ Not new, so not here: git, atuin, tealdeer, `lg.fish`, `.profile`,
    new config stays hidden until `airgap refresh`, or until they are removed.
 5. **`.bashrc`:** outside, bootstrap parks this as `~/.bashrc.hm` and writes its
    own stub that sources it. A plain copy to `~/.bashrc` loses bootstrap's env.
-6. **Pods only.** WSL gets its config from the rebuild in step 3.
+6. **Pods only.** WSL keeps linking its config from inner's `dotfiles/`.
 7. **Undo the tree-sitter workaround:** remove `~/.local/bin/tree-sitter` and
    any local `:TSUpdate` patch once `plugins/treesitter.lua` is in. Parsers are
    fixed by the release; `:TSUpdate` and `:TSInstall` cannot work offline.

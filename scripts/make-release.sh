@@ -2,14 +2,18 @@
 # Run OUTSIDE. Cut one delta release into twentyx-store/<RELEASE>/.
 #
 #   ./scripts/make-release.sh --base-release <id> \
-#       --wsl-base <store-paths file of the WSL closure already inside>
+#       --wsl-base <store-paths file> [--wsl-base <another> ...]
+#
+# --wsl-base lists what the box's store already holds: normally the
+# dist/baselines/wsl-<rev>.store-paths the previous release wrote.
 #
 # RELEASE is <yyyymmdd>-<10 char rev>. The folder holds exactly:
 #
 #   MANIFEST.txt           RELEASE, KIND, BASE_RELEASE
 #   pod-delta.tar.gz       nvim layer with its whole closure, rooted at /opt/twentyx
-#   wsl-delta.nar.tar.gz   nix-store --export stream: new WSL packages, build tools
-#   apply.sh               WSL updater, from release/apply.sh
+#   wsl-delta.nar.tar.gz   nix-store --export stream: the WSL system, minus --wsl-base
+#   wsl-needs.txt          paths the stream refers to but leaves out; apply.sh checks them
+#   apply.sh               WSL updater, from release/apply.sh: import, then switch
 #   HANDOVER.md            inner repo edits, from release/HANDOVER.md
 #   inside-seed.tar        this repo's tree at the release commit
 #   crane-layer.tar        crane and its closure at nix/store/..., for CI
@@ -25,16 +29,17 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-USAGE="usage: make-release.sh --base-release ID --wsl-base FILE"
-BASE_RELEASE="" WSL_BASE=""
+USAGE="usage: make-release.sh --base-release ID --wsl-base FILE [--wsl-base FILE ...]"
+BASE_RELEASE="" WSL_BASE=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --base-release) BASE_RELEASE="${2:?}"; shift 2 ;;
-        --wsl-base)     WSL_BASE="$(realpath "${2:?}")"; shift 2 ;;
+        --wsl-base)     WSL_BASE+=("$(realpath "${2:?}")"); shift 2 ;;
         *) echo "$USAGE" >&2; exit 2 ;;
     esac
 done
-[ -n "$BASE_RELEASE" ] && [ -s "$WSL_BASE" ] || { echo "$USAGE" >&2; exit 2; }
+[ -n "$BASE_RELEASE" ] && [ "${#WSL_BASE[@]}" -gt 0 ] || { echo "$USAGE" >&2; exit 2; }
+for f in "${WSL_BASE[@]}"; do [ -s "$f" ] || { echo "empty or missing: $f" >&2; exit 2; }; done
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
@@ -80,11 +85,29 @@ grep -rhoE '/nix/store/[a-z0-9]{32}-[^/"'"'"' :;]*' dotfiles | sort -u \
     | comm -23 - "$WORK/pod-paths" > "$WORK/unshipped"
 [ ! -s "$WORK/unshipped" ] || { cat "$WORK/unshipped" >&2; die "dotfiles/ names store paths the pod layer lacks"; }
 
-say "wsl delta"
-./scripts/nix-export.sh "$WORK/wsl" --since-paths "$WSL_BASE" --nar
+# The whole system, minus what the box already holds. apply.sh switches to it,
+# so after it the box holds exactly this closure: that is the next base.
+say "wsl system"
+WSL_SYSTEM="$(nix build --no-link --print-out-paths .#wsl-system)"
+mkdir -p "$WORK/wsl" dist/baselines
+nix-store -qR "$WSL_SYSTEM" > "$WORK/wsl/closure"
+sort -u "${WSL_BASE[@]}" > "$WORK/wsl/base"
+# -qR prints dependencies first, the order --import needs.
+grep -vxFf "$WORK/wsl/base" "$WORK/wsl/closure" > "$WORK/wsl/delta-paths" || true
+mapfile -t DELTA < "$WORK/wsl/delta-paths"
+if [ "${#DELTA[@]}" -gt 0 ]; then
+    nix-store -q --references "${DELTA[@]}" | sort -u \
+        | comm -23 - <(sort -u "$WORK/wsl/delta-paths") > "$OUT/wsl-needs.txt"
+else
+    : > "$OUT/wsl-needs.txt"
+fi
+# argv, not xargs: xargs may split the list into several exports, and
+# --import stops at the first one's end marker.
+nix-store --export "${DELTA[@]}" > "$WORK/wsl/wsl-delta.nar"
+say "  ${#DELTA[@]} of $(wc -l < "$WORK/wsl/closure") paths, $(du -h "$WORK/wsl/wsl-delta.nar" | cut -f1)"
 tar --owner=0 --group=0 --mtime='@1' -C "$WORK/wsl" -cf - wsl-delta.nar \
     | gzip -n -6 > "$OUT/wsl-delta.nar.tar.gz"
-cp "$WORK/wsl/store-paths" "dist/baselines/wsl-${REV:0:7}.store-paths"
+sort -u "$WORK/wsl/closure" > "dist/baselines/wsl-${REV:0:7}.store-paths"
 
 say "gate: the shipped paths match their NAR hashes"
 # A store damaged since the build must fail here, not in the gap.
@@ -116,8 +139,9 @@ RELEASE=$RELEASE
 KIND=delta
 BASE_RELEASE=$BASE_RELEASE
 SOURCE_REV=$REV
+WSL_SYSTEM=$WSL_SYSTEM
 CRANE=$CRANE/bin/crane
-ARTIFACTS=pod-delta.tar.gz wsl-delta.nar.tar.gz apply.sh HANDOVER.md inside-seed.tar crane-layer.tar
+ARTIFACTS=pod-delta.tar.gz wsl-delta.nar.tar.gz wsl-needs.txt apply.sh HANDOVER.md inside-seed.tar crane-layer.tar
 MANIFEST
 
 rm -rf "$WORK"

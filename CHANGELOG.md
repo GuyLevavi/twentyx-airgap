@@ -4,11 +4,12 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
 ## Unreleased
 
-- **WSL: new tools need inner's rebuild.** Since `20261102`, `apply.sh` only
-  imports and roots; nothing reaches PATH until `nixos-rebuild switch` from the
-  inner flake. `apply.sh` and HANDOVER now say so and give the commands.
-- **WSL hostname** is `twentyx-wsl` outside too, so a rebuild from a ported seed
-  keeps the box's name.
+- **WSL: `sudo ./apply.sh` switches again.** Every release builds the box's
+  system (`twentyx-wsl`, the 20261013 config plus the new tools) and ships it
+  minus what the box holds; `apply.sh` imports it and switches. The November
+  releases only imported, because they assumed a flake inside that does not
+  exist, so their tools were in the store but not on PATH. The first release
+  after this one catches the box up.
 - **harlequin theme:** a Nix-owned `~/.config/harlequin/config.toml` sets
   `tokyo-night`, the nearest match for nvim's tokyonight. harlequin removes
   Textual's ANSI themes, so it cannot use the terminal's own palette. Try

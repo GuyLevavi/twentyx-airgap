@@ -17,17 +17,19 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # VS Code Server ships a prebuilt node that hardcodes
-    # /lib64/ld-linux-x86-64.so.2, which does not exist on NixOS. Without this
-    # module, connecting VS Code (Windows) to NixOS-WSL hangs forever on
-    # "Setting up VS Code Server" — the exact thing that works today only
-    # because Fedora is FHS.
-    # No `follows`: this flake declares no nixpkgs input, and overriding a
-    # non-existent one is a warning on every single evaluation.
-    vscode-server.url = "github:nix-community/nixos-vscode-server";
-
     lazyvim = {
       url = "github:pfassina/lazyvim-nix/v16.0.0";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # The WSL system's profile (nix/wsl/profile.nix). Same revisions as the
+    # box's 20261013 base, so its paths stay the ones already there.
+    matt-skills = {
+      url = "github:mattpocock/skills";
+      flake = false;
+    };
+    workmux = {
+      url = "github:raine/workmux";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -38,7 +40,6 @@
       nixpkgs,
       home-manager,
       nixos-wsl,
-      vscode-server,
       ...
     }@inputs:
     let
@@ -47,10 +48,6 @@
         inherit system;
         config.allowUnfree = true;
       };
-
-      # The username differs per target: `gl` in WSL, resolved at runtime from
-      # the RunAI workspace name in a pod. Only the WSL side needs it at eval.
-      username = "gl";
 
       runaiHome = home-manager.lib.homeManagerConfiguration {
         inherit pkgs;
@@ -71,27 +68,16 @@
       };
     in
     {
-      # ── WSL: a full NixOS system, rebuilt offline ──────────────────────
+      # ── WSL: the box's system, built here and switched to by apply.sh ──
+      # Nothing evaluates Nix inside the gap; every release ships this
+      # toplevel. Not the home-manager config the pods use: the box links its
+      # dotfiles from the inner repo.
       nixosConfigurations.wsl = nixpkgs.lib.nixosSystem {
         inherit system;
-        specialArgs = { inherit inputs username; };
+        specialArgs = { inherit inputs; };
         modules = [
           nixos-wsl.nixosModules.default
-          vscode-server.nixosModules.default
-          home-manager.nixosModules.home-manager
           ./nix/hosts/wsl.nix
-          {
-            home-manager = {
-              useGlobalPkgs = true;
-              useUserPackages = true;
-              backupFileExtension = "hm-bak";
-              extraSpecialArgs = { inherit inputs username; };
-              users.${username} = {
-                imports = [ ./nix/modules/home.nix ];
-                airgap.target = "wsl";
-              };
-            };
-          }
         ];
       };
 
@@ -110,6 +96,8 @@
           hm = self.homeConfigurations.runai-nvim;
         };
         default = self.packages.${system}.runai-layer-nvim;
+
+        wsl-system = self.nixosConfigurations.wsl.config.system.build.toplevel;
 
         # ── the very first transfer ────────────────────────────────────────
         # Chicken and egg: nix-import.sh needs a NixOS-WSL machine, and there
