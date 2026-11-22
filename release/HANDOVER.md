@@ -20,6 +20,22 @@ inner runs its own `nixos-system-twentyx-wsl`, from a repo outside never sees.
   whole closure, 692 store paths, plus a complete `/opt/twentyx`, so it works on
   whatever base it lands on. That is why it is larger than a delta.
 
+## Reassemble first
+
+The release crosses as `@RELEASE@-b64/`. Every file over 1 MiB comes as
+base64 parts, `<file>.part0`, `.part1`, ..., and `part0` comes twice, also as
+`<file>.part00`. In that folder:
+
+```
+sh reassemble.sh ./release
+```
+
+It checks every part's sha256 against `PARTS.sha256`, takes `part00` when
+`part0` is missing or damaged, decodes each file and checks it against
+`PARTS.txt`. The small files are checked against `PLAIN.sha256`. It ends with
+`RESULT: ok -> <dir>`, or names each missing or damaged part to ask outside for.
+Everything below happens in `./release`.
+
 ## What is in this folder
 
 | File | Use |

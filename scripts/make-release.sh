@@ -14,6 +14,10 @@
 #   inside-seed.tar        this repo's tree at the release commit
 #   crane-layer.tar        crane and its closure at nix/store/..., for CI
 #
+# What crosses is twentyx-store/<RELEASE>-b64/: the same files, with every one
+# over 1 MiB as base64 parts (default 20 MiB, --part-bytes), part0 also as
+# part00, and reassemble.sh. See scripts/shard-release.sh.
+#
 # Every check runs here, before the folder exists (README "Releases"): the
 # release refuses to be cut unless dotfiles/ is the export of this commit,
 # every store path it names ships in the pod layer, LazyVim works with no
@@ -25,12 +29,13 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-USAGE="usage: make-release.sh --base-release ID --wsl-base FILE"
-BASE_RELEASE="" WSL_BASE=""
+USAGE="usage: make-release.sh --base-release ID --wsl-base FILE [--part-bytes N]"
+BASE_RELEASE="" WSL_BASE="" PART_BYTES=20971520
 while [ $# -gt 0 ]; do
     case "$1" in
         --base-release) BASE_RELEASE="${2:?}"; shift 2 ;;
         --wsl-base)     WSL_BASE="$(realpath "${2:?}")"; shift 2 ;;
+        --part-bytes)   PART_BYTES="${2:?}"; shift 2 ;;
         *) echo "$USAGE" >&2; exit 2 ;;
     esac
 done
@@ -121,5 +126,18 @@ ARTIFACTS=pod-delta.tar.gz wsl-delta.nar.tar.gz apply.sh HANDOVER.md inside-seed
 MANIFEST
 
 rm -rf "$WORK"
-say "done: $OUT ($(du -sh "$OUT" | cut -f1))"
+say "release: $OUT ($(du -sh "$OUT" | cut -f1))"
 ls -lh "$OUT" | awk 'NR > 1 { printf "  %6s  %s\n", $5, $9 }'
+
+# What crosses: big files as base64 parts, see shard-release.sh.
+say "shards"
+SHARDS="$OUT-b64"
+./scripts/shard-release.sh "$OUT" "$SHARDS" "$PART_BYTES"
+say "test: reassemble the shards and compare"
+CHECK="$(mktemp -d)"
+sh "$SHARDS/reassemble.sh" "$CHECK" > /dev/null \
+    && diff -r "$OUT" "$CHECK" > /dev/null \
+    || { rm -rf "$CHECK"; die "the shards do not reassemble to $OUT"; }
+rm -rf "$CHECK"
+say "done: carry $SHARDS ($(ls "$SHARDS" | wc -l) files, $(du -sh "$SHARDS" | cut -f1))"
+awk '{ printf "  %-24s %s parts\n", $1, $2 }' "$SHARDS/PARTS.txt"

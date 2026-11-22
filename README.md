@@ -100,8 +100,15 @@ The protocol, in order; every check is outside, before the crossing:
    - every `/nix/store` path in `dotfiles/` is in the pod layer;
    - every path it ships matches its NAR hash in the Nix DB (`nix store
      verify`), so a store damaged since the build fails here, not in the gap.
-3. Carry `twentyx-store/<RELEASE>/` as it is: one folder, nothing renamed
-   or added. Inside, `nix-store --import` and `airgap doctor` are the checks.
+3. Carry `twentyx-store/<RELEASE>-b64/` as it is: one folder, nothing renamed
+   or added. The transfer may drop a big file of any type, so `make-release.sh`
+   ends by running `shard-release.sh`. Every file over 1 MiB becomes base64
+   parts of 20 MiB (`--part-bytes`), and `part0` is also shipped as `part00`.
+   `reassemble.sh` and checksums go with them, and the script checks that the
+   parts rebuild the release before it says done. Inside, `sh reassemble.sh
+   ./release` rebuilds the folder. Then `nix-store --import` and
+   `airgap doctor` are the checks. `twentyx-store/<RELEASE>/` stays outside
+   as the unsharded copy.
 
 `make-release.sh` lists what the folder holds. `release/` has the templates for
 `apply.sh` and `HANDOVER.md`. The inner repo is the source of truth, and builds
