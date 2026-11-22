@@ -14,6 +14,7 @@
 #   wsl-delta.nar.tar.gz   nix-store --export stream: the WSL system, minus --wsl-base
 #   wsl-needs.txt          paths the stream refers to but leaves out; apply.sh checks them
 #   apply.sh               WSL updater, from release/apply.sh: import, then switch
+#   WSL.md                 the inner agent's instructions for apply.sh
 #   HANDOVER.md            inner repo edits, from release/HANDOVER.md
 #   inside-seed.tar        this repo's tree at the release commit
 #   crane-layer.tar        crane and its closure at nix/store/..., for CI
@@ -132,9 +133,11 @@ say "apply.sh and HANDOVER.md"
 fill() {
     sed -e "s|@RELEASE@|$RELEASE|g" \
         -e "s|@BASE_RELEASE@|$BASE_RELEASE|g" \
-        -e "s|@CRANE@|$CRANE|g" "$1"
+        -e "s|@CRANE@|$CRANE|g" \
+        -e "s|@WSL_SYSTEM@|$WSL_SYSTEM|g" "$1"
 }
 fill release/apply.sh > "$OUT/apply.sh"
+fill release/WSL.md > "$OUT/WSL.md"
 chmod 0755 "$OUT/apply.sh"
 # The changelog goes in too, one heading level down.
 { fill release/HANDOVER.md; echo; sed 's/^#/##/' CHANGELOG.md; } > "$OUT/HANDOVER.md"
@@ -146,7 +149,7 @@ BASE_RELEASE=$BASE_RELEASE
 SOURCE_REV=$REV
 WSL_SYSTEM=$WSL_SYSTEM
 CRANE=$CRANE/bin/crane
-ARTIFACTS=pod-delta.tar.gz wsl-delta.nar.tar.gz wsl-needs.txt apply.sh HANDOVER.md inside-seed.tar crane-layer.tar
+ARTIFACTS=pod-delta.tar.gz wsl-delta.nar.tar.gz wsl-needs.txt apply.sh WSL.md HANDOVER.md inside-seed.tar crane-layer.tar
 MANIFEST
 
 rm -rf "$WORK"

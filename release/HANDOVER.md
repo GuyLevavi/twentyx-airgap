@@ -42,6 +42,7 @@ Everything below happens in `./release`.
 | `wsl-delta.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar: the WSL system's closure minus what the box holds. Not unpacked beforehand: `apply.sh` streams it |
 | `wsl-needs.txt` | Paths the stream refers to but leaves out. `apply.sh` checks the box has them before it changes anything |
 | `apply.sh` | WSL updater: checks, imports, switches |
+| `WSL.md` | The WSL update on one page: steps, checks, undo |
 | `inside-seed.tar` | Outside repo at this release, under `inside-seed/`. **Not** a snapshot of inner, which is not visible from here. Reference to port from and diff against |
 | `crane-layer.tar` | crane and its closure, glibc included, at `nix/store/...`. Binary: `@CRANE@/bin/crane`. Nothing at `/bin/crane`: CI synthesizes that as before |
 
