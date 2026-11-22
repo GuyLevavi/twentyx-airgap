@@ -28,21 +28,10 @@ let
   # -- is guaranteed to run too early and silently do nothing.
   evalHome = config.home.homeDirectory;
 
-  # atuin's nu hooks are background jobs, which starship's jobs module counts
-  # as yours (✦). Label atuin's and leave them out of the count; the greps fail
-  # the build if either upstream init stops matching.
-  atuinNu = pkgs.runCommand "atuin-nushell-config.nu" {
-    nativeBuildInputs = [ pkgs.writableTmpDirAsHomeHook ];
-  } ''
-    ${lib.getExe config.programs.atuin.package} init nu \
-      | sed 's/job spawn {/job spawn --description atuin {/' >$out
-    grep -q 'job spawn --description atuin' $out
-  '';
-  starshipNu = pkgs.runCommand "starship-nushell-config.nu" { } ''
-    ${lib.getExe config.programs.starship.package} init nu \
-      | sed 's/(job list | length)/(job list | where description? != "atuin" | length)/' >$out
-    grep -q 'description? != "atuin"' $out
-  '';
+  nuInit = pkgs.callPackage ../pkgs/nu-init.nix {
+    atuin = config.programs.atuin.package;
+    starship = config.programs.starship.package;
+  };
 in
 {
   programs.bash = {
@@ -192,8 +181,8 @@ in
     settings.show_banner = false;
     # After fzf, as home-manager orders atuin's, so atuin keeps Ctrl-R.
     extraConfig = lib.mkOrder 2000 ''
-      use ${starshipNu}
-      source ${atuinNu}
+      use ${nuInit.starship}
+      source ${nuInit.atuin}
     '';
   };
 

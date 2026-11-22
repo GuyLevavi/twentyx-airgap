@@ -284,6 +284,10 @@ in
     '';
   };
 
+  # nu reads $XDG_DATA_DIRS/nushell/vendor/autoload, and NixOS links only
+  # listed share/ dirs into the system profile.
+  environment.pathsToLink = [ "/share/nushell" ];
+
   environment.systemPackages = with pkgs; [
     twentyx.profile
     gitMinimal

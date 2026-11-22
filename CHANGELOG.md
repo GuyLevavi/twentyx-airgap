@@ -10,6 +10,10 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
   releases only imported, because they assumed a flake inside that does not
   exist, so their tools were in the store but not on PATH. The first release
   after this one catches the box up.
+- **WSL nu config:** nu loads starship, atuin (jobs left out of starship's
+  count), zoxide and direnv from the system's vendor autoload dir, with
+  nothing in `$HOME`. The `nu` prompt marker needs a `[shell]` table in
+  inner's `starship.toml` (WSL.md).
 - **Release crosses as base64 parts:** big files arrive as `<file>.partN` in
   `<RELEASE>-b64/`, with `part0` also as `part00`. Run `sh reassemble.sh
   ./release` there first; it checks every part and file by sha256. See
