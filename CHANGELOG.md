@@ -4,6 +4,18 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
 
 ## Unreleased
 
+- **Pods: code-server and the rest of pod-full are back.** The pod layer's
+  `/opt/twentyx/profile`, `home-defaults` and `session-env` shadow the 20261013
+  pod-full layer's, and since 20261102 they were built from the home-manager
+  config alone, which never carried code-server. vscode-* pods then had nothing
+  to launch. The layer now also carries pod-full's packages, its home-defaults
+  (`.zed_server`, the code-server opencode extension, opencode skills) and its
+  session variables (`TWENTYX_NVIM_PLUGINS`), with home-manager winning any
+  clash. Not its gcc: make keeps finding the base image's `cc`. A release gate
+  fails when the pod profile lacks any command pod-full had.
+- **`apply.sh [dir]`:** takes the release folder again, as inner's
+  `wsl/update.sh` passes it, and skips the `wsl-needs.txt` pre-check when the
+  file was not fetched.
 - **WSL: `sudo ./apply.sh` switches again.** Every release builds the box's
   system (`twentyx-wsl`, the 20261013 config plus the new tools) and ships it
   minus what the box holds; `apply.sh` imports it and switches. The November

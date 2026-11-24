@@ -90,6 +90,8 @@ let
   };
 in
 {
+  inherit packages;
+
   # A buildEnv of the whole package set. On WSL it is folded into the system
   # profile; in a pod it is the layer's /opt/twentyx/profile.
   profile = pkgs.buildEnv {

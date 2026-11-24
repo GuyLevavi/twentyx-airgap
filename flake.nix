@@ -94,6 +94,11 @@
       packages.${system} = {
         runai-layer-nvim = pkgs.callPackage ./nix/runai/layer.nix {
           hm = self.homeConfigurations.runai-nvim;
+          podFull = import ./nix/wsl/profile.nix {
+            inherit (nixpkgs) lib;
+            inherit pkgs inputs;
+            wsl = false;
+          };
         };
         default = self.packages.${system}.runai-layer-nvim;
 

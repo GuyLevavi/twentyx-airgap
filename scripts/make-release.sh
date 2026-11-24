@@ -48,6 +48,10 @@ done
 for f in "${WSL_BASE[@]}"; do [ -s "$f" ] || { echo "empty or missing: $f" >&2; exit 2; }; done
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+passthru_path() {
+    nix build --no-link --print-out-paths --impure --expr \
+        "(builtins.getFlake (toString ./.)).packages.x86_64-linux.runai-layer-nvim.passthru.$1"
+}
 
 [ -z "$(git status --porcelain)" ] || {
     echo "the working tree is not clean; the release would not match its commit" >&2
@@ -90,6 +94,16 @@ tar -xzOf "$OUT/pod-delta.tar.gz" --occurrence=1 opt/twentyx/store-paths 2>/dev/
 grep -rhoE '/nix/store/[a-z0-9]{32}-[^/"'"'"' :;]*' dotfiles | sort -u \
     | comm -23 - "$WORK/pod-paths" > "$WORK/unshipped"
 [ ! -s "$WORK/unshipped" ] || { cat "$WORK/unshipped" >&2; die "dotfiles/ names store paths the pod layer lacks"; }
+
+say "gate: the pod profile keeps every command pod-full's had"
+# This layer's /opt/twentyx/profile shadows the 20261013 one: a command that
+# goes missing here is gone from every pod.
+LAYER_PROFILE="$(passthru_path profile)"
+FULL_PROFILE="$(passthru_path profile.podFull)"
+comm -23 <(ls "$FULL_PROFILE/bin" | grep -vx 'gcc\|g++\|cc\|c++\|cpp\|gcc-.*\|.*-gcc.*\|.*-g++.*\|.*-cpp' | sort) \
+         <(ls "$LAYER_PROFILE/bin" | sort) > "$WORK/dropped"
+[ ! -s "$WORK/dropped" ] || { cat "$WORK/dropped" >&2; die "the pod profile drops commands pod-full had"; }
+[ -x "$LAYER_PROFILE/bin/code-server" ] || die "the pod profile has no code-server"
 
 # The whole system, minus what the box already holds. apply.sh switches to it,
 # so after it the box holds exactly this closure: that is the next base.
