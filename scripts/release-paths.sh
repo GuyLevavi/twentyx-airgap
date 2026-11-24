@@ -8,7 +8,8 @@
 # with "NIXE", padding, then the path as a length-prefixed string.
 set -euo pipefail
 for dir in "$@"; do
-    tar -xzOf "$dir/wsl-delta.nar.tar.gz" wsl-delta.nar
+    kind="$(sed -n 's/^KIND=//p' "$dir/MANIFEST.txt" 2>/dev/null || true)"
+    tar -xzOf "$dir/wsl-${kind:-delta}.nar.tar.gz" "wsl-${kind:-delta}.nar"
 done | python3 -I -c '
 import re, struct, sys
 data = sys.stdin.buffer.read()

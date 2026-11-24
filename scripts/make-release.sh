@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# Run OUTSIDE. Cut one delta release into twentyx-store/<RELEASE>/.
+# Run OUTSIDE. Cut one release into twentyx-store/<RELEASE>/.
 #
 #   ./scripts/make-release.sh --base-release <id> \
 #       --wsl-base <store-paths file> [--wsl-base <another> ...]
+#   ./scripts/make-release.sh --full
 #
-# --wsl-base lists what the box's store already holds: normally the
-# dist/baselines/wsl-<rev>.store-paths the previous release wrote.
+# --wsl-base lists what a box's store already holds: normally the
+# dist/baselines/wsl-<rev>.store-paths a previous release wrote. With several,
+# the delta leaves out only what ALL of them hold, so boxes on any of those
+# releases can take it in one step.
 #
-# RELEASE is <yyyymmdd>-<10 char rev>. The folder holds exactly:
+# --full needs no base: the whole system and pod layer, a reset that leaves
+# every earlier delta behind. Its RELEASE ends in -full.
 #
-#   MANIFEST.txt           RELEASE, KIND, BASE_RELEASE
-#   pod-delta.tar.gz       nvim layer with its whole closure, rooted at /opt/twentyx
-#   wsl-delta.nar.tar.gz   nix-store --export stream: the WSL system, minus --wsl-base
+# RELEASE is <yyyymmdd>-<10 char rev>[-full]. The folder holds exactly:
+#
+#   MANIFEST.txt           RELEASE, KIND, BASE_RELEASE, WSL_SYSTEM
+#   pod-<KIND>.tar.gz      nvim layer with its whole closure, rooted at /opt/twentyx
+#   wsl-<KIND>.nar.tar.gz  nix-store --export stream: the WSL system, minus --wsl-base
 #   wsl-needs.txt          paths the stream refers to but leaves out; apply.sh checks them
 #   apply.sh               WSL updater, from release/apply.sh: import, then switch
+#   update.sh              inner's wsl/update.sh: chains releases a box is behind on
+#   PROTOCOL.md            the transfer protocol, step by step
 #   WSL.md                 the inner agent's instructions for apply.sh
 #   HANDOVER.md            inner repo edits, from release/HANDOVER.md
 #   inside-seed.tar        this repo's tree at the release commit
@@ -29,25 +37,32 @@
 # network, and every shipped path still matches its NAR hash.
 #
 # The repo layer is not here: inner builds its own with docker/mklayer.sh.
-# KIND=full (nixos-wsl.tar.gz, pod-full.tar.gz, windows-kit.tar.gz) is not
-# implemented; we only cut deltas today.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-USAGE="usage: make-release.sh --base-release ID --wsl-base FILE [--wsl-base FILE ...] [--part-bytes N]"
-BASE_RELEASE="" WSL_BASE=() PART_BYTES=20971520
+USAGE="usage: make-release.sh {--base-release ID --wsl-base FILE [--wsl-base FILE ...] | --full} [--part-bytes N]"
+BASE_RELEASE="" WSL_BASE=() PART_BYTES=20971520 KIND=delta
 while [ $# -gt 0 ]; do
     case "$1" in
+        --full)         KIND=full; shift ;;
         --base-release) BASE_RELEASE="${2:?}"; shift 2 ;;
         --wsl-base)     WSL_BASE+=("$(realpath "${2:?}")"); shift 2 ;;
         --part-bytes)   PART_BYTES="${2:?}"; shift 2 ;;
         *) echo "$USAGE" >&2; exit 2 ;;
     esac
 done
-[ -n "$BASE_RELEASE" ] && [ "${#WSL_BASE[@]}" -gt 0 ] || { echo "$USAGE" >&2; exit 2; }
+if [ "$KIND" = full ]; then
+    [ -z "$BASE_RELEASE" ] && [ "${#WSL_BASE[@]}" -eq 0 ] || { echo "$USAGE" >&2; exit 2; }
+else
+    [ -n "$BASE_RELEASE" ] && [ "${#WSL_BASE[@]}" -gt 0 ] || { echo "$USAGE" >&2; exit 2; }
+fi
 for f in "${WSL_BASE[@]}"; do [ -s "$f" ] || { echo "empty or missing: $f" >&2; exit 2; }; done
 
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+passthru_path() {
+    nix build --no-link --print-out-paths --impure --expr \
+        "(builtins.getFlake (toString ./.)).packages.x86_64-linux.runai-layer-nvim.passthru.$1"
+}
 
 [ -z "$(git status --porcelain)" ] || {
     echo "the working tree is not clean; the release would not match its commit" >&2
@@ -70,8 +85,13 @@ say "gate: LazyVim offline"
 nvim_out="$(./scripts/check-nvim-offline.sh 2>&1)" \
     || { printf '%s\n' "$nvim_out" >&2; die "LazyVim does not work offline"; }
 
+say "gate: update.sh chains releases (mocked registry)"
+upd_out="$(./scripts/test-update.sh 2>&1)" \
+    || { printf '%s\n' "$upd_out" >&2; die "release/update.sh fails its chaining tests"; }
+
 REV="$(git rev-parse HEAD)"
 RELEASE="$(date +%Y%m%d)-${REV:0:10}"
+[ "$KIND" = delta ] || RELEASE="$RELEASE-full"
 OUT="twentyx-store/$RELEASE"
 WORK="dist/release-work"
 rm -rf "$OUT" "$WORK"
@@ -81,15 +101,25 @@ mkdir -p "$OUT"
 # is not visible from here, and a missing path only shows up at runtime.
 say "pod layer"
 ./scripts/build-layers.sh "$WORK/pod-out" > /dev/null
-install -m 0644 "$WORK/pod-out/nix-layer-nvim.tar.gz" "$OUT/pod-delta.tar.gz"
+install -m 0644 "$WORK/pod-out/nix-layer-nvim.tar.gz" "$OUT/pod-$KIND.tar.gz"
 
 say "gate: every store path dotfiles/ names is in the pod layer"
-tar -xzOf "$OUT/pod-delta.tar.gz" --occurrence=1 opt/twentyx/store-paths 2>/dev/null \
+tar -xzOf "$OUT/pod-$KIND.tar.gz" --occurrence=1 opt/twentyx/store-paths 2>/dev/null \
     | sort -u > "$WORK/pod-paths" || true
 [ -s "$WORK/pod-paths" ] || die "the pod layer has no opt/twentyx/store-paths"
 grep -rhoE '/nix/store/[a-z0-9]{32}-[^/"'"'"' :;]*' dotfiles | sort -u \
     | comm -23 - "$WORK/pod-paths" > "$WORK/unshipped"
 [ ! -s "$WORK/unshipped" ] || { cat "$WORK/unshipped" >&2; die "dotfiles/ names store paths the pod layer lacks"; }
+
+say "gate: the pod profile keeps every command pod-full's had"
+# This layer's /opt/twentyx/profile shadows the 20261013 one: a command that
+# goes missing here is gone from every pod.
+LAYER_PROFILE="$(passthru_path profile)"
+FULL_PROFILE="$(passthru_path profile.podFull)"
+comm -23 <(ls "$FULL_PROFILE/bin" | grep -vx 'gcc\|g++\|cc\|c++\|cpp\|gcc-.*\|.*-gcc.*\|.*-g++.*\|.*-cpp' | sort) \
+         <(ls "$LAYER_PROFILE/bin" | sort) > "$WORK/dropped"
+[ ! -s "$WORK/dropped" ] || { cat "$WORK/dropped" >&2; die "the pod profile drops commands pod-full had"; }
+[ -x "$LAYER_PROFILE/bin/code-server" ] || die "the pod profile has no code-server"
 
 # The whole system, minus what the box already holds. apply.sh switches to it,
 # so after it the box holds exactly this closure: that is the next base.
@@ -97,9 +127,21 @@ say "wsl system"
 WSL_SYSTEM="$(nix build --no-link --print-out-paths .#wsl-system)"
 mkdir -p "$WORK/wsl" dist/baselines
 nix-store -qR "$WSL_SYSTEM" > "$WORK/wsl/closure"
-sort -u "${WSL_BASE[@]}" > "$WORK/wsl/base"
+# The paths every base holds: a box on any of them can import the delta.
+: > "$WORK/wsl/base"
+if [ "${#WSL_BASE[@]}" -gt 0 ]; then
+    sort -u "${WSL_BASE[0]}" > "$WORK/wsl/base"
+    for f in "${WSL_BASE[@]:1}"; do
+        sort -u "$f" | comm -12 "$WORK/wsl/base" - > "$WORK/wsl/base.next"
+        mv "$WORK/wsl/base.next" "$WORK/wsl/base"
+    done
+fi
 # -qR prints dependencies first, the order --import needs.
-grep -vxFf "$WORK/wsl/base" "$WORK/wsl/closure" > "$WORK/wsl/delta-paths" || true
+if [ -s "$WORK/wsl/base" ]; then
+    grep -vxFf "$WORK/wsl/base" "$WORK/wsl/closure" > "$WORK/wsl/delta-paths" || true
+else
+    cp "$WORK/wsl/closure" "$WORK/wsl/delta-paths"
+fi
 mapfile -t DELTA < "$WORK/wsl/delta-paths"
 if [ "${#DELTA[@]}" -gt 0 ]; then
     nix-store -q --references "${DELTA[@]}" | sort -u \
@@ -109,10 +151,10 @@ else
 fi
 # argv, not xargs: xargs may split the list into several exports, and
 # --import stops at the first one's end marker.
-nix-store --export "${DELTA[@]}" > "$WORK/wsl/wsl-delta.nar"
-say "  ${#DELTA[@]} of $(wc -l < "$WORK/wsl/closure") paths, $(du -h "$WORK/wsl/wsl-delta.nar" | cut -f1)"
-tar --owner=0 --group=0 --mtime='@1' -C "$WORK/wsl" -cf - wsl-delta.nar \
-    | gzip -n -6 > "$OUT/wsl-delta.nar.tar.gz"
+nix-store --export "${DELTA[@]}" > "$WORK/wsl/wsl-$KIND.nar"
+say "  ${#DELTA[@]} of $(wc -l < "$WORK/wsl/closure") paths, $(du -h "$WORK/wsl/wsl-$KIND.nar" | cut -f1)"
+tar --owner=0 --group=0 --mtime='@1' -C "$WORK/wsl" -cf - "wsl-$KIND.nar" \
+    | gzip -n -6 > "$OUT/wsl-$KIND.nar.tar.gz"
 sort -u "$WORK/wsl/closure" > "dist/baselines/wsl-${REV:0:7}.store-paths"
 
 say "gate: the shipped paths match their NAR hashes"
@@ -137,19 +179,21 @@ fill() {
         -e "s|@WSL_SYSTEM@|$WSL_SYSTEM|g" "$1"
 }
 fill release/apply.sh > "$OUT/apply.sh"
+cp release/update.sh "$OUT/update.sh"
 fill release/WSL.md > "$OUT/WSL.md"
-chmod 0755 "$OUT/apply.sh"
+fill release/PROTOCOL.md > "$OUT/PROTOCOL.md"
+chmod 0755 "$OUT/apply.sh" "$OUT/update.sh"
 # The changelog goes in too, one heading level down.
 { fill release/HANDOVER.md; echo; sed 's/^#/##/' CHANGELOG.md; } > "$OUT/HANDOVER.md"
 
 cat > "$OUT/MANIFEST.txt" <<MANIFEST
 RELEASE=$RELEASE
-KIND=delta
+KIND=$KIND
 BASE_RELEASE=$BASE_RELEASE
 SOURCE_REV=$REV
 WSL_SYSTEM=$WSL_SYSTEM
 CRANE=$CRANE/bin/crane
-ARTIFACTS=pod-delta.tar.gz wsl-delta.nar.tar.gz wsl-needs.txt apply.sh WSL.md HANDOVER.md inside-seed.tar crane-layer.tar
+ARTIFACTS=pod-$KIND.tar.gz wsl-$KIND.nar.tar.gz wsl-needs.txt apply.sh update.sh WSL.md PROTOCOL.md HANDOVER.md inside-seed.tar crane-layer.tar
 MANIFEST
 
 rm -rf "$WORK"

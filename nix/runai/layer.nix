@@ -14,7 +14,12 @@
   writeText,
   gnutar,
   gzip,
+  buildEnv,
   hm,
+  # nix/wsl/profile.nix with wsl = false: the 20261013 pod-full layer's
+  # profile, home-defaults and session-env. This layer's /opt/twentyx shadows
+  # that one's, so whatever it provided must be in here too.
+  podFull,
   # A previous layer's opt/twentyx/store-paths. When set this builds a DELTA:
   # all of /opt/twentyx, but only the store paths that base does not already
   # carry. crane-appended on top of that base, the image ends up with exactly
@@ -23,8 +28,15 @@
   basePaths ? null,
 }:
 let
-  # The buildEnv of every package in the home-manager config.
-  profile = hm.config.home.path;
+  # home-manager's packages win; pod-full's fill the rest (code-server is
+  # what vscode-* pods launch). Not its gcc: make must find the base's cc.
+  profile = buildEnv {
+    name = "twentyx-pod-profile";
+    paths = [ hm.config.home.path ] ++ map lib.lowPrio (
+      lib.filter (p: !(lib.hasPrefix "gcc" (lib.getName p))) podFull.packages
+    );
+    passthru.podFull = podFull.profile;
+  };
 
   # The generated dotfile tree (fish config, starship.toml, tmux.conf, the
   # nvim setup...). airgap-bootstrap symlinks out of this into $HOME, with the
@@ -32,12 +44,18 @@ let
   # while text iteration in a pod stays a file edit, not a rebuild.
   files = hm.config.home-files;
 
-  closure = closureInfo {
-    rootPaths = [
-      profile
-      files
-    ];
-  };
+  # pod-full's link-home links .zed_server and the code-server extension out of
+  # /opt/twentyx/home-defaults; home-manager's files win on any clash.
+  homeDefaults = runCommand "twentyx-pod-home-defaults" { } ''
+    cp -a ${files} $out
+    chmod -R u+w $out
+    cd ${podFull.homeDefaults}
+    find . -type l | while read -r rel; do
+        [ -e "$out/$rel" ] || [ -L "$out/$rel" ] && continue
+        mkdir -p "$out/$(dirname "$rel")"
+        cp -P "$rel" "$out/$rel"
+    done
+  '';
 
   # home-manager bakes absolute paths built from home.homeDirectory into some
   # generated values (STARSHIP_CONFIG is one today). In a pod $HOME is
@@ -57,26 +75,40 @@ let
   # Values mentioning the eval-time home are excluded: $HOME is relocated at
   # pod start, so those are wrong here and are fixed per-shell instead (see
   # nix/modules/shell.nix).
-  sessionEnv = writeText "airgap-session-env" (
-    lib.concatMapStrings (l: l + "\n") (
-      lib.mapAttrsToList (k: v: "${k}=${toString v}") (
-        lib.filterAttrs (
-          _: v:
-          let
-            str = toString v;
-          in
-          # Wrong here: $HOME is relocated at pod start, so these are fixed
-          # per-shell instead (see nix/modules/shell.nix).
-          !(lib.hasInfix evalHome str)
-          # home-manager allows a session variable to be a shell EXPRESSION --
-          # TMUX_TMPDIR is `''${XDG_RUNTIME_DIR:-"/run/user/$(id -u)"}`. A shell
-          # expands that; image ENV does not, and tmux would be handed the
-          # literal text. Anything needing expansion stays shell-only.
-          && !(lib.hasInfix "$" str)
-        ) hm.config.home.sessionVariables
-      )
-    )
-  );
+  hmSessionEnv = lib.filterAttrs (
+    _: v:
+    let
+      str = toString v;
+    in
+    !(lib.hasInfix evalHome str)
+    # home-manager allows a session variable to be a shell EXPRESSION --
+    # TMUX_TMPDIR is `''${XDG_RUNTIME_DIR:-"/run/user/$(id -u)"}`. A shell
+    # expands that; image ENV does not, and tmux would be handed the
+    # literal text. Anything needing expansion stays shell-only.
+    && !(lib.hasInfix "$" str)
+  ) hm.config.home.sessionVariables;
+
+  envFile =
+    name: attrs:
+    writeText name (
+      lib.concatMapStrings (l: l + "\n") (lib.mapAttrsToList (k: v: "${k}=${toString v}") attrs)
+    );
+
+  # What dotfiles/session-env exports.
+  sessionEnv = envFile "airgap-session-env" hmSessionEnv;
+
+  # The image's ENV, read from the topmost nix layer: pod-full's keys stay
+  # (inner's nvim dies without TWENTYX_NVIM_PLUGINS), home-manager's win.
+  imageEnv = envFile "airgap-image-env" (podFull.sessionEnv // hmSessionEnv);
+
+  # Rooted at the env file too: image ENV names store paths no binary does.
+  closure = closureInfo {
+    rootPaths = [
+      profile
+      homeDefaults
+      imageEnv
+    ];
+  };
 in
 runCommand (if basePaths == null then "runai-layer.tar.gz" else "runai-layer-delta.tar.gz")
   {
@@ -84,13 +116,23 @@ runCommand (if basePaths == null then "runai-layer.tar.gz" else "runai-layer-del
       gnutar
       gzip
     ];
-    passthru = { inherit profile files closure basePaths sessionEnv; };
+    passthru = {
+      inherit
+        profile
+        files
+        homeDefaults
+        closure
+        basePaths
+        sessionEnv
+        imageEnv
+        ;
+    };
     meta.description = "Nix toolchain tree for crane-append onto RunAI bases";
   }
   ''
     mkdir -p root/opt/twentyx
     ln -s ${profile} root/opt/twentyx/profile
-    ln -s ${files}   root/opt/twentyx/home-defaults
+    ln -s ${homeDefaults} root/opt/twentyx/home-defaults
 
     # Record the closure inside the image so `airgap doctor` can verify the
     # layer arrived intact without needing Nix to ask.
@@ -98,7 +140,7 @@ runCommand (if basePaths == null then "runai-layer.tar.gz" else "runai-layer-del
     printf '%s' "${evalHome}" > root/opt/twentyx/eval-home
 
     # Consumed by docker/assemble.sh, one KEY=VALUE per line.
-    cp ${sessionEnv} root/opt/twentyx/session-env
+    cp ${imageEnv} root/opt/twentyx/session-env
 
     # Everything is group-0 and group-readable: OpenShift assigns an arbitrary
     # UID at runtime and only GID 0 is guaranteed. Store paths are already

@@ -89,6 +89,10 @@ let
 
     # ── daily drivers ──────────────────────────────────────────────────────
     yazi
+    # yazi previews: chafa draws images where the terminal has no graphics
+    # protocol, pdftoppm renders PDFs; video goes through ffmpeg.
+    chafa
+    poppler-utils
     lazydocker
     podman-compose
     gcc

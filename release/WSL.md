@@ -4,14 +4,28 @@ For the inner agent. Read this, then run one command.
 
 ## Do this
 
-    sudo ./apply.sh
+On every box, as the user, after the release is published (PROTOCOL.md, steps 5-8):
 
-Then open a new shell. That is the whole update. It needs only the files
-beside it: `MANIFEST.txt`, `apply.sh`, `wsl-delta.nar.tar.gz`, `wsl-needs.txt`.
+    ~/twentyx/wsl/update.sh
 
-`apply.sh` checks that the box holds every path the release assumes
-(`wsl-needs.txt`). If one is missing it stops before changing anything and
-prints the list: send that list outside, do not work around it.
+Then open a new shell. update.sh works out how many releases the box is behind
+and applies each missing one in order with `apply.sh`. It prints the plan before
+changing anything. A box that is two or more releases behind no longer breaks.
+
+For a single release folder on a box one step behind, `sudo ./apply.sh` beside
+the files works too. It needs `MANIFEST.txt`, `apply.sh`,
+`wsl-<KIND>.nar.tar.gz` and `wsl-needs.txt`.
+
+Both check that the box holds every path the release assumes
+(`wsl-needs.txt`) before anything changes. If no release fits, update.sh stops,
+writes `~/twentyx-baseline-<date>.store-paths`, and says so. Then either apply a
+`-full` release or send that file outside. Do not work around it.
+
+## Full releases (reset)
+
+A release whose id ends in `-full` assumes nothing about the box: `wsl-needs.txt`
+is empty and the payload is the whole system. `update.sh <id>-full` takes any box
+straight to it, and later deltas build on it.
 
 ## What it does
 
@@ -34,9 +48,11 @@ sat in the store, off PATH. From this release on, every release switches.
 
 ## Check
 
+    cat /var/lib/twentyx/release      # = RELEASE
     readlink -f /run/current-system   # = WSL_SYSTEM in MANIFEST.txt
     @WSL_SYSTEM@
     nu -c 'version | get version'; ffprobe -version; python3.10 -V; harlequin --version
+    chafa --version; pdftoppm -v      # yazi previews
 
 ## Clean up
 
@@ -51,5 +67,5 @@ in `/nix/var/nix/gcroots/twentyx-release`; the system profile holds everything.
 
 ## Next time
 
-Every release is the same: copy the folder, `sudo ./apply.sh`, new shell.
+Every release is the same: publish it, `update.sh`, new shell.
 Pods and repo edits are in `HANDOVER.md`; they do not affect this step.
