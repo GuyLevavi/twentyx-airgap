@@ -13,6 +13,20 @@ Newest first, from 0.2.0 on. Base of all of it: outside rev `921bfd6`.
   session variables (`TWENTYX_NVIM_PLUGINS`), with home-manager winning any
   clash. Not its gcc: make keeps finding the base image's `cc`. A release gate
   fails when the pod profile lacks any command pod-full had.
+- **WSL `update.sh` chains releases.** It replaces inner's `wsl/update.sh` and
+  ships in every release. A box several releases behind walks `BASE_RELEASE`
+  back to the newest release it can take, then applies forward, printing the plan
+  first. When nothing fits it changes nothing and writes the box's path list for
+  outside. `scripts/test-update.sh` checks it against a mocked registry and is a
+  release gate. `apply.sh` records the release in `/var/lib/twentyx/release`.
+- **Deltas fit every listed base:** with several `--wsl-base`, a delta leaves
+  out only what all of them hold (it was what any of them held).
+- **Full releases:** `make-release.sh --full` cuts `<id>-full`, the whole WSL
+  system and pod layer, for a reset. Payloads are named by KIND:
+  `wsl-full.nar.tar.gz`, `pod-full.tar.gz`.
+- **`PROTOCOL.md`** in every release: the transfer, step by step.
+- **yazi previews:** `chafa` and `pdftoppm` (poppler-utils) on WSL and in pods;
+  video uses the shipped ffmpeg.
 - **`apply.sh [dir]`:** takes the release folder again, as inner's
   `wsl/update.sh` passes it, and skips the `wsl-needs.txt` pre-check when the
   file was not fetched.

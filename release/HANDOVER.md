@@ -7,15 +7,89 @@ of inner. Every path and script name below describes the outside repo; where
 inner differs, keep inner and adapt the change. Never copy `inside-seed.tar`
 over the inner repo.
 
+## Replies to your last report
+
+Read this before anything else. `PROTOCOL.md` is the step-by-step version.
+
+**1. code-server missing in vscode-pytorch pods.** Your symptom is right and the
+cause was ours, but your suggested fix would not have worked.
+
+- The 20261013 pod-full layer set `/opt/twentyx/profile` to
+  `/nix/store/<h>-twentyx-profile`, which held code-server.
+- From 20261102 on, outside built the pod layer from a different package set,
+  the home-manager one (`home-manager-path`), which never had code-server.
+- The delta's `/opt/twentyx/{profile,home-defaults,session-env}` sits above
+  pod-full's and hides it. Pod-full's store paths were still in the image; nothing
+  pointed at them.
+- `environment.systemPackages` is the WSL system, so adding code-server there
+  changes no pod.
+- `STORE_RELEASE=20261103` only steers `wsl/update.sh`, and 20261103's pod layer
+  had the same gap. Do not pin it.
+
+**Fixed in this release:** the pod layer carries everything pod-full had, with
+the newer tools winning any clash: its packages, its `home-defaults`
+(`.zed_server`, the code-server opencode extension, opencode skills, the
+workmux plugin) and its session variables (`TWENTYX_NVIM_PLUGINS`). The one
+exception is Nix gcc, so `make` uses the base image's `cc`. A release gate now
+refuses any pod layer that lacks a command pod-full had.
+
+**Until this release is in:** add `$(ls -d /nix/store/*-twentyx-profile)/bin`
+to the image PATH right after `/opt/twentyx/profile/bin`. Set link-home's
+`DEFAULTS` to the `*-twentyx-home-defaults` path, and keep
+`TWENTYX_NVIM_PLUGINS` from the 20261013 `session-env`. Remove all three once this
+release's pod layer is in.
+
+What 20261122 hid in pods, all back now:
+
+- code-server, opencode, ssh/sshd/scp
+- podman, podman-compose, lazydocker, nginx
+- oc, mc, yazi, stow, bwrap, workmux, openssl, patch, infocmp/tput
+- the LSPs on PATH: basedpyright, ruff, nixd, nixfmt, bash/yaml/html/css/json
+  servers, taplo, tombi, package-version-server
+- `.zed_server` and the code-server extension
+- `TWENTYX_NVIM_PLUGINS`
+
+`/opt/twentyx/bin/sudo` was never affected.
+
+**2. "usage: sudo apply.sh" after update.sh downloaded.** Our mistake. The
+20261122 `apply.sh` refused any argument, while `wsl/update.sh` calls it as
+`apply.sh "$DIR"`. It also did not download `wsl-needs.txt`, which that apply.sh
+required. `apply.sh` takes `[dir]` again, and `wsl-needs.txt` is optional for it.
+
+**3. MR !14 (fetch `wsl-<KIND>.nar.tar.gz`).** Its diagnosis is correct. It is
+superseded by this release's `update.sh`, which does that, fetches
+`wsl-needs.txt` too, and chains through missed releases. Copy it over
+`wsl/update.sh` (PROTOCOL.md step 7).
+
+**4. A box two releases behind broke on update.** update.sh now walks
+`BASE_RELEASE` back to the newest release the box can take, then applies forward,
+one `apply.sh` per release, printing the plan first. Deltas are also cut against
+every base still in the field, so one step usually suffices. When nothing fits,
+it changes nothing and writes `~/twentyx-baseline-<date>.store-paths` for
+outside. Tested outside against a mocked registry: one, two and three behind, up
+to date, multi-base, full reset, no fit, unknown release.
+
+**5. Full releases.** A `-full` release sits beside the delta, for a reset. It
+holds the whole WSL system (`wsl-full.nar.tar.gz`, empty `wsl-needs.txt`) and
+the whole pod layer (`pod-full.tar.gz`, placed directly on the base with no
+older nix layer). `update.sh <id>-full` resets any box, and later deltas build
+on it.
+
+**6. yazi previews.** `chafa` (images in any terminal, as text art when there is
+no graphics protocol) and `pdftoppm` (PDFs) ship on WSL and in pods. Video uses
+the `ffmpeg` already shipped. No imagemagick. You can now restore yazi's preview
+section in inner's dotfiles; yazi's defaults work. Inside tmux, inline images
+need `set -g allow-passthrough on`.
+
 ## Read this first: what this release assumes
 
 - WSL: outside builds the box's system, `nixos-system-twentyx-wsl`, and ships it.
-  `wsl-delta.nar.tar.gz` holds that system minus what the box already has, and
-  `apply.sh` imports it and switches to it. Nothing is rebuilt inside, and there
-  is no flake inside to rebuild from.
-- Pods: `pod-delta.tar.gz` assumes nothing either. Despite the name it holds its
-  whole closure, 692 store paths, plus a complete `/opt/twentyx`, so it works on
-  whatever base it lands on. That is why it is larger than a delta.
+  `wsl-<KIND>.nar.tar.gz` holds that system minus what the boxes already have
+  (nothing, for a full release). `update.sh` picks the releases a box needs, and
+  `apply.sh` imports each and switches. Nothing is rebuilt inside, and there is no
+  flake inside to rebuild from.
+- Pods: `pod-<KIND>.tar.gz` holds its whole closure plus a complete
+  `/opt/twentyx`, which now includes everything the 20261013 pod-full had.
 
 ## Reassemble first
 
@@ -38,18 +112,20 @@ Everything below happens in `./release`.
 | File | Use |
 |---|---|
 | `MANIFEST.txt` | RELEASE, KIND, BASE_RELEASE, source rev, `WSL_SYSTEM` (the toplevel `apply.sh` switches to) |
-| `pod-delta.tar.gz` | nvim layer: its full closure, plus a complete `/opt/twentyx` |
-| `wsl-delta.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar: the WSL system's closure minus what the box holds. Not unpacked beforehand: `apply.sh` streams it |
+| `pod-<KIND>.tar.gz` | nvim layer: its full closure, plus a complete `/opt/twentyx` |
+| `wsl-<KIND>.nar.tar.gz` | `nix-store --export` stream of `wsl-delta.nar`, gzipped in a tar: the WSL system's closure minus what the box holds. Not unpacked beforehand: `apply.sh` streams it |
 | `wsl-needs.txt` | Paths the stream refers to but leaves out. `apply.sh` checks the box has them before it changes anything |
-| `apply.sh` | WSL updater: checks, imports, switches |
+| `apply.sh` | Applies one release: checks, imports, switches, records `/var/lib/twentyx/release` |
+| `update.sh` | Inner's new `wsl/update.sh`: applies every release a box is missing, in order |
+| `PROTOCOL.md` | The transfer protocol, step by step. Follow it |
 | `WSL.md` | The WSL update on one page: steps, checks, undo |
 | `inside-seed.tar` | Outside repo at this release, under `inside-seed/`. **Not** a snapshot of inner, which is not visible from here. Reference to port from and diff against |
 | `crane-layer.tar` | crane and its closure, glibc included, at `nix/store/...`. Binary: `@CRANE@/bin/crane`. Nothing at `/bin/crane`: CI synthesizes that as before |
 
 ## Apply
 
-1. **WSL:** `sudo ./apply.sh`. That is all: new tools are on PATH in a new
-   shell. Safe to rerun. It stops before changing anything if the box lacks a
+1. **WSL:** publish, then `~/twentyx/wsl/update.sh` on each box (PROTOCOL.md
+   section 4). New tools are on PATH in a new shell. Safe to rerun. It stops before changing anything if the box lacks a
    path the release assumes; send outside the list it prints. To undo:
    `sudo nix-env -p /nix/var/nix/profiles/system --rollback && sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch`.
 2. **Repo:** make the edits below. The pod layer's configs expect them.
@@ -57,7 +133,7 @@ Everything below happens in `./release`.
    `dotfiles/` via `wsl/link.sh`; the release only changes packages and the
    system.
 4. **Pod image:** put `pod-delta.tar.gz` above the base nix layer, where the delta
-   always goes, and feed it to `scripts/build-binary-layer.sh`. The outside repo
+   always goes (a `pod-full.tar.gz` goes directly on the base instead), and feed it to `scripts/build-binary-layer.sh`. The outside repo
    has no such script, so check how it takes its inputs. `session-env` must be
    read from this layer, the topmost nix layer: it holds new variables (below),
    and they only reach image ENV through that read.
